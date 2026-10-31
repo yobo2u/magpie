@@ -3,9 +3,9 @@ name: Sync upstream
 # Keeps this fork's main lined up with yetone/magpie. The schedule runs
 # only from the copy of this file on the default branch.
 #
-# main is the mirror. yobo2u/custom-4eca is where fork-only changes go,
-# and this job never checks that branch out or pushes it. Merge main
-# into it when those upstream commits are wanted.
+# main carries upstream's code. yobo2u/custom-4eca is where fork-only
+# changes go, and this job never checks that branch out or pushes it.
+# Merge main into it when those upstream commits are wanted.
 #
 # Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC; 08:00, 14:00, 20:00,
 # 02:00 in Asia/Manila). Upstream landed about 9 commits an hour from
@@ -14,18 +14,17 @@ name: Sync upstream
 # late. workflow_dispatch runs a sync now.
 #
 # The default GITHUB_TOKEN cannot push a commit that creates or changes
-# a file under .github/workflows (there is no workflows permission to
-# grant it). Upstream edited those files on 2026-10-28 and 2026-10-31,
-# so a token without that permission sticks on the first such sync.
-# UPSTREAM_SYNC_TOKEN is a fine-grained PAT on yobo2u/magpie only:
-# Contents read/write, and Workflows read/write.
+# a file under .github/workflows, and that permission cannot be granted
+# in a workflow. Upstream edited those files on 2026-10-28 and
+# 2026-10-31. This job keeps the fork's .github/workflows, including
+# this file, and pushes everything else. A push that still touches
+# those files is refused before it is sent.
 #
-# Each integration is a merge commit whose message contains [skip ci].
-# GitHub decides push-triggered workflows from the tip commit, so Test
-# and Docker do not run for the sync. A fast-forward would leave an
-# upstream commit as the tip, and those workflows would run. A conflict
-# fails the job and does not push. gh repo sync --force is not used: it
-# would drop this file, and the next schedule would not run.
+# Each integration is a merge commit whose message contains [skip ci],
+# including one that could have fast-forwarded, so the tip is this
+# message. A conflict outside .github/workflows fails the job and does
+# not push. gh repo sync --force is not used: it would drop this file,
+# and the next schedule would not run.
 
 on:
   schedule:
@@ -33,7 +32,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: sync-upstream
@@ -44,22 +43,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Require UPSTREAM_SYNC_TOKEN
-        env:
-          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SYNC_TOKEN}" ]; then
-            echo "UPSTREAM_SYNC_TOKEN is not set." >&2
-            echo "Create a fine-grained PAT for yobo2u/magpie only, with Contents read/write and Workflows read/write, then add it as the Actions secret UPSTREAM_SYNC_TOKEN." >&2
-            exit 1
-          fi
-
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
 
       - name: Merge yetone/magpie main
         env:
@@ -68,8 +55,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_AUTHOR_NAME="github-actions[bot]"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
           if [ "$(git branch --show-current)" != "main" ]; then
             echo "checked out $(git branch --show-current), want main" >&2
@@ -96,16 +85,47 @@ jobs:
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "main already contains upstream/main $(git rev-parse --short upstream/main)"
           else
-            # --no-ff even when a fast-forward is possible, so the tip
-            # commit is this message and [skip ci] applies to the push.
-            git merge --no-ff --no-edit \
-              -m "sync: merge yetone/magpie main" \
-              -m "[skip ci]" \
-              upstream/main
-            if ! git push origin main; then
-              echo "If the rejection says workflows permission, UPSTREAM_SYNC_TOKEN needs Workflows read/write on yobo2u/magpie." >&2
+            saved=$(mktemp -d)
+            git archive HEAD .github/workflows | tar -x -C "$saved"
+
+            if ! git merge --no-ff --no-commit upstream/main; then
+              if [ ! -f .git/MERGE_HEAD ]; then
+                echo "merge failed before a conflict could be resolved" >&2
+                exit 1
+              fi
+              conflicted=$(git diff --name-only --diff-filter=U)
+              outside=$(printf '%s\n' "$conflicted" | grep -v '^\.github/workflows/' || true)
+              if [ -n "$outside" ]; then
+                echo "conflicts outside .github/workflows:" >&2
+                printf '%s\n' "$outside" >&2
+                git merge --abort
+                exit 1
+              fi
+            fi
+
+            rm -rf .github/workflows
+            mkdir -p .github/workflows
+            cp -a "$saved/.github/workflows/." .github/workflows/
+            git add -A -- .github/workflows
+            rm -rf "$saved"
+
+            if git diff --cached --quiet && git diff --quiet; then
+              git commit --allow-empty \
+                -m "sync: merge yetone/magpie main" \
+                -m "[skip ci]"
+            else
+              git commit \
+                -m "sync: merge yetone/magpie main" \
+                -m "[skip ci]"
+            fi
+
+            changed=$(git diff --name-only HEAD^1 HEAD -- .github/workflows)
+            if [ -n "$changed" ]; then
+              echo "refusing to push .github/workflows changes:" >&2
+              printf '%s\n' "$changed" >&2
               exit 1
             fi
+            git push origin main
           fi
 
           git fetch --no-tags origin "refs/heads/${CUSTOM_BRANCH}:refs/remotes/origin/custom-guard"
