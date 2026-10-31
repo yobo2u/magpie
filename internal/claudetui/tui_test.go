@@ -98,6 +98,13 @@ func fakeClaude(args []string) {
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
+	if os.Getenv("FAKE_NOTES") == "1" {
+		// onboarding not done: the first-run notes, as 2.1.316 draws them,
+		// a space a move of the cursor or a no-break space
+		fmt.Print("\r\n Security\x1b[1Cnotes:\r\n\r\n 1. Claude can make mistakes\r\n    You should always review Claude's responses\r\n\r\n 2. Due to prompt injection risks, only use it with code you trust\r\n\r\n Press\u00a0Enter\x1b[1Cto\x1b[1Ccontinue…\r\n")
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	sid := ""
 	if i := slices.Index(args, "--session-id"); i >= 0 {
 		sid = args[i+1]
@@ -401,6 +408,7 @@ func TestShimFallsBackToPrint(t *testing.T) {
 		{"untrusted folder", []string{"FAKE_TRUST=1"}, false},
 		// at once, not after readyWait: runShim waits 30s (#4504)
 		{"asks to sign in", []string{"FAKE_LOGIN=1"}, true},
+		{"first-run notes", []string{"FAKE_NOTES=1"}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			out := runShim(t, c.env, append([]string{fakePath(t)}, pArgs...), []string{"hello"}, 1)

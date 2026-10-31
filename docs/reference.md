@@ -1123,7 +1123,10 @@ A plugin can also be gateway middleware: `onRequest(body, ctx)` sees each
 request an agent sends before it is routed, `onProvider(body, ctx)` the
 body each provider it is tried on is sent (`ctx.provider` has its `id`,
 `name`, `account` and `model`; each try starts from what `onRequest`
-left), `onEvent(event, ctx)` each
+left), `onAccount(account, ctx)` each subscription account a try is
+about to go to (`account.ref` is an anonymous id, stable per install and
+per middleware; `{skip: true}` passes the account over for that request),
+`onEvent(event, ctx)` each
 event of a streamed reply and `onResponse(body, ctx)` a whole one, all in
 the agent's own API. A hook returns the changed object, or nothing to
 leave it; `onEvent` returns `null` to drop an event, and

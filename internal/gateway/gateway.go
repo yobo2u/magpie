@@ -439,7 +439,9 @@ type Server struct {
 	refusedThinking map[string]bool
 	subscription    *subscriptionBridge
 	// imageStore is the image MCP server's jobs and images (image_mcp.go)
-	imageStore   imageMCPStore
+	imageStore imageMCPStore
+	// browser is the Magpie Browser extensions connected (browser.go)
+	browser      browserRelay
 	debug        bool
 	trace        trace // what routing did with each request, for the Gateway view
 	titlePrompts titlePrompts
@@ -885,6 +887,9 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc(SearchMCPPath, s.searchMCP)
 	mux.HandleFunc(VisionMCPPath, s.visionMCP)
 	mux.HandleFunc(ImageMCPPath, s.imageMCP)
+	mux.HandleFunc(BrowserMCPPath, s.browserMCP)
+	mux.HandleFunc("GET "+BrowserExtensionPath, s.browserExtension)
+	mux.HandleFunc("GET "+BrowserStatusPath, s.browserStatus)
 	mux.HandleFunc(ImageMCPFiles+"{name}", s.imageMCPFile)
 	mux.HandleFunc(ToolsMCPPath, s.toolsMCP)
 	mux.HandleFunc(ToolsMCPOne+"{plugin}", s.toolsMCPOne)
@@ -924,7 +929,7 @@ var catalogSize stamped[struct{}, int]
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "magpie", "version": Version, "models": catalogSize.get(struct{}{}, func() int { return len(provider.Catalog()) }), "window": Window,
-		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, ImageMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
+		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, ImageMCPPath, BrowserMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
 	// which process serves, for another magpie on this computer to name it
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
@@ -2773,6 +2778,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				// (#1772)
 				cands = cands[:i+1]
 			}
+		}
+		if by := accountSkipped(r.Context(), c.p, c.model); by != "" {
+			// a middleware's onAccount passed the account over for this
+			// request: the next is asked, as past one that can't be used,
+			// before anything of this try is done (no reset spent, no rest,
+			// nothing held against it)
+			skipped = append(skipped, c.label()+": passed over by middleware "+by)
+			if i < len(cands)-1 {
+				continue
+			}
+			// every one left was passed over: never sent to one all the
+			// same (no fail-open). The agent is told the failure of one
+			// asked before, else what it is told with none ready
+			msg := ""
+			switch {
+			case other != nil:
+				call.Status, call.Error = other.Status, other.Error
+			case call.Status < 400:
+				call.Status, call.Error = 404, "every account passed over by a middleware"
+				msg = fmt.Sprintf("none of %s's models is ready", call.Model)
+			}
+			failTo(w, kept, from, call.Status, cmp.Or(msg, call.Error))
+			break
 		}
 		if !autoReset && c.onCredits() {
 			// going to the account on its credits, its week used up: a

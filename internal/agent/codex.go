@@ -2130,17 +2130,33 @@ func ownCodex() []catalog.Model {
 // group gave the picker a catalog entry, and Codex's picker was the group
 // alone (shiqi_40904 on Discord).
 func codexInMagpie(own []Option) []Option {
-	shown, _ := provider.CatalogFor("codex")
 	on := map[string]bool{}
-	for _, e := range shown {
-		if provider.CodexOwn(e) {
-			on[e.Model] = true
-		}
+	for _, m := range servedOnCodex.get("", codexServedModels) {
+		on[m] = true
 	}
 	for i := range own {
 		own[i].Served = on[own[i].Value]
 	}
 	return own
+}
+
+// servedOnCodex is codexServedModels kept as magpie's lists are
+// (stampedLists): Codex's options, built per field of its Drift on every
+// drift poll, built Codex's whole catalog each time for these few names
+// (0.2 GB of the 2.6 GB a real config allocated over 20 polls).
+var servedOnCodex stampedLists[string]
+
+// codexServedModels is the models magpie's list shows Codex on a ChatGPT
+// account of the user's.
+func codexServedModels() []string {
+	shown, _ := provider.CatalogFor("codex")
+	var out []string
+	for _, e := range shown {
+		if provider.CodexOwn(e) {
+			out = append(out, e.Model)
+		}
+	}
+	return out
 }
 
 // codexViaMagpieFor is viaMagpieFor("codex") keeping the models magpie

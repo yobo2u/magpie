@@ -15,6 +15,7 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/browsermcp"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/claudebridge"
 	"github.com/yetone/magpie/internal/claudetui"
@@ -330,6 +331,9 @@ func run(args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "mcp":
+			if len(args) > 1 && args[1] == "browser" {
+				return browsermcp.Run(args[2:])
+			}
 			return imagemcp.Run(args[1:])
 		case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
 			return claudebridge.RunMCP(args[1:])

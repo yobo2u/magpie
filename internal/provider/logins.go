@@ -808,7 +808,7 @@ func sameRefresh(x, y json.RawMessage) bool {
 // accountRemoved: the user removed the agent's account from magpie, which
 // then neither saves its sign-ins nor keeps them renewed.
 func accountRemoved(agent string) bool {
-	return slices.ContainsFunc(load().Providers, func(p Provider) bool { return p.ID == agent && p.Hidden })
+	return slices.ContainsFunc(storedFile().Providers, func(p Provider) bool { return p.ID == agent && p.Hidden })
 }
 
 func rememberLogins(force bool) {

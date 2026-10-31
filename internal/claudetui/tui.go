@@ -319,6 +319,13 @@ var errUntrusted = errors.New("Claude Code asks whether to trust the folder, whi
 // ~/.claude.json has no onboarding done): nothing the helper may answer.
 var signIn = regexp.MustCompile(`Select login method|Log in with your Claude account|claude\.ai/oauth/authorize`)
 
+// firstRun is the notes Claude Code's interactive mode shows where its
+// onboarding isn't done (a config folder only -p was run in, given
+// CLAUDE_CODE_OAUTH_TOKEN): agreeing to them is the user's, as is what
+// comes after them. It is matched in the screen's words, any space
+// between them one: Claude Code draws some by moving the cursor.
+var firstRun = regexp.MustCompile(`Security notes:.*Press Enter to continue`)
+
 // ready waits for Claude Code's prompt. Asked whether to trust the folder
 // it runs in, it is told yes, as a person would, when TrustEnv says so.
 func (s *shim) ready() error {
@@ -332,6 +339,8 @@ func (s *shim) ready() error {
 			return errUntrusted
 		case signIn.MatchString(p):
 			return fmt.Errorf("Claude Code's interactive mode asks to sign in: %s", s.lastScreen())
+		case firstRun.MatchString(strings.Join(strings.Fields(p), " ")):
+			return fmt.Errorf("Claude Code's interactive mode shows its first-run notes, its onboarding not done: %s", s.lastScreen())
 		case strings.Contains(p, "trust this folder") && answered < 3:
 			// the choice is the last one drawn after ❯, "No, exit" at
 			// first. A key sent as the question is first drawn can be lost

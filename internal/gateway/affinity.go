@@ -114,8 +114,14 @@ type Affinity struct {
 	// "main" (a provider's fallback answered it, and the provider's own
 	// model is ready again: backToMain), "order" (a later member of a
 	// group routed In order answered it, and a member ahead is ready
-	// again at a new turn: backToFirst).
+	// again at a new turn: backToFirst), "strict" (Stays: Strict, kept
+	// whatever it is).
 	Why string `json:"why"`
+	// Main is, for a conversation kept strictly on a provider's fallback,
+	// the provider's own key or account that is ready again: it would have
+	// gone back to it ("main") but for Stays: Strict, which the Routing
+	// page says.
+	Main *Weighed `json:"main,omitempty"`
 }
 
 type stick struct {
@@ -556,6 +562,12 @@ func affine(scope, mode string, rotate, spread, inOrder bool, in http.Header, fr
 		// whatever it is — resting, all but used up, past its cap
 		// (strictKeep) — it is the one asked (#1797)
 		a.Why = "strict"
+		if !a.Within && backToMain(pl.order, at) {
+			// a fallback the user's own Strict keeps the conversation on,
+			// the provider ready again: said, not overridden
+			m := pl.order[0]
+			a.Main = &m
+		}
 	case pl.order[at].Rest != nil:
 		a.Why = "resting"
 	case !a.Within && backToMain(pl.order, at):
@@ -682,7 +694,9 @@ const heldFor = 30 * time.Minute
 // stands. A conversation whose first request is still out counts where it
 // was sent (sticks.opening, under key until opened ends it): many started
 // at once all went to the one holding the fewest before any of them was
-// answered (#1342: 24 requests at once over 5 accounts).
+// answered (#1342: 24 requests at once over 5 accounts). A fallback is
+// none of those while the provider's own leads (standsIn): held by nobody,
+// it was the one held on fewest.
 //
 // ready is for a conversation kept for the whole session (spreadsSessions):
 // it goes only to one routing would put a new conversation on as well —
@@ -725,7 +739,7 @@ func leastHeld(scope, key string, cs []candidate, pl planned, ready bool) ([]can
 	seat := func(c candidate) string { return c.who() + "/" + provider.WithMemberEffort(c.model, c.effort) }
 	best := -1
 	for i, c := range cs {
-		if pl.order[i].Rest != nil || pl.order[i].Aside || ready && i > 0 && !readyForNew(pl.order, i) {
+		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) || ready && i > 0 && !readyForNew(pl.order, i) {
 			continue
 		}
 		if best < 0 || held[seat(c)] < held[seat(cs[best])] {
@@ -751,7 +765,19 @@ func leastHeld(scope, key string, cs []candidate, pl planned, ready bool) ([]can
 // lowShare.
 func readyForNew(order []Weighed, i int) bool {
 	w := order[i]
-	return w.Rest == nil && !w.Aside && !(w.Fallback && !order[0].Fallback) && !(w.Known && w.Used >= lowShare)
+	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare)
+}
+
+// standsIn says whether order[i] is a provider's fallback while one of the
+// provider's own keys or accounts leads, ready: restLast puts a resting
+// one behind every ready one, so a fallback leads only when none of the
+// provider's own can take the request. A fallback is the provider's
+// emergency path, never a seat a round or a spread goes to: In turn's
+// next turn (after) and its new conversation (leastHeld) took it for one
+// more key, and sent every other turn to it, with the provider ready
+// (01huadalang on Discord, 10-31).
+func standsIn(order []Weighed, i int) bool {
+	return i < len(order) && order[i].Fallback && !order[0].Fallback
 }
 
 // withLead puts first, for a subagent's conversation nobody has answered
@@ -799,11 +825,11 @@ func spreadsSessions(mode, routing string) bool {
 }
 
 // after puts first the one after cs[at], round from the end, that isn't
-// resting.
+// resting, nor a fallback while the provider's own leads (standsIn).
 func after(cs []candidate, pl planned, at int) ([]candidate, planned) {
 	for d := 1; d < len(cs); d++ {
 		i := (at + d) % len(cs)
-		if pl.order[i].Rest != nil || pl.order[i].Aside {
+		if pl.order[i].Rest != nil || pl.order[i].Aside || standsIn(pl.order, i) {
 			continue // a turn goes round the keys routed over only
 		}
 		if i > 0 {

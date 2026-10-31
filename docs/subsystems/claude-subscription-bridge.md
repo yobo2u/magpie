@@ -270,7 +270,8 @@ interactive mode can't answer a control request to stop a turn.
 If the interactive Claude Code doesn't start or show its prompt within 45
 seconds (`claudetui.ReadyWait`), or asks how to sign in (`signIn`: a
 Claude Code signed in for `-p` only, as in a container given
-`CLAUDE_CODE_OAUTH_TOKEN`), the helper becomes `claude -p` with the same
+`CLAUDE_CODE_OAUTH_TOKEN`), or shows its first-run notes (`firstRun`:
+"Security notes", a config folder whose onboarding isn't done), the helper becomes `claude -p` with the same
 arguments (`printMode`, `exec` on the same pid, its input still unread),
 so the turn is answered all the same, and it writes
 `<cache>/magpie/claude-tui-broken`, which holds the number of failed

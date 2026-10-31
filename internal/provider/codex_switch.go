@@ -128,7 +128,7 @@ func SpentShareOf(routing string) float64 {
 // says: the share the account it is on is moved off at, and whether it is
 // kept on the first instead (keepsLogin).
 func loginSwitching(agent string) (share float64, keep bool) {
-	for _, p := range load().Providers {
+	for _, p := range storedFile().Providers {
 		if p.ID == agent {
 			return SpentShareOf(p.Routing), p.keepsLogin()
 		}

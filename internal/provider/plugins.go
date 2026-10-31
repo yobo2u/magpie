@@ -92,7 +92,7 @@ func PluginID(id string) string {
 func customIDs() map[string]bool {
 	return heldOf("customIDs", func() map[string]bool {
 		ids := map[string]bool{}
-		for _, p := range load().Providers {
+		for _, p := range storedFile().Providers {
 			if hasEndpoint(p) {
 				ids[p.ID] = true
 			}

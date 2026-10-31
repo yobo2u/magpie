@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	slash "path" // a repository's paths, always with /
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -286,7 +287,10 @@ func findNew(l *Library, repo, ref string, f *fetcher, limited *atomic.Pointer[e
 	found = []NewSkill{}
 	from := (&Source{Kind: "github", Repo: repo, Ref: ref, Path: base}).String()
 	for _, c := range candidates(tmp, base, srcFolder(Source{Kind: "github", Repo: repo})) {
-		if known[c.Path] || l.skill(c.Name) != nil || checkName("skill", c.Name) != nil {
+		// another skill by its name, from elsewhere, doesn't make it the
+		// library's: it would go in beside that one (skill_beside.go)
+		if known[c.Path] || checkName("skill", c.Name) != nil ||
+			l.hadSkill(Source{Kind: "github", Repo: repo, Ref: ref}, c, filepath.Join(tmp, filepath.FromSlash(c.Path))) != nil {
 			continue
 		}
 		id := (&Source{Kind: "github", Repo: repo, Ref: ref, Path: c.Path}).String()
@@ -303,7 +307,7 @@ func newSkills(l *Library) []NewSkill {
 	out := []NewSkill{}
 	for k, list := range newFound.m {
 		for _, n := range list {
-			if repoKey(n.Repo, n.Ref) != k || len(l.fromRepo(n.Repo, n.Ref)) == 0 || l.skill(n.Name) != nil ||
+			if repoKey(n.Repo, n.Ref) != k || len(l.fromRepo(n.Repo, n.Ref)) == 0 ||
 				slices.Contains(l.SeenSkills[k], n.Path) {
 				continue
 			}

@@ -9,24 +9,27 @@ const { chromium, webkit } = require("playwright");
 // (yyhhyyyyyy on Discord: an API key first, a Claude subscription second,
 // 8 of 10 requests on the subscription). The Routing page says why it
 // moved, as it does for a provider's fallback giving one back ("main"),
-// which said nothing before.
+// which said nothing before. A conversation Stays: Strict keeps on the
+// fallback, the provider ready again, says that too ("strict" with main;
+// 01huadalang on Discord, 10-31).
 const words = {
-  en: { order: ["goes in order", "turn 2 goes back"], main: ["a fallback", "turn 2 goes back"] },
-  zh: { order: ["按顺序路由", "第 2 轮回到"], main: ["备用", "第 2 轮回到它"] },
-  "zh-TW": { order: ["按順序路由", "第 2 輪回到"], main: ["備用", "第 2 輪回到它"] },
-  ja: { order: ["順番どおり", "ターン 2 は"], main: ["代替", "ターン 2 は"] },
-  de: { order: ["der Reihe nach", "Runde 2 zurück"], main: ["ein Ersatz", "Runde 2 dorthin zurück"] },
+  en: { order: ["goes in order", "turn 2 goes back"], main: ["a fallback", "turn 2 goes back"], strict: ["a fallback", "Strict", "new conversations go to"] },
+  zh: { order: ["按顺序路由", "第 2 轮回到"], main: ["备用", "第 2 轮回到它"], strict: ["备用", "严格", "新会话会走"] },
+  "zh-TW": { order: ["按順序路由", "第 2 輪回到"], main: ["備用", "第 2 輪回到它"], strict: ["備用", "嚴格", "新會話會走"] },
+  ja: { order: ["順番どおり", "ターン 2 は"], main: ["代替", "ターン 2 は"], strict: ["代替", "厳格", "新しい会話は"] },
+  de: { order: ["der Reihe nach", "Runde 2 zurück"], main: ["ein Ersatz", "Runde 2 dorthin zurück"], strict: ["ein Ersatz", "Strikt", "neue Unterhaltungen gehen an"] },
 };
 
 function routes(now, why) {
   const time = new Date(now.getTime() - 5000).toISOString();
   const at = new Date(now.getTime() - 65000).toISOString();
   const k1 = { id: "cw#k1", provider: "cw", name: "CW", kind: "key", who: "k1", model: "m" };
-  const k2 = { id: "cw#k2", provider: "cw", name: "CW", kind: "key", who: "k2", model: "m", fallback: why === "main" };
-  const order = [k1, k2];
+  const k2 = { id: "cw#k2", provider: "cw", name: "CW", kind: "key", who: "k2", model: "m", fallback: why !== "order" };
+  // Strict leaves the plan the one it keeps, and names the main beside it
+  const order = why === "strict" ? [k2] : [k1, k2];
   return [{ id: 1, seq: 1, time, agent: "claude", model: "cw/m", provider: "cw", order, done: true, status: 200, ms: 20,
     group: why === "order" ? { id: "g", name: "G", routing: "order" } : undefined,
-    affinity: { mode: "", turn: 2, last: "cw#k2", lastTurn: 1, at, cacheRead: 20000, cacheWrite: 3000, why },
+    affinity: { mode: why === "strict" ? "strict" : "", turn: 2, last: "cw#k2", lastTurn: 1, at, cacheRead: 20000, cacheWrite: 3000, why, main: why === "strict" ? k1 : undefined },
     tries: [{ id: order[0].id, model: "m", start: time, done: true, status: 200, ms: 20 }] }];
 }
 
@@ -71,7 +74,7 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ["chromium", 
           await page.waitForFunction(() => /\d/.test(document.body.innerText) && document.querySelector(".rt-cap")?.textContent);
           return page.evaluate(() => document.body.innerText + "\n" + document.querySelector(".rt-cap").textContent);
         };
-        for (const why of ["order", "main"]) {
+        for (const why of ["order", "main", "strict"]) {
           rs = routes(now, why);
           const text = await story();
           for (const w of words[lang][why]) assert.ok(text.includes(w), `${why}: ${w} not in\n${text}`);
