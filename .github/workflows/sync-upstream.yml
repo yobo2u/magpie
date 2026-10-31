@@ -1,0 +1,117 @@
+name: Sync upstream
+
+# Keeps this fork's main lined up with yetone/magpie. The schedule runs
+# only from the copy of this file on the default branch.
+#
+# main is the mirror. yobo2u/custom-4eca is where fork-only changes go,
+# and this job never checks that branch out or pushes it. Merge main
+# into it when those upstream commits are wanted.
+#
+# Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC; 08:00, 14:00, 20:00,
+# 02:00 in Asia/Manila). Upstream landed about 9 commits an hour from
+# 2026-10-26 to 2026-11-01, so a day of delay is a few hundred commits
+# and an hour is mostly idle runs. GitHub may start a scheduled run
+# late. workflow_dispatch runs a sync now.
+#
+# The default GITHUB_TOKEN cannot push a commit that creates or changes
+# a file under .github/workflows (there is no workflows permission to
+# grant it). Upstream edited those files on 2026-10-28 and 2026-10-31,
+# so a token without that permission sticks on the first such sync.
+# UPSTREAM_SYNC_TOKEN is a fine-grained PAT on yobo2u/magpie only:
+# Contents read/write, and Workflows read/write.
+#
+# Each integration is a merge commit whose message contains [skip ci].
+# GitHub decides push-triggered workflows from the tip commit, so Test
+# and Docker do not run for the sync. A fast-forward would leave an
+# upstream commit as the tip, and those workflows would run. A conflict
+# fails the job and does not push. gh repo sync --force is not used: it
+# would drop this file, and the next schedule would not run.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require UPSTREAM_SYNC_TOKEN
+        env:
+          SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "UPSTREAM_SYNC_TOKEN is not set." >&2
+            echo "Create a fine-grained PAT for yobo2u/magpie only, with Contents read/write and Workflows read/write, then add it as the Actions secret UPSTREAM_SYNC_TOKEN." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+
+      - name: Merge yetone/magpie main
+        env:
+          UPSTREAM_URL: https://github.com/yetone/magpie.git
+          CUSTOM_BRANCH: yobo2u/custom-4eca
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ "$(git branch --show-current)" != "main" ]; then
+            echo "checked out $(git branch --show-current), want main" >&2
+            exit 1
+          fi
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream main
+          if ! git rev-parse --verify --quiet upstream/main >/dev/null; then
+            echo "fetch did not update upstream/main" >&2
+            exit 1
+          fi
+
+          # Read the customization branch before any push. A failed read
+          # is unknown, not "safe to continue".
+          if git fetch --no-tags origin "refs/heads/${CUSTOM_BRANCH}:refs/remotes/origin/custom-guard"; then
+            custom_at_start=$(git rev-parse origin/custom-guard)
+          else
+            echo "could not read origin/${CUSTOM_BRANCH}" >&2
+            exit 1
+          fi
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already contains upstream/main $(git rev-parse --short upstream/main)"
+          else
+            # --no-ff even when a fast-forward is possible, so the tip
+            # commit is this message and [skip ci] applies to the push.
+            git merge --no-ff --no-edit \
+              -m "sync: merge yetone/magpie main" \
+              -m "[skip ci]" \
+              upstream/main
+            if ! git push origin main; then
+              echo "If the rejection says workflows permission, UPSTREAM_SYNC_TOKEN needs Workflows read/write on yobo2u/magpie." >&2
+              exit 1
+            fi
+          fi
+
+          git fetch --no-tags origin "refs/heads/${CUSTOM_BRANCH}:refs/remotes/origin/custom-guard"
+          custom_after=$(git rev-parse origin/custom-guard)
+          if [ "$custom_after" != "$custom_at_start" ]; then
+            echo "origin/${CUSTOM_BRANCH} changed during this run (${custom_at_start} -> ${custom_after})" >&2
+            exit 1
+          fi
+          echo "origin/${CUSTOM_BRANCH} unchanged at $(git rev-parse --short origin/custom-guard)"
