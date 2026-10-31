@@ -1,0 +1,137 @@
+name: Sync upstream
+
+# Keeps this fork's main lined up with yetone/magpie. The schedule runs
+# only from the copy of this file on the default branch.
+#
+# main carries upstream's code. yobo2u/custom-4eca is where fork-only
+# changes go, and this job never checks that branch out or pushes it.
+# Merge main into it when those upstream commits are wanted.
+#
+# Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC; 08:00, 14:00, 20:00,
+# 02:00 in Asia/Manila). Upstream landed about 9 commits an hour from
+# 2026-10-26 to 2026-11-01, so a day of delay is a few hundred commits
+# and an hour is mostly idle runs. GitHub may start a scheduled run
+# late. workflow_dispatch runs a sync now.
+#
+# The default GITHUB_TOKEN cannot push a commit that creates or changes
+# a file under .github/workflows, and that permission cannot be granted
+# in a workflow. Upstream edited those files on 2026-10-28 and
+# 2026-10-31. This job keeps the fork's .github/workflows, including
+# this file, and pushes everything else. A push that still touches
+# those files is refused before it is sent.
+#
+# Each integration is a merge commit whose message contains [skip ci],
+# including one that could have fast-forwarded, so the tip is this
+# message. A conflict outside .github/workflows fails the job and does
+# not push. gh repo sync --force is not used: it would drop this file,
+# and the next schedule would not run.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge yetone/magpie main
+        env:
+          UPSTREAM_URL: https://github.com/yetone/magpie.git
+          CUSTOM_BRANCH: yobo2u/custom-4eca
+        run: |
+          set -euo pipefail
+
+          export GIT_AUTHOR_NAME="github-actions[bot]"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+
+          if [ "$(git branch --show-current)" != "main" ]; then
+            echo "checked out $(git branch --show-current), want main" >&2
+            exit 1
+          fi
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream main
+          if ! git rev-parse --verify --quiet upstream/main >/dev/null; then
+            echo "fetch did not update upstream/main" >&2
+            exit 1
+          fi
+
+          # Read the customization branch before any push. A failed read
+          # is unknown, not "safe to continue".
+          if git fetch --no-tags origin "refs/heads/${CUSTOM_BRANCH}:refs/remotes/origin/custom-guard"; then
+            custom_at_start=$(git rev-parse origin/custom-guard)
+          else
+            echo "could not read origin/${CUSTOM_BRANCH}" >&2
+            exit 1
+          fi
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already contains upstream/main $(git rev-parse --short upstream/main)"
+          else
+            saved=$(mktemp -d)
+            git archive HEAD .github/workflows | tar -x -C "$saved"
+
+            if ! git merge --no-ff --no-commit upstream/main; then
+              if [ ! -f .git/MERGE_HEAD ]; then
+                echo "merge failed before a conflict could be resolved" >&2
+                exit 1
+              fi
+              conflicted=$(git diff --name-only --diff-filter=U)
+              outside=$(printf '%s\n' "$conflicted" | grep -v '^\.github/workflows/' || true)
+              if [ -n "$outside" ]; then
+                echo "conflicts outside .github/workflows:" >&2
+                printf '%s\n' "$outside" >&2
+                git merge --abort
+                exit 1
+              fi
+            fi
+
+            rm -rf .github/workflows
+            mkdir -p .github/workflows
+            cp -a "$saved/.github/workflows/." .github/workflows/
+            git add -A -- .github/workflows
+            rm -rf "$saved"
+
+            if git diff --cached --quiet && git diff --quiet; then
+              git commit --allow-empty \
+                -m "sync: merge yetone/magpie main" \
+                -m "[skip ci]"
+            else
+              git commit \
+                -m "sync: merge yetone/magpie main" \
+                -m "[skip ci]"
+            fi
+
+            changed=$(git diff --name-only HEAD^1 HEAD -- .github/workflows)
+            if [ -n "$changed" ]; then
+              echo "refusing to push .github/workflows changes:" >&2
+              printf '%s\n' "$changed" >&2
+              exit 1
+            fi
+            git push origin main
+          fi
+
+          git fetch --no-tags origin "refs/heads/${CUSTOM_BRANCH}:refs/remotes/origin/custom-guard"
+          custom_after=$(git rev-parse origin/custom-guard)
+          if [ "$custom_after" != "$custom_at_start" ]; then
+            echo "origin/${CUSTOM_BRANCH} changed during this run (${custom_at_start} -> ${custom_after})" >&2
+            exit 1
+          fi
+          echo "origin/${CUSTOM_BRANCH} unchanged at $(git rev-parse --short origin/custom-guard)"
