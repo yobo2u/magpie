@@ -580,3 +580,88 @@ test("sponsors: the home page and the READMEs link every sponsor through /go", a
   const home = readFileSync(pages.home[0], "utf8");
   for (const s of SPONSORS.filter((s) => s.home)) assert.ok(home.includes(`href="/go/${s.id}/home"`), s.id);
 });
+
+// HTMLRewriter is Cloudflare's; this stands in for the two uses here: a
+// selector's inner content set, and the body appended to
+class FakeRewriter {
+  constructor() { this.h = []; }
+  on(sel, h) { this.h.push([sel, h]); return this; }
+  transform(res) {
+    const hs = this.h;
+    return new Response(new ReadableStream({
+      async start(c) {
+        let t = await res.text();
+        for (const [sel, h] of hs) {
+          let inner, tail = "";
+          h.element({ setInnerContent: (x) => (inner = x), append: (x) => (tail += x) });
+          if (sel === "#wall" && inner !== undefined) t = t.replace(/(<div id="wall">)[\s\S]*?(<\/div>)/, (_, a, b) => a + inner + b);
+          if (sel === "body") t = t.replace("</body>", tail + "</body>");
+        }
+        c.enqueue(new TextEncoder().encode(t));
+        c.close();
+      },
+    }), res);
+  }
+}
+
+test("contributors: each language's page gets its own table, and keeps its line without one", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { renderWall } = await import("./credits.mjs");
+  const data = { people: [{ name: "packinggoodsllc_07668", via: ["Discord"], releases: [{ v: "0.1.2581", what: ["a contributors page"] }] }] };
+  const page = (p) => new URL(`./public${p}.html`, import.meta.url);
+  let fragments = true;
+  const asked = [];
+  const env = {
+    ASSETS: {
+      fetch: async (r) => {
+        const p = new URL(r.url).pathname.replace(/\.html$/, "");
+        asked.push(p);
+        const m = p.match(/^\/contributors\/(en|zh|ja)$/);
+        if (m) return fragments ? new Response(renderWall(data, m[1]), { headers: { "Content-Type": "text/html" } }) : new Response("nf", { status: 404 });
+        try { return new Response(readFileSync(page(p), "utf8"), { headers: { "Content-Type": "text/html; charset=utf-8" } }); } catch { return new Response("nf", { status: 404 }); }
+      },
+    },
+  };
+  const was = globalThis.HTMLRewriter;
+  globalThis.HTMLRewriter = FakeRewriter;
+  try {
+    const get = async (path) => (await worker.fetch(new Request(`https://usemagpie.ai${path}`, { headers: { Cookie: "lang=en" } }), env, ctx)).text();
+    for (const [path, lang, head] of [["/docs/contributors", "en", "What came of it"], ["/docs/zh/contributors", "zh", "带来的改动"], ["/docs/ja/contributors.html", "ja", "そこから生まれた"]]) {
+      const html = await get(path);
+      assert.match(html, /<div id="wall"><div class="table-wrap"><table class="cw">/, path);
+      assert.ok(html.includes(head), `${path} has the ${lang} table`);
+      assert.ok(html.includes("packinggoodsllc_07668") && html.includes("v0.1.2581"), path);
+      assert.match(html, /static\.cloudflareinsights\.com/, `${path} keeps the beacon`);
+    }
+    fragments = false;
+    const bare = await get("/docs/zh/contributors");
+    assert.ok(!bare.includes('<table class="cw">'));
+    assert.match(bare, /<div id="wall"><p>名单在每次部署网站时/);
+    // no other page asks for a table
+    asked.length = 0;
+    await get("/docs/start");
+    assert.deepEqual(asked, ["/docs/start"]);
+  } finally {
+    globalThis.HTMLRewriter = was;
+  }
+});
+
+test("contributors: the pages say how to be left off, and every docs footer links them", async () => {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const dir = (d) => new URL(`./public/docs/${d}`, import.meta.url);
+  for (const [pre, file] of [["/docs/", "contributors.html"], ["/docs/zh/", "zh/contributors.html"], ["/docs/ja/", "ja/contributors.html"]]) {
+    const html = readFileSync(dir(file), "utf8");
+    assert.match(html, /<div id="wall">/, file);
+    assert.ok(html.includes("site/contributors-exclude.txt"), file);
+    for (const l of ["en", "zh", "ja"]) assert.ok(html.includes(`hreflang="${l}" href="https://usemagpie.ai/docs/${l === "en" ? "" : l + "/"}contributors"`), `${file} ${l}`);
+    assert.ok(!/privacy" hreflang=|og:url" content="[^"]*privacy/.test(html), `${file} still points at the page it was made from`);
+  }
+  for (const sub of ["", "zh/", "ja/"]) {
+    const pre = `/docs/${sub}`;
+    for (const f of readdirSync(dir(sub)).filter((f) => f.endsWith(".html"))) {
+      const foot = readFileSync(dir(sub + f), "utf8").split("<footer")[1];
+      assert.ok(foot.includes(`<a href="${pre}contributors">`), `${sub}${f}'s footer`);
+    }
+  }
+  assert.ok(readFileSync(new URL("./public/index.html", import.meta.url), "utf8").includes('<a href="/docs/contributors" data-i18n="foot.contrib">'));
+});

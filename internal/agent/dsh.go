@@ -2487,12 +2487,14 @@ func dshSyncLegacy(f string, models []catalog.Model, gw string) error {
 // dshFillNewProfiles gives a profile dsh made after magpie set it up — the
 // desktop app's, opened for the first time after the web's was wired —
 // magpie's route, and the model magpie set in the others when it starts on
-// none of the user's: until then it lists dsh's own models alone.
+// none of the user's: until then it lists dsh's own models alone. Where no
+// wired profile starts on magpie's route (the user picked one of dsh's own
+// there), the route alone is given, beside dsh's models (zyh6036 on X).
 func dshFillNewProfiles(files []string, models []catalog.Model, gw string) error {
 	if len(models) == 0 {
 		return nil
 	}
-	model := ""
+	model, wired := "", false
 	var bare []string
 	for _, f := range files {
 		_, items, err := dshRead(f)
@@ -2503,21 +2505,22 @@ func dshFillNewProfiles(files []string, models []catalog.Model, gw string) error
 			bare = append(bare, f)
 			continue
 		}
+		wired = true
 		if i := dshFindLast(items, "agent-default-model"); i >= 0 && model == "" {
 			if c := dshConfig(items[i]); isDshRoute(c["provider"]) {
 				model = c["model"]
 			}
 		}
 	}
-	if model == "" {
-		return nil
+	if !wired {
+		return nil // dsh not set up through magpie: nothing to give
 	}
 	for _, f := range bare {
 		head, items, err := dshRead(f)
 		if err != nil {
 			continue
 		}
-		if i := dshFind(items, "agent-default-model"); i < 0 || dshOurs(items[i]) {
+		if i := dshFind(items, "agent-default-model"); model != "" && (i < 0 || dshOurs(items[i])) {
 			if err := dshSetFile(f, magpieID+"/"+model, true, models, gw); err != nil {
 				return err
 			}

@@ -467,7 +467,7 @@ func loggedAnswers(convs ...string) []loggedAnswer {
 	// its candidates have (cybercaius: a renamed provider was told apart
 	// from itself)
 	renamed := provider.UsageRenames()
-	usage.Visit(time.Now().Add(-sealerKeep), func(r usage.Record) {
+	usage.VisitSessions(time.Now().Add(-sealerKeep), convs, func(r usage.Record) {
 		// the provider that answered, not one a deleted provider's
 		// calls were merged into on the Usage page (Renames.Own)
 		r.Provider = renamed.Own(r.Provider, r.Time)
@@ -479,9 +479,6 @@ func loggedAnswers(convs ...string) []loggedAnswer {
 		ownRelay := r.Provider == "openai" || (r.Provider == "codex" && !strings.Contains(r.Host, " as "))
 		if ownRelay && strings.HasPrefix(r.Endpoint, CodexPath) {
 			return // Codex's own sign-in
-		}
-		if !slices.Contains(convs, r.NativeSession) && !slices.Contains(convs, r.Session) {
-			return
 		}
 		a := loggedAnswer{provider: r.Provider, at: r.Time}
 		switch {
@@ -3218,7 +3215,7 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	rec, res, err := ask(body)
 	local := ""
 	if first := rec.status; lacksEndpoint(first) || itemNotFound(rec) || upstreamFailed(rec) || protectionRefused(first, rec.body.Bytes()) ||
-		err != nil && protectionWords.MatchString(err.Error()) {
+		summaryTooLarge(rec) || err != nil && protectionWords.MatchString(err.Error()) {
 		who, msg := compactFailure(body, rec)
 		if err != nil {
 			msg = "broken off: " + err.Error()
@@ -3420,6 +3417,20 @@ func upstreamFailed(rec *recorder) bool {
 }
 
 var upstreamFailedWords = regexp.MustCompile(`(?i)upstream request failed`)
+
+// summaryTooLarge is a summary request refused for its size: past the
+// vendor's byte cap (413; DeepSeek's "Failed to buffer the request body:
+// length limit exceeded", celestial_eagle_99230 on Discord) or past the
+// model's window. Codex's remote compaction asks nothing smaller after
+// either (it trims only by its token estimate against the catalog's
+// window, and a 1M window holds more bytes than the cap takes), so told
+// of it, Codex could neither compact nor go on. The summary is asked
+// again as text, its images left out and long outputs cut
+// (plainCompact), and compacted without a model when that is refused
+// too.
+func summaryTooLarge(rec *recorder) bool {
+	return rec.status == http.StatusRequestEntityTooLarge || overflowed(rec.status, rec.body.Bytes())
+}
 
 // itemNotFound is a 400 refusing an item of the input by its id, as Azure
 // OpenAI's and OpenAI's API answer one they never stored ("Item with id

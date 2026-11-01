@@ -190,6 +190,16 @@ type Option struct {
 	// Confirm is asked before the switch is turned on, when the plugin
 	// says turning it on does something the user should agree to
 	Confirm string `json:"confirm,omitempty"`
+	// Labels, Descriptions and Confirms are the same words in the window's
+	// other languages, by its language ("zh", "zh-TW", "ja", "de"), as a
+	// page's Titles are (plugins#590); the plain ones are the fallback
+	Labels       map[string]string `json:"labels,omitempty"`
+	Descriptions map[string]string `json:"descriptions,omitempty"`
+	Confirms     map[string]string `json:"confirms,omitempty"`
+	// FiltersModels says the plugin's model list leaves models out while
+	// the switch is on (WorkBuddy's "Free models only"): the editor says
+	// so by the models
+	FiltersModels bool `json:"filtersModels,omitempty"`
 }
 
 // OptionOn is option o of a provider as it stands with the user's values

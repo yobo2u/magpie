@@ -156,11 +156,22 @@ func InfoCached(names []string) map[string]NPM {
 	c := npmCached()
 	out := map[string]NPM{}
 	for _, n := range names {
-		if e, ok := c[n]; ok {
+		if e, ok := c[n]; ok && !e.missingStale(time.Hour) {
 			out[n] = e.Info
 		}
 	}
 	return out
+}
+
+// missingStale is whether e is "not on npm" said over age ago: unknown
+// now, not missing. A package only the community repo's dist branch has
+// was kept as missing by builds before v0.1.2413 whenever the branch's
+// read was cut off (zhudabao8433 on Discord: PowerContext, installable the
+// day before, read Coming soon), and an ask that still can't read the
+// branch leaves that answer standing; a page told "unknown" offers
+// Install instead of a Coming soon nothing has confirmed.
+func (e npmEntry) missingStale(age time.Duration) bool {
+	return e.Info.Version == "" && time.Since(e.At) >= age
 }
 
 func marketCache() string { return filepath.Join(appdir.Cache(), "plugin-market.json") }
@@ -344,7 +355,10 @@ func infoWithin(ctx context.Context, names []string, age time.Duration) map[stri
 		asked[n] = true
 		e, hit := cache[n]
 		if hit {
-			out[n] = e.Info // what it said last, until it says otherwise
+			// what it said last, until it says otherwise
+			if !e.missingStale(time.Hour) {
+				out[n] = e.Info
+			}
 			if time.Since(e.At) < age {
 				continue
 			}

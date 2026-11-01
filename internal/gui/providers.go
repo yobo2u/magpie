@@ -19,6 +19,7 @@ import (
 	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/update"
@@ -38,25 +39,28 @@ type modelJSON struct {
 	Given   bool     `json:"given,omitempty"` // its levels aren't known: Efforts are those it can be given, Kept those it was
 	// Reasonless: the user said it takes no reasoning ask
 	// (provider.SetModelReasonless): none of Efforts is kept, and none is sent
-	Reasonless bool     `json:"reasonless,omitempty"`
-	Images     bool     `json:"images"`              // agents are told it can see images
-	ImageSet   bool     `json:"imageSet,omitempty"`  // the user said so, rather than its vendor
-	Own        bool     `json:"ownImages,omitempty"` // its vendor's answer, which a staged Restore default shows
-	On         bool     `json:"on"`                  // exposed to agents
-	Best       bool     `json:"best,omitempty"`      // the newest of its family in the list: what Best in family serves (provider.NewestInFamily)
-	Context    int      `json:"context,omitempty"`   // the window agents are told: the user's, else Listed
-	Output     int      `json:"output,omitempty"`    // the reply limit agents are told: provider.ReplyLimit within Context (provider.OutputWithin)
-	Listed     int      `json:"listed,omitempty"`    // its window before the user's: its vendor's list's, else models.dev's
-	Max        int      `json:"max,omitempty"`       // the most its context may be set to, above Listed
-	Free       bool     `json:"free,omitempty"`      // costs the subscription nothing
-	Rate       float64  `json:"rate,omitempty"`      // the credits a request costs the subscription, as a multiple
-	RateWas    float64  `json:"rateWas,omitempty"`   // the rate before a discount running now
-	API        string   `json:"api,omitempty"`       // the one API the user said it is asked on
-	Auto       []string `json:"auto,omitempty"`      // the APIs its vendor's list says it is served on, what Auto asks it on
-	NoAPI      bool     `json:"noAPI,omitempty"`     // the provider has a URL for none of them: agents aren't offered it (provider.NoAPIFor, #2094)
-	Same       string   `json:"same,omitempty"`      // the model the user said it is the same as, for the groups magpie finds (#583)
-	Merge      string   `json:"merge,omitempty"`     // what those groups merge it by when the user says nothing
-	Kind       string   `json:"kind,omitempty"`      // what the user said it makes: image or video (#1399)
+	Reasonless bool    `json:"reasonless,omitempty"`
+	Images     bool    `json:"images"`              // agents are told it can see images
+	ImageSet   bool    `json:"imageSet,omitempty"`  // the user said so, rather than its vendor
+	Own        bool    `json:"ownImages,omitempty"` // its vendor's answer, which a staged Restore default shows
+	On         bool    `json:"on"`                  // exposed to agents
+	Best       bool    `json:"best,omitempty"`      // the newest of its family in the list: what Best in family serves (provider.NewestInFamily)
+	Context    int     `json:"context,omitempty"`   // the window agents are told: the user's, else Listed
+	Output     int     `json:"output,omitempty"`    // the reply limit agents are told: provider.ReplyLimit within Context (provider.OutputWithin)
+	Listed     int     `json:"listed,omitempty"`    // its window before the user's: its vendor's list's, else models.dev's
+	Max        int     `json:"max,omitempty"`       // the most its context may be set to, above Listed
+	Free       bool    `json:"free,omitempty"`      // costs the subscription nothing
+	Rate       float64 `json:"rate,omitempty"`      // the credits a request costs the subscription, as a multiple
+	RateWas    float64 `json:"rateWas,omitempty"`   // the rate before a discount running now
+	// Load is how busy its plugin last said the model is, a percent, when
+	// that was within plugin.LoadFresh (magpie.load); nil when unknown
+	Load  *float64 `json:"load,omitempty"`
+	API   string   `json:"api,omitempty"`   // the one API the user said it is asked on
+	Auto  []string `json:"auto,omitempty"`  // the APIs its vendor's list says it is served on, what Auto asks it on
+	NoAPI bool     `json:"noAPI,omitempty"` // the provider has a URL for none of them: agents aren't offered it (provider.NoAPIFor, #2094)
+	Same  string   `json:"same,omitempty"`  // the model the user said it is the same as, for the groups magpie finds (#583)
+	Merge string   `json:"merge,omitempty"` // what those groups merge it by when the user says nothing
+	Kind  string   `json:"kind,omitempty"`  // what the user said it makes: image or video (#1399)
 	// Vendor is the provider's own id of a model the user lists by
 	// another (provider.SetModelID), "" for one listed by its own; IDs
 	// says the provider's models can be given ids at all (a key's)
@@ -81,6 +85,7 @@ type providerJSON struct {
 	ID        string            `json:"id"`
 	Name      string            `json:"name"`
 	Icon      string            `json:"icon"`
+	IconFrom  string            `json:"iconFrom,omitempty"` // the address Icon was fetched from (provider.IconFrom)
 	Preset    string            `json:"preset"`
 	Host      string            `json:"host"`
 	Chat      string            `json:"chat"`
@@ -669,7 +674,7 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUse, desktop map[string]string) providerJSON {
 	avail := ls.Available
 	out := providerJSON{
-		ID: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Host: p.Host(),
+		ID: p.ID, Name: p.Name, Icon: p.Icon, IconFrom: p.IconFrom, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
@@ -844,6 +849,9 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		}
 		window := p.WindowOf(m)
 		j := modelJSON{ID: m.ID, Name: m.Name, Efforts: provider.EffortsOf(m), On: on, Context: window, Output: provider.OutputWithin(window, p.ReplyLimitIn(m, set)), Listed: provider.ListedWindow(m), Max: m.MaxContext, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Images: images, ImageSet: imageSet, Own: own, Best: newest[m.ID]}
+		if l, _, ok := plugin.ModelLoad(p.PluginProvider(), m.ID, time.Now()); ok {
+			j.Load = &l
+		}
 		if i := slices.IndexFunc(most, func(c catalog.Model) bool { return c.ID == m.ID }); j.Max == 0 && i >= 0 {
 			j.Max = most[i].MaxContext
 		}
@@ -1790,6 +1798,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if !in.AdditionalTools && old != nil {
 					in.AdditionalTools = old.AdditionalTools
 				}
+				if !in.AdditionalToolsOff && old != nil {
+					in.AdditionalToolsOff = old.AdditionalToolsOff
+				}
 				// and how long a request to it alone is kept while it is
 				// busy, set with `magpie provider set <id> patience=`
 				if in.Patience == 0 && old != nil {
@@ -1910,8 +1921,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if in.BaseAPI == "" && old != nil {
 					in.BaseAPI = old.BaseAPI
 				}
+				// a save that doesn't say keeps the icon, and where it came from
 				if in.Icon == "" && old != nil && in.Preset == "" {
-					in.Icon = old.Icon
+					in.Icon, in.IconFrom = old.Icon, old.IconFrom
 				}
 				// native compaction only where the wire carries it: a
 				// signed-in account is told by the one saved

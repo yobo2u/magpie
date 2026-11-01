@@ -115,6 +115,13 @@ func subscriptionID(id string) bool {
 // IsPlugin is whether the provider is a plugin's.
 func (p Provider) IsPlugin() bool { return p.Account != nil && p.Account.plugin != nil }
 
+// PluginForTest is the provider id served by the plugin's provider
+// pluginID, for a test to build a candidate of.
+func PluginForTest(id, pluginID string) Provider {
+	pp := plugin.Provider{ID: pluginID}
+	return Provider{ID: id, Account: &Account{Agent: "plugin", User: id, plugin: &pp}}
+}
+
 // PluginProvider is the id OpenCode knows the plugin's provider p is by
 // (grok, kiro), whatever magpie names it; "" for one no plugin gives.
 func (p Provider) PluginProvider() string {
@@ -330,7 +337,15 @@ func pluginCatalog(pp plugin.Provider) []catalog.Model {
 		// So does Cline's plugin, which resells others' models as the
 		// ClinePass built-in does and gives no levels of its own: signed in
 		// through it, ClinePass showed none where its API key showed them
-		if len(c.Efforts) == 0 && (PluginServes(pp.ID) || pp.ID == "cline") {
+		// And any plugin's model it says thinks but gives no variants of:
+		// OpenCode reads no variants as nothing said, and makes its own
+		// for the model, so the plugin hasn't said it has none. A
+		// reseller's id models.dev knows under its maker's spelling
+		// (Raccoon's sn-kimi-k3 for kimi-k3) counted as known
+		// (levelsUnknown) with nothing borrowed, so Codex had no effort to
+		// pick (laomao04_65777 on Discord); a custom provider's same id
+		// borrows them (effortsOf)
+		if len(c.Efforts) == 0 && (m.Reasoning || PluginServes(pp.ID) || pp.ID == "cline") {
 			c.Efforts = borrowedEfforts(m.ID)
 		}
 		// OpenCode's price of a model it has none for is 0, as the

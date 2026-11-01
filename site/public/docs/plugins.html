@@ -82,6 +82,7 @@
     <a href="#signin-state">Sign-in state</a>
     <a href="#usage">Usage</a>
     <a href="#checkin">Check-in</a>
+    <a href="#load">Model load</a>
     <a href="#input">What a plugin is given</a>
     <a href="#ids">Provider ids</a>
     <a href="#test">Testing</a>
@@ -573,6 +574,28 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     </table></div>
     <p><code>streak</code> is the days in a row, and <code>message</code> is shown as it is. A hook that throws, or answers no outcome above, is <code>failed</code>. It runs in the account’s scope, so a token it renews with <code>client.auth.set</code> is saved to that account.</p>
 
+    <h2 id="load"><a class="anchor" href="#load">Model load</a></h2>
+    <p>A vendor that queues requests to a busy model can have the plugin say how busy each model is, with <code>input.magpie.load(provider, loads)</code>, magpie’s own (OpenCode has none). <code>loads</code> maps a model id to a percent from 0 up, or to <code>null</code> to say it isn’t known any more. The plugin calls it whenever it likes, from its own timer: magpie doesn’t ask for it.</p>
+    <div class="code">
+      <span class="lang">plugin</span>
+      <pre><span class="k">export default async</span> (input) =&gt; {
+  <span class="k">const</span> report = <span class="k">async</span> () =&gt; {
+    <span class="k">const</span> r = <span class="k">await</span> fetch(<span class="s">`${BASE}/load`</span>).then((r) =&gt; r.json()).catch(() =&gt; <span class="k">null</span>)
+    <span class="k">if</span> (r) input.magpie?.load?.(<span class="s">"acme"</span>, { <span class="s">"acme-large"</span>: r.large, <span class="s">"acme-small"</span>: r.small })
+  }
+  report()
+  setInterval(report, 60_000)  <span class="c">// within five minutes, or the load is unknown again</span>
+  <span class="k">return</span> { auth: { <span class="c">/* … */</span> } }
+}</pre>
+    </div>
+    <ul>
+      <li><b>Values.</b> 100 is as busy as the vendor serves at once; a vendor that queues reports past it (200 is twice that). A number below 0 counts as 0, and one past 10000 as 10000, a sanity cap. Anything else (a string, <code>NaN</code>) is dropped. Model ids match whatever their case, and <code>model@256k</code> has its model’s load unless reported itself. One call takes up to 1000 models and returns how many it took. A provider that isn’t a string, or a <code>loads</code> that isn’t an object, throws a <code>TypeError</code>.</li>
+      <li><b>Freshness.</b> Each model’s load counts for five minutes from the call that reported it. After that it is unknown, never 0: a plugin that stops calling leaves its models where they were. A model a call doesn’t name keeps its last load until its own five minutes run out.</li>
+      <li><b>Where it shows.</b> The provider editor shows it by the model, a small grey number.</li>
+      <li><b>Routing.</b> With Settings › Network and sharing › Busy models last set (Off by default; over 50, 70, 80 or 90%, or Custom… for any number from 1 to 9999, such as 150 for a vendor that queues), a model reported busier than that goes behind every other candidate a request could go to, ahead of those resting after a failure. A conversation it answered moves to the one that leads at its next turn; within a turn it stays. A model with no load known keeps its place. The Routing trace says <code>busy</code> with the load.</li>
+    </ul>
+    <p>A plugin written for older hosts checks <code>input.magpie?.load</code> first, as above.</p>
+
     <h2 id="input"><a class="anchor" href="#input">What a plugin is given</a></h2>
     <p>magpie hands a plugin what OpenCode’s <code>PluginInput</code> has, as far as it has meaning without an OpenCode server:</p>
     <div class="table-wrap"><table>
@@ -586,6 +609,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <tr><td><code>project</code></td><td><code>{ id: "magpie", worktree }</code>.</td></tr>
       <tr><td><code>$</code></td><td>Bun’s shell.</td></tr>
       <tr><td><code>serverUrl</code></td><td>A placeholder; no OpenCode server is behind it.</td></tr>
+      <tr><td><code>magpie.option</code>, <code>.options</code>, <code>.load</code></td><td>magpie’s own: the plugin’s options as the user set them, and <a href="#load">its models’ load</a>.</td></tr>
     </table></div>
     <p>The hooks magpie calls are <code>config</code>, <code>auth</code> (its methods, <code>loader</code>, <code>usage</code>, <code>refresh</code> and <code>checkin</code>), <code>provider.models</code> and <code>chat.headers</code>. A plugin’s other hooks (<code>tool</code>, <code>event</code>, <code>chat.params</code>, …) are not called. The agent runs its own tools.</p>
 
@@ -1003,6 +1027,7 @@ document.getElementById(<span class="s">"calls"</span>).textContent = `${s.calls
     <a href="/docs/integrate">Integrate</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>
     <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>
+    <a href="/docs/contributors">Contributors</a>
     <a href="https://github.com/yetone/magpie-releases/releases">Releases</a>
   </div>
 </div></footer>

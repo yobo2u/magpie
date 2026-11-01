@@ -82,6 +82,7 @@
     <a href="#signin-state">登录状态</a>
     <a href="#usage">用量</a>
     <a href="#checkin">签到</a>
+    <a href="#load">模型负载</a>
     <a href="#input">插件能拿到什么</a>
     <a href="#ids">供应商 id</a>
     <a href="#test">测试</a>
@@ -573,6 +574,28 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     </table></div>
     <p><code>streak</code> 是连续天数，<code>message</code> 原样显示。抛出异常，或返回的 outcome 不在上表里，都算 <code>failed</code>。它在账号的作用域里运行，所以用 <code>client.auth.set</code> 续期的 token 会存到这个账号。</p>
 
+    <h2 id="load"><a class="anchor" href="#load">模型负载</a></h2>
+    <p>供应商在模型繁忙时会让请求排队的，插件可以用 <code>input.magpie.load(provider, loads)</code> 告诉 magpie 每个模型有多忙。这是 magpie 自己的接口，OpenCode 没有。<code>loads</code> 把模型 id 映射到从 0 起的百分比，或映射到 <code>null</code> 表示不再知道。插件按自己的节奏、用自己的定时器随时调用，magpie 不会来要。</p>
+    <div class="code">
+      <span class="lang">plugin</span>
+      <pre><span class="k">export default async</span> (input) =&gt; {
+  <span class="k">const</span> report = <span class="k">async</span> () =&gt; {
+    <span class="k">const</span> r = <span class="k">await</span> fetch(<span class="s">`${BASE}/load`</span>).then((r) =&gt; r.json()).catch(() =&gt; <span class="k">null</span>)
+    <span class="k">if</span> (r) input.magpie?.load?.(<span class="s">"acme"</span>, { <span class="s">"acme-large"</span>: r.large, <span class="s">"acme-small"</span>: r.small })
+  }
+  report()
+  setInterval(report, 60_000)  <span class="c">// 五分钟内要再报一次，否则负载又变成未知</span>
+  <span class="k">return</span> { auth: { <span class="c">/* … */</span> } }
+}</pre>
+    </div>
+    <ul>
+      <li><b>取值。</b>100 表示供应商同时能服务的满载；会排队的供应商可以报超过 100 的值（200 是满载的两倍）。小于 0 按 0 算，大于 10000 按 10000 算（防止离谱的值）。其他值（字符串、<code>NaN</code>）丢弃。模型 id 不区分大小写，<code>model@256k</code> 没单独报时用它所属模型的负载。一次最多 1000 个模型，返回收下的个数。provider 不是字符串，或 <code>loads</code> 不是对象，会抛出 <code>TypeError</code>。</li>
+      <li><b>时效。</b>每个模型的负载从报告它的那次调用起算五分钟有效，之后就是未知，绝不当作 0：插件不再报告时，它的模型保持原位。一次调用没提到的模型，保留上次的负载，直到它自己的五分钟到期。</li>
+      <li><b>在哪显示。</b>供应商编辑页里模型旁边的灰色小数字。</li>
+      <li><b>路由。</b>在 设置 › 网络与共享 › 繁忙的模型靠后 选了阈值（默认关闭；可选高于 50、70、80 或 90%，或选“自定义…”输入 1 到 9999 之间的任意数，比如会排队的供应商可设 150）后，报告负载高于它的模型会排到请求能去的其他候选之后，但仍在失败后休息的候选之前。它答过的对话在下一轮换到排在最前的那个；同一轮之内不换。没有已知负载的模型保持原位。路由追踪里显示 <code>busy</code> 和负载值。</li>
+    </ul>
+    <p>为旧版宿主写的插件先检查 <code>input.magpie?.load</code>，如上例。</p>
+
     <h2 id="input"><a class="anchor" href="#input">插件能拿到什么</a></h2>
     <p>magpie 交给插件的是 OpenCode <code>PluginInput</code> 里的内容，只要它在没有 OpenCode 服务端时还有意义：</p>
     <div class="table-wrap"><table>
@@ -586,6 +609,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <tr><td><code>project</code></td><td><code>{ id: "magpie", worktree }</code>。</td></tr>
       <tr><td><code>$</code></td><td>Bun 的 shell。</td></tr>
       <tr><td><code>serverUrl</code></td><td>占位值，后面没有 OpenCode 服务端。</td></tr>
+      <tr><td><code>magpie.option</code>、<code>.options</code>、<code>.load</code></td><td>magpie 自己的：用户设置的插件选项，以及<a href="#load">模型负载</a>。</td></tr>
     </table></div>
     <p>magpie 调用的钩子是 <code>config</code>、<code>auth</code>（它的 methods、<code>loader</code>、<code>usage</code>、<code>refresh</code> 和 <code>checkin</code>）、<code>provider.models</code> 和 <code>chat.headers</code>。插件的其他钩子（<code>tool</code>、<code>event</code>、<code>chat.params</code> 等）不会被调用，工具由 agent 自己运行。</p>
 
@@ -1003,6 +1027,7 @@ document.getElementById(<span class="s">"calls"</span>).textContent = `${s.calls
     <a href="/docs/zh/integrate">接入应用</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>
     <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>
+    <a href="/docs/zh/contributors">贡献墙</a>
     <a href="https://github.com/yetone/magpie-releases/releases">版本发布</a>
   </div>
 </div></footer>

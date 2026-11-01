@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -1083,7 +1084,10 @@ func asideOf(cs []candidate, q provider.Provider, fallback bool, from provider.P
 
 // restLast moves those resting after a recent failure behind the rest,
 // and a Codex account set to spend its credits last that has gone onto
-// them (creditsLast) behind both, those in their own order.
+// them (creditsLast) behind both, those in their own order. Ahead of the
+// resting, a model its plugin says is busier than the user's
+// settings.BusyLoad (busyOf) goes behind the ready ones: it answers, only
+// after a wait in its vendor's queue (axelburks on Discord).
 func restLast(out []candidate, pl planned) ([]candidate, planned) {
 	if len(out) == 1 {
 		if r, ok := restingOf(out[0]); ok {
@@ -1093,25 +1097,42 @@ func restLast(out []candidate, pl planned) ([]candidate, planned) {
 		return out, pl
 	}
 	now := time.Now()
-	var ready, resting, last []candidate
-	var wReady, wResting, wLast []Weighed
+	over := settings.Shared().BusyLoad
+	var ready, busy, resting, last []candidate
+	var wReady, wBusy, wResting, wLast []Weighed
 	for i, c := range out {
 		r, isResting := restingOf(c)
 		if isResting {
 			pl.order[i].Rest = &r
 		}
+		load, isBusy := busyOf(c, over, now)
 		switch {
 		case c.creditsLast(now):
 			pl.order[i].CreditsLast = true
 			last, wLast = append(last, c), append(wLast, pl.order[i])
 		case isResting:
 			resting, wResting = append(resting, c), append(wResting, pl.order[i])
+		case isBusy:
+			pl.order[i].Busy = load
+			busy, wBusy = append(busy, c), append(wBusy, pl.order[i])
 		default:
 			ready, wReady = append(ready, c), append(wReady, pl.order[i])
 		}
 	}
-	pl.order = append(append(wReady, wResting...), wLast...)
-	return append(append(ready, resting...), last...), pl
+	pl.order = append(append(append(wReady, wBusy...), wResting...), wLast...)
+	return append(append(append(ready, busy...), resting...), last...), pl
+}
+
+// busyOf is the load c's plugin last reported for its model, and whether
+// that is over the percent over (settings.BusyLoad; 0 is off). A model
+// with no load reported, or none within plugin.LoadFresh, isn't busy:
+// unknown is never taken for idle nor for busy.
+func busyOf(c candidate, over int, now time.Time) (float64, bool) {
+	if over <= 0 {
+		return 0, false
+	}
+	load, _, ok := plugin.ModelLoad(c.p.PluginProvider(), c.model, now)
+	return load, ok && load > float64(over)
 }
 
 // probeOne keeps, of the candidates resting after a failure, only the one
@@ -1904,6 +1925,40 @@ func matesFirst(left []candidate, c candidate) {
 		}
 	}
 	copy(left, append(mates, others...))
+}
+
+// retellMost is the size, in tokens, of a refused conversation past which
+// another Claude subscription account isn't told it again: each is a new
+// Claude Code that writes the whole of it to that account's cache.
+const retellMost = 100_000
+
+// claudeAccount is whether c is a Claude subscription account, served
+// through Claude Code (serveClaudeSubscription).
+func (c candidate) claudeAccount() bool {
+	return c.p.Account != nil && c.p.Account.Agent == "claude"
+}
+
+// tooBigToRetell is whether a conversation is too big to be told again to
+// another Claude subscription account after one refused it (retellMost),
+// and its size in tokens as estimate counts it.
+func tooBigToRetell(from provider.Protocol, body []byte) (int, bool) {
+	req, err := parse(from, body)
+	if err != nil {
+		return 0, false
+	}
+	n := estimate(req)
+	return n, n >= retellMost
+}
+
+// otherThanClaudeAccounts is left without its Claude subscription accounts.
+func otherThanClaudeAccounts(left []candidate) []candidate {
+	var kept []candidate
+	for _, x := range left {
+		if !x.claudeAccount() {
+			kept = append(kept, x)
+		}
+	}
+	return kept
 }
 
 // matesLast puts last, of the candidates left, the other keys or accounts
@@ -3207,6 +3262,25 @@ var filterReasons = map[string]string{
 // taken for content it reached the agent and the try stood as a success.
 const finishFailed = `the reply ended with finish_reason "error"`
 
+// emptyCompleted is what a 200 Responses stream the vendor ends with a
+// response.completed that named its output empty and its usage zero
+// (#2471, MurmuredVelpro) says of itself, in the failure the hold keeps:
+// the turn was answered with nothing, as a translated reply that said
+// nothing and counted nothing is (repliesCounted, #2086), and the
+// group's next member answers it, while taken for a reply's end it
+// reached the agent as a completed turn and the try stood as a success.
+// One that counted a token stays a reply, as Claude's own empty end_turn
+// does; one that names neither field is taken as it came, a relay's
+// completed carrying neither — the fields said are what is read.
+const emptyCompleted = `the reply completed with nothing in it and counted no tokens`
+
+// outputEmpty tells whether a Responses reply named its output as carrying
+// nothing: an empty list, or null — the field said, not left out.
+func outputEmpty(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	return string(raw) == "null" || string(raw) == "[]"
+}
+
 // refusedNote is what a refusal is noted as: the vendor's own reason.
 func refusedNote(reason string) string {
 	return "safety filter: " + reason
@@ -3333,6 +3407,8 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 			IncompleteDetails *struct {
 				Reason string `json:"reason"`
 			} `json:"incomplete_details"`
+			Output json.RawMessage `json:"output"`
+			Usage  *rUsage         `json:"usage"`
 		} `json:"response"`
 		Choices *[]struct {
 			Delta        map[string]any `json:"delta"`
@@ -3431,6 +3507,16 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 				return refusal(r)
 			}
 		}
+	case typ == "response.completed" && v.Response.Status != "incomplete" &&
+		outputEmpty(v.Response.Output) && v.Response.Usage != nil && uncounted(v.Response.Usage.usage()):
+		// completed, and the reply named its output empty and its usage
+		// zero (#2471, MurmuredVelpro): no reply at all, as a translated
+		// one that said nothing and counted nothing is (repliesCounted,
+		// #2086). An event this reaches is one nothing was said before —
+		// the hold lets the first content through and reads no event
+		// beside it — so nothing of the try has reached the agent, and
+		// the failure is still held for the group's next candidate
+		return eventError, streamStatus(emptyCompleted), emptyCompleted
 	case typ == "" && v.Candidates != nil:
 		// a Gemini chunk
 		if r, ok := filterReasons[v.PromptFeedback.BlockReason]; ok {

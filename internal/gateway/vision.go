@@ -31,6 +31,8 @@ import (
 // describes them to it.
 func init() {
 	provider.Described = func() bool {
+		// whether one sees, not which account a request goes to
+		defer provider.Unwaited()()
 		_, ok := seer()
 		return ok
 	}

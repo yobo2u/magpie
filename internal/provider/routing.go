@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -217,6 +218,21 @@ var usedCache struct {
 // first time they are asked for, so the first requests after magpie
 // starts are routed by them too; later ones never wait.
 var firstWait = 3 * time.Second
+
+// unwaited counts the callers under Unwaited.
+var unwaited atomic.Int32
+
+// Unwaited has Allowances answer from what is last known, without the
+// first ask's wait, until release: for a caller that only asks whether a
+// model is there, not which account a request goes to. Every agent's model
+// list asks the gateway whether a model sees images, and the migrations at
+// start read Pi's effort, which builds its list: each agent's first ask
+// waited firstWait for its accounts' usage over the network, and magpie's
+// gateway listened ~9 s after start.
+func Unwaited() (release func()) {
+	unwaited.Add(1)
+	return sync.OnceFunc(func() { unwaited.Add(-1) })
+}
 
 // Allowance is an account's allowance windows as last known.
 type Allowance []Limit
@@ -694,7 +710,7 @@ func Allowances(agent string) map[string]Allowance {
 	}
 	_, known := c.m[agent]
 	c.Unlock()
-	if !known && done != nil {
+	if !known && done != nil && unwaited.Load() == 0 {
 		select {
 		case <-done:
 		case <-time.After(firstWait):

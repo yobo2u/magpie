@@ -2,6 +2,8 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "{name}, {n} accounts: {windows}": "{name}（{n} 个账号）：{windows}",
+    "What is left of this provider's accounts the group can use, together: amounts of one unit added up, a share the mean of the accounts on one plan. Each account is on the Usage page.": "本组可用的这家供应商账号合起来还剩多少：同一单位的额度相加，百分比取同一套餐账号的平均值。各账号详情在用量页。",
     "Each session's context window": "各会话的上下文窗口",
     "Show this session's newest request": "显示这个会话最新的请求",
     "Its plugin sent this request itself, so magpie can't split its time": "此请求由插件自行发出，magpie 无法拆分它的耗时",
@@ -642,6 +644,8 @@ magpie.strings({
     "Open Folder": "打开文件夹",
   },
   "zh-TW": {
+    "{name}, {n} accounts: {windows}": "{name}（{n} 個帳號）：{windows}",
+    "What is left of this provider's accounts the group can use, together: amounts of one unit added up, a share the mean of the accounts on one plan. Each account is on the Usage page.": "本組可用的這家供應商帳號合起來還剩多少：同一單位的額度相加，百分比取同一方案帳號的平均值。各帳號詳情在用量頁。",
     "Each session's context window": "各會話的上下文視窗",
     "Show this session's newest request": "顯示這個會話最新的請求",
     "Its plugin sent this request itself, so magpie can't split its time": "此請求由外掛自行發出，magpie 無法拆分它的耗時",
@@ -1282,6 +1286,8 @@ magpie.strings({
     "Open Folder": "打開資料夾",
   },
   ja: {
+    "{name}, {n} accounts: {windows}": "{name}（{n} アカウント）：{windows}",
+    "What is left of this provider's accounts the group can use, together: amounts of one unit added up, a share the mean of the accounts on one plan. Each account is on the Usage page.": "このグループが使えるこのプロバイダーのアカウントの残りの合計：同じ単位の量は足し合わせ、割合は同じプランのアカウントの平均。各アカウントは使用量ページにあります。",
     "Each session's context window": "セッションごとのコンテキストウィンドウ",
     "Show this session's newest request": "このセッションの最新のリクエストを表示",
     "Its plugin sent this request itself, so magpie can't split its time": "このリクエストはプラグインが自ら送信したため、magpie では時間の内訳を出せません",
@@ -1922,6 +1928,8 @@ magpie.strings({
     "Open Folder": "フォルダを開く",
   },
   de: {
+    "{name}, {n} accounts: {windows}": "{name}, {n} Konten: {windows}",
+    "What is left of this provider's accounts the group can use, together: amounts of one unit added up, a share the mean of the accounts on one plan. Each account is on the Usage page.": "Was von den Konten dieses Anbieters, die die Gruppe nutzen kann, zusammen übrig ist: Mengen derselben Einheit addiert, ein Anteil als Mittelwert der Konten mit demselben Tarif. Die einzelnen Konten stehen auf der Seite Nutzung.",
     "Each session's context window": "Kontextfenster jeder Sitzung",
     "Show this session's newest request": "Die neueste Anfrage dieser Sitzung zeigen",
     "Its plugin sent this request itself, so magpie can't split its time": "Diese Anfrage hat die Erweiterung selbst gesendet, daher kann magpie ihre Zeit nicht aufschlüsseln",

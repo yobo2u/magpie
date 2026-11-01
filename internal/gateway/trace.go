@@ -345,6 +345,10 @@ type Weighed struct {
 	// to spend them only after everything else: tried after every
 	// candidate not on its credits (restLast)
 	CreditsLast bool `json:"creditsLast,omitempty"`
+	// Busy: the load its plugin reported for the model, a percent over
+	// the user's settings.BusyLoad, so it was tried after every ready
+	// candidate that isn't (restLast)
+	Busy float64 `json:"busy,omitempty"`
 	// Rank: its place in its provider's own list of accounts or keys, the
 	// order the provider's page shows and a drag sets (#217); routing may
 	// weigh them in another

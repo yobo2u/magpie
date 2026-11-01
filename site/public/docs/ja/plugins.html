@@ -82,6 +82,7 @@
     <a href="#signin-state">サインイン状態</a>
     <a href="#usage">使用量</a>
     <a href="#checkin">チェックイン</a>
+    <a href="#load">モデルの負荷</a>
     <a href="#input">プラグインに渡されるもの</a>
     <a href="#ids">プロバイダ id</a>
     <a href="#test">テスト</a>
@@ -573,6 +574,28 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     </table></div>
     <p><code>streak</code> は連続日数、<code>message</code> はそのまま表示されます。例外を投げた hook や、上の表にない outcome を返したものは <code>failed</code> です。アカウントのスコープで実行されるので、<code>client.auth.set</code> で更新したトークンはそのアカウントに保存されます。</p>
 
+    <h2 id="load"><a class="anchor" href="#load">モデルの負荷</a></h2>
+    <p>混雑したモデルへのリクエストを待たせるベンダーなら、プラグインは <code>input.magpie.load(provider, loads)</code> で各モデルの混み具合を magpie に伝えられます。magpie 独自のもので、OpenCode にはありません。<code>loads</code> はモデル id から 0 以上のパーセントへの対応で、<code>null</code> はもう分からないことを表します。プラグインは自分のタイマーで好きなときに呼びます。magpie からは求めません。</p>
+    <div class="code">
+      <span class="lang">plugin</span>
+      <pre><span class="k">export default async</span> (input) =&gt; {
+  <span class="k">const</span> report = <span class="k">async</span> () =&gt; {
+    <span class="k">const</span> r = <span class="k">await</span> fetch(<span class="s">`${BASE}/load`</span>).then((r) =&gt; r.json()).catch(() =&gt; <span class="k">null</span>)
+    <span class="k">if</span> (r) input.magpie?.load?.(<span class="s">"acme"</span>, { <span class="s">"acme-large"</span>: r.large, <span class="s">"acme-small"</span>: r.small })
+  }
+  report()
+  setInterval(report, 60_000)  <span class="c">// 5 分以内にまた報告しないと、負荷は不明に戻ります</span>
+  <span class="k">return</span> { auth: { <span class="c">/* … */</span> } }
+}</pre>
+    </div>
+    <ul>
+      <li><b>値。</b>100 はベンダーが同時に処理できる満杯の状態で、待ち行列のあるベンダーはそれを超えて報告できます（200 はその 2 倍）。0 未満は 0、10000 超は 10000 として扱います（異常値の上限）。それ以外（文字列、<code>NaN</code>）は捨てられます。モデル id は大文字小文字を区別せず、<code>model@256k</code> は個別に報告がなければ元のモデルの負荷になります。1 回の呼び出しで最大 1000 モデルまで受け取り、受け取った数を返します。provider が文字列でない、または <code>loads</code> がオブジェクトでないと <code>TypeError</code> を投げます。</li>
+      <li><b>鮮度。</b>各モデルの負荷は報告した呼び出しから 5 分間有効で、その後は不明になり、0 とはみなしません。報告をやめたプラグインのモデルは元の位置のままです。呼び出しで触れなかったモデルは、自分の 5 分が切れるまで前回の負荷を保ちます。</li>
+      <li><b>表示。</b>プロバイダーの編集画面で、モデルの横に小さな灰色の数字で出ます。</li>
+      <li><b>ルーティング。</b>設定 › ネットワークと共有 › 混雑しているモデルを後回しに でしきい値を選ぶと（既定はオフ。50、70、80、90% 超、または「カスタム…」で 1〜9999 の任意の数。待ち行列のあるベンダーなら 150 など）、それより混雑していると報告されたモデルは、リクエストが行ける他の候補の後ろ、失敗後に休んでいる候補の前に回ります。そのモデルが答えた会話は次のターンで先頭の候補に移り、ターンの途中では移りません。負荷が分からないモデルは元の位置のままです。ルーティングのトレースには <code>busy</code> と負荷が出ます。</li>
+    </ul>
+    <p>古いホスト向けのプラグインは、上の例のように先に <code>input.magpie?.load</code> を確かめます。</p>
+
     <h2 id="input"><a class="anchor" href="#input">プラグインに渡されるもの</a></h2>
     <p>magpie は OpenCode の <code>PluginInput</code> の内容を、OpenCode サーバーなしで意味をなす範囲でプラグインに渡します：</p>
     <div class="table-wrap"><table>
@@ -586,6 +609,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <tr><td><code>project</code></td><td><code>{ id: "magpie", worktree }</code>。</td></tr>
       <tr><td><code>$</code></td><td>Bun のシェル。</td></tr>
       <tr><td><code>serverUrl</code></td><td>プレースホルダーです。背後に OpenCode サーバーはありません。</td></tr>
+      <tr><td><code>magpie.option</code>、<code>.options</code>、<code>.load</code></td><td>magpie 独自：ユーザーが設定したプラグインのオプションと、<a href="#load">モデルの負荷</a>。</td></tr>
     </table></div>
     <p>magpie が呼び出すフックは <code>config</code>、<code>auth</code>（そのメソッド、<code>loader</code>、<code>usage</code>、<code>refresh</code>、<code>checkin</code>）、<code>provider.models</code>、<code>chat.headers</code> です。プラグインのほかのフック（<code>tool</code>、<code>event</code>、<code>chat.params</code>、…）は呼び出されません。ツールはエージェント自身が実行します。</p>
 
@@ -1003,6 +1027,7 @@ document.getElementById(<span class="s">"calls"</span>).textContent = `${s.calls
     <a href="/docs/integrate">アプリ連携</a>
     <a href="https://github.com/yetone/magpie">GitHub</a>
     <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>
+    <a href="/docs/ja/contributors">コントリビューター</a>
     <a href="https://github.com/yetone/magpie-releases/releases">リリース</a>
   </div>
 </div></footer>

@@ -80,9 +80,7 @@
   // npm has the versions of a package: not a folder's, nor a git one's
   const onNPM = (spec) => !isPath(spec) && !isGit(spec);
   // a git one is out of date when its repository is at another commit than
-  // the one installed, whatever version its package.json says (ARNO on
-  // Discord: github:yuweihao17/codearts showed Update all the time, and
-  // still did right after updating); an abbreviated sha names the full one
+  // the one installed, whatever its version (ARNO); a short sha names the full one
   const sameCommit = (a, b) => !!a && !!b && (a.length > b.length ? a.startsWith(b) : b.startsWith(a));
   const gitBehind = (e) => isGit(e.spec) && !!e.commit && !!e.head && !sameCommit(e.commit, e.head);
   // the providers a plugin signs in to, as the add sheet knows them
@@ -205,6 +203,7 @@
   }
   // what npm says of the plugins suggested and those installed: drawn
   // when it comes, never waited on
+  let npmTries = 0;
   async function askNPM(only) {
     const names = [...new Set([...(listings || []).map((l) => l.package), ...(mine?.plugins || []).filter((e) => onNPM(e.spec)).map((e) => name(e.spec))])]
       .filter((n) => !only || !npm[n]);
@@ -214,8 +213,10 @@
       Object.assign(npm, r.npm || {});
     } catch {}
     merge();
-    // one npm said nothing of, now or ever: as one it doesn't have
-    for (const l of listings || []) if (!l.npm) l.npm = { weekly: 0 };
+    // one npm said nothing of: unknown (Install), asked again
+    let u = 0;
+    for (const l of listings || []) if (!l.npm || l.npm.u) u = l.npm = { weekly: 0, u: 1 };
+    if (u && npmTries++ < 4) setTimeout(() => askNPM(true), 15000);
     drawBody();
   }
 
@@ -491,7 +492,7 @@
       return b;
     }
     if (!e) {
-      if (listed && !listed.github && !listed.npm?.version) {
+      if (listed && !listed.github && !listed.npm?.version && !listed.npm.u) {
         b.textContent = t("Coming soon");
         b.disabled = true;
         b.title = t("Not on npm yet");

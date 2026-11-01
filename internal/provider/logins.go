@@ -946,8 +946,19 @@ func (p Provider) SignedOut() bool {
 }
 
 // Logins lists the remembered accounts of an agent ("" for every one),
-// the active one flagged.
+// the active one flagged. A request lists an agent's once: /api/providers
+// asks it of every provider, twice with its account models, and each
+// took logins.json's lock, a file opened across magpies (a seventh of
+// the list's CPU). The caller gets its own copy.
 func Logins(agent string) []Login {
+	return slices.Clone(heldOf("logins\x00"+agent, func() []Login { return loginsNow(agent) }))
+}
+
+// loginsRuns counts the lists Logins made (a test reads it).
+var loginsRuns atomic.Int64
+
+func loginsNow(agent string) []Login {
+	loginsRuns.Add(1)
 	if settings.AccountDiscoveryOff() {
 		return nil
 	}
@@ -1217,6 +1228,10 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 		mu := claudeDirRun(user)
 		mu.Lock()
 		defer mu.Unlock()
+		// nor while another magpie process runs it there (#4532)
+		if err := waitClaudeRuns(user); err != nil {
+			return "", err
+		}
 	}
 	// not while a saved account is being refreshed: the agent would be
 	// given the refresh token that refresh is spending
@@ -1260,6 +1275,15 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 	}
 	want := *target
 	if agent == "claude" {
+		// not while Claude Code refreshes its sign-in: the one read below
+		// to keep would be the refresh token that refresh is spending
+		// (#4532). Held till the new sign-in is written, so the refresh
+		// that follows starts from it.
+		release, err := claudeRefreshLocks()
+		if err != nil {
+			return "", err
+		}
+		defer release()
 		// the credentials as Claude Code has them this moment, not as last
 		// looked at: one it refreshed since has a new refresh token and the
 		// old one is dead (0xAncientTwo on X: signed out again and again)
@@ -1310,6 +1334,8 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 	return from, nil
 }
 
+// putClaudeLogin signs Claude Code in to l. The caller holds Claude Code's
+// refresh locks (claudeRefreshLocks).
 func putClaudeLogin(l savedLogin) error {
 	if claudeSetupToken(l.Auth) != "" {
 		return fmt.Errorf(errClaudeTokenSwitch, l.User)
@@ -1336,6 +1362,13 @@ func putClaudeLogin(l savedLogin) error {
 	if len(l.Profile) == 0 {
 		return nil
 	}
+	// read and written back under the lock Claude Code saves the file
+	// under, or a save of its own between the two is lost
+	release, err := claudeConfigLock()
+	if err != nil {
+		return err
+	}
+	defer release()
 	m, err := readClaudeProfile()
 	if err != nil {
 		if !os.IsNotExist(err) {

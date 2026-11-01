@@ -20,9 +20,17 @@ platform's SHA-256 and size, and a build that doesn't match both is not
 kept. It is only made when the user asks (`magpie claude-code install`, or
 yes to `magpie accounts add claude`'s offer on a machine without one), for
 a server or a container (Jorben on Discord). It is not on PATH and stands
-in for no agent. It doesn't update itself (the bridge sets
-`DISABLE_AUTOUPDATER`); installing again takes the newest and removes the
-older one.
+in for no agent. It doesn't update itself (every run magpie starts sets
+`DISABLE_AUTOUPDATER`), so the serving magpie keeps it current
+(`claudecode.KeepCurrent`, a `WhileServing` loop): a minute after it
+starts and every six hours it asks for the latest release and downloads a
+newer one, checked the same way. The version it replaced is removed on the
+next look, not at once, as a run being started may hold its path;
+`magpie claude-code install` removes it at once. It does nothing when
+magpie downloaded none, when the machine has its own `claude`, or when
+`DISABLE_AUTOUPDATER` is set for magpie (alextjy on Discord: a container's
+download stayed at its first version across image updates). A failed look
+keeps the download as it is and is logged.
 
 A run is started with `--dangerously-skip-permissions` (`claudeCLIArgs`):
 its only tools are magpie's MCP ones, answered by the client, and
@@ -66,6 +74,18 @@ stay apart), the same in every run, so a resumed session, the history
 run was offered it. `subscriptionRun.names` (`bridgeNames`) maps it back
 to the declared name in `toolStart`, for streamed and whole messages, and
 in `mcpCall` (#2649).
+
+A turn with `tool_choice` none is offered every tool the client sent, as
+any other turn is (bbfatx on X). Anthropic caches a prompt as tools, then
+system, then messages, so a turn offered fewer tools (a title or summary
+asked with the tools as ever) was a prefix the cache had never seen, and
+all of it, Claude Code's own tools and system prompt included, was written
+again. What a turn may call is kept apart from what it is offered:
+`subscriptionRun.allowed`, set at start, on resume and with tool results.
+A call the turn makes anyway is answered at once with an error result
+(`mcpCall`), `toolStart` treats it as Claude Code's own call, and the
+client never sees it. A named `tool_choice` still offers only that tool.
+`TestClaudeToolChoiceNoneKeepsTheTools` holds it.
 
 The run's MCP server is magpie itself (`magpie claude-mcp-helper`,
 `internal/claudebridge`), which hands each tool call back to the gateway
@@ -227,99 +247,95 @@ yes only when the bridge sets `MAGPIE_CLAUDE_TUI_TRUST=1`, which it does
 for magpie's own working folder or a saved account's config directory,
 both magpie's. In the caller's folder under the account Claude Code is
 signed in to, the question is the user's: a folder the user has not
-trusted makes that run `-p`. The question opens on "No, exit", and a key
+trusted fails that run, saying so. The question opens on "No, exit", and a key
 sent as it is first drawn can be lost to its being drawn again, so the
 helper presses ↓ until "Yes" is the last choice drawn and Enter only once
 it has stayed so for 300ms (`ready`, `trustSettle`). Pressing Enter blind
-chose "No, exit" in the real gateway, and every run went `-p`.
+chose "No, exit" in the real gateway, and no run started.
 
-A run is `-p`, as before, when (`claudeTUI`):
+Every run is `-p` only when Settings › Models › Replies › Claude Code's
+interactive mode is Off (`claudePrintMode`), or in the gateway's own
+tests, whose fake Claude Codes are `-p` ones (`claudeTUIRuns`, code
+`no-shim`). With it On, nothing ever runs as `-p` (the owner, 11-01): the
+plan counts a `-p` request as another client's, at about twice the
+interactive mode's, and a `-p` run starts without the interactive mode's
+cache. A run the interactive mode can't take is refused before any Claude
+Code starts (`startRun`), and the request gets an error naming why and
+the setting (`claudeTUIErr`, `claudeNotTUIWhy`). That is when
+(`claudeTUI`, `claudePrint`):
 
-- Settings › Models › Replies › Claude Code's interactive mode is Off
-  (`claudePrintMode`); (with Interactive only, each case below fails instead:
-  see [Interactive only](#interactive-only-claudetuionly));
 - it is Claude Code in WSL whose home the probe didn't find, or, in
-  the distro user's own folder, one Windows can't read;
-- the request has safeguards, client cache marks, a JSON schema, an image
+  the distro user's own folder, one Windows can't read (`wslread`);
+- the request has a JSON schema, an image
   known only by its URL (`urlImages`: the helper pastes files, and has no
   bytes of it), or words over 400KB (`tuiPromptMost`, images not counted),
-  which a paste can't carry as `-p` does.
+  which a paste can't carry;
+- it is a branch of a `-p` run's session (`branch`: see
+  [Tool results another request answers first](#tool-results-another-request-answers-first));
+  a branch of an interactive run's session is interactive too.
 
-The gateway's log says which (`claude: this run is -p: …`,
-`claudePrintWhy`), and the helper's own line when it becomes `-p` (below)
-is logged from the run's stderr (`lockedWriter`).
+Safeguards are taken: interactive Claude Code reads
+`CLAUDE_CODE_EXTRA_BODY` only as it starts (2.1.316: a later
+`apply_flag_settings` or a rewritten `--settings` file changes nothing it
+sends), so `startRun` puts them in its environment, and a turn whose
+safeguards changed starts a new run told the whole conversation
+(`setSafeguards`). Client cache marks are taken too, but not kept: the
+helper pastes the words without their marks, so the run keeps Claude
+Code's own prompt caching (no `DISABLE_PROMPT_CACHING`, no client tail)
+and the reply reports every client mark as dropped
+(`clientCache.pasted`; see
+[Client-placed cache marks](#client-placed-cache-marks-1717)).
 
-The Claude Code provider page says under its accounts whether runs are
-the interactive mode (TUI) or `-p` (CLI), with why when every run is
-`-p`, and opens what tells the two apart (`claudeModeRow` in app.js, drawn by
-claudemode.js, which it loads with its first read).
-It reads `GET /api/claude/mode` (`gateway.ClaudeModeNow`) as the page
+The gateway's log says which (`claude: not the interactive mode: …`).
+A refused request never ran, so it isn't the editor's last request
+(`noteClaudeRun`). The model test's and warm-up's "hi" (`askClaude`) goes
+through the helper too (`askClaudeTUI`), in stream-json, and its stdin is
+closed at the first result. Reading the plan's allowance (`/usage`) asks
+no model and is still `claude -p /usage`.
+
+The Claude Code provider editor's "Claude Code runs as" row
+(`claudeModeRow` in app.js, drawn by claudemode.js, which it loads with
+its first read) is a switch between Interactive mode (TUI) and claude
+-p: pressing one saves `claudePrintMode` as Settings' row does
+(`savePrefs`) and reads the mode again. In magpie web it is the
+gateway's, and only its own Settings change it, so the switch is
+disabled. Hovering or focusing it opens what tells the two apart. It
+reads `GET /api/claude/mode` (`gateway.ClaudeModeNow`) as the page
 opens, kept 30 seconds and dropped when the setting changes, not in
 `/api/providers`' polls. What decides it for every run on the machine is
 `claudeMachineWhy`, whose codes the page words: `off` (the setting),
-`broken` (failed to start lately), `wsl-home`, `missing` (no Claude Code
-found), `os` and `no-shim`. What only a request decides (safeguards and
-the rest above) the page names as still `-p`; the WSL folder Windows
-can't read is per account, so the page doesn't know it. A subscription
-with Only switch serves nothing through magpie and shows no row.
+`wsl-home`, `missing` (no Claude Code found), `os` and `no-shim`. Beside
+the switch: turned off, that every request runs as claude -p; on where
+the interactive mode can't run, that Claude requests fail, and why;
+otherwise the last request, when it was the interactive mode's. A
+subscription with Only switch serves nothing through magpie and shows no
+row.
 
 A turn the interactive mode can't take ends the run, and the next starts
-anew: a turn with an image known by its URL, one that takes earlier turns
-back, an effort change. A run given up on (`letGo`) is not taken back, since the
-interactive mode can't answer a control request to stop a turn.
+anew: a turn with an image known by its URL (refused, as above), one
+that takes earlier turns back, an effort change. A run given up on
+(`letGo`) is not taken back, since the interactive mode can't answer a
+control request to stop a turn.
 
 If the interactive Claude Code doesn't start or show its prompt within 45
 seconds (`claudetui.ReadyWait`), or asks how to sign in (`signIn`: a
 Claude Code signed in for `-p` only, as in a container given
-`CLAUDE_CODE_OAUTH_TOKEN`), or shows its first-run notes (`firstRun`:
-"Security notes", a config folder whose onboarding isn't done), the helper becomes `claude -p` with the same
-arguments (`printMode`, `exec` on the same pid, its input still unread),
-so the turn is answered all the same, and it writes
-`<cache>/magpie/claude-tui-broken`, which holds the number of failed
-starts in a row. For 30 minutes after one, doubled with each one after
-to a day (`brokenFor`), every run goes to `-p` at once: the helper is
-not started (`claudePrintWhy`, "the interactive mode failed to start
-lately"). A start that shows its prompt removes the mark. A folder not
-trusted goes to `-p` without the mark.
+`CLAUDE_CODE_OAUTH_TOKEN`), shows its first-run notes (`firstRun`:
+"Security notes", a config folder whose onboarding isn't done) or asks
+about a folder the user hasn't trusted, the helper ends, saying why on
+its stderr and in its exit (`fail` in `Run`). It never becomes `claude
+-p`. Until 11-01 it did, and wrote `<cache>/magpie/claude-tui-broken`,
+after which every run went `-p` for up to a day; that mark is no longer
+written or read, and one left on disk does nothing.
 
 The helper answers the bridge's `initialize` only once the prompt is
-shown, or as `-p` after the fallback, so the bridge waits for it
-`tuiInitWait` (`ReadyWait` and twice a control request's 10s), not the
-10s of any other control request. With 10s, a Claude Code slower than
-that to start (2 vCPU in Docker) was ended as the helper waited, before
-it could become `-p`, and every try was answered 502 "Claude Code has
+shown, so the bridge waits for it `tuiInitWait` (`ReadyWait` and twice a
+control request's 10s), not the 10s of any other control request. With
+10s, a Claude Code slower than that to start (2 vCPU in Docker) was ended
+as the helper waited, and every try was answered 502 "Claude Code has
 not answered magpie's initialize request in 10s" (#4504). A helper that
-answers nothing even then is ended, the mark is written, and `start`
-starts the turn again as `-p`.
-
-### Interactive only (`claudeTUIOnly`)
-
-The setting has a third choice, Interactive only, for users who would
-rather a request fail than go out as `-p`. With it (`claudeTUIOnly()`,
-which `claudePrintMode` set too overrides):
-
-- a run that `claudeTUI` would make `-p` (any reason above) is not
-  started; the request gets an error naming the reason and the setting
-  (`claudeOnlyErr`, `claudeNotTUIWhy`);
-- the helper is handed `MAGPIE_CLAUDE_TUI_ONLY=1` (`claudetui.OnlyEnv`,
-  `claudeCLI.tuiEnv`). Where it would become `-p` (no start, `ready`'s
-  sign-in, first-run notes, untrusted folder or timeout) it exits with
-  the reason instead (`fallBack` in `Run`), and it ignores the broken mark;
-- a helper that never answers `initialize` ends the turn with an error,
-  not a `-p` try. The mark is still written, but the `broken` code is
-  not counted under Interactive only (`claudeMachineWhy`), so the next
-  run tries the interactive mode again;
-- the model test's and warm-up's "hi" (`askClaude`) goes through the
-  helper too (`askClaudeTUI`), in stream-json, and its stdin is closed at
-  the first result.
-
-Reading the plan's allowance (`/usage`) asks no model and stays `-p`.
-The provider page's "Claude Code runs as" row reads `ClaudeMode.Only`:
-with the interactive mode in use it says a request it can't take fails,
-and its card says nothing runs as `-p`; where the interactive mode can't
-run, the pill names Interactive only, never `claude -p`, and says Claude
-requests fail and why, with Change in Settings. A request refused this
-way never ran, so it isn't the row's last request (`noteClaudeRun`).
+answers nothing even then is ended (`tuiNoStart`), and the turn fails
+saying the interactive mode didn't start; the next turn tries it again.
 
 ## Why turns go on in one run
 
@@ -350,8 +366,11 @@ ignore the header. The mode is
 part of the run's identity, including rewritten conversations and tool-result
 handoffs: opted-in and ordinary requests never share a run.
 
-An opted-in run sets `DISABLE_PROMPT_CACHING=1`. Its four cache slots belong
-to the client. `claude_cache.go` validates the marks before run selection;
+An opted-in `-p` run sets `DISABLE_PROMPT_CACHING=1`. Its four cache slots
+belong to the client. An interactive run is pasted the words without their
+marks, so it keeps Claude Code's own caching and reports the system, message
+and tail marks dropped beside the tools' (`clientCache.pasted`); the table
+below is the `-p` run's. `claude_cache.go` validates the marks before run selection;
 `renderClaudePrompt` places them in a new run's first user message.
 
 | Client mark | Bridge behavior |
@@ -454,7 +473,10 @@ history to the 1h cache at 2×.
    Code could not go on from the conversation's saved session". Before,
    the turn got 502 "Claude Code ended" with the safety context set, and
    an empty reply without it.
-3. `retire`, then a new run told the whole conversation. When it has
+3. `retire`, then a new run told the whole conversation. `retire` takes
+   the request: an aside of a run that was told tools (`asideOf`: a
+   title or summary asked between turns with `tool_choice` none or with
+   no tools) doesn't let go of the run the conversation waits in. When it has
    replies in it, the turns already answered are wrapped in
    `<conversation_history>`, with a note that the images and files in them
    were sent with those messages, and the turn to answer (from the message
@@ -511,6 +533,21 @@ run for the whole session, and the turn after each suggestion went on
 from the reply before it. Other side requests that go on from the
 conversation (extract_memories, away_summary, /btw) take the same path;
 they weren't tried.
+
+An interactive run can't be rewound: the interactive mode ignores
+`--resume-session-at`. Each run keeps the uuid of the last session line it
+wrote (`lastLine`, from `noteLines`), the one it had before each turn
+(`backLine`), and, once it went on with a side question, the one before
+it (`behindLine`, beside `behindKey`). A turn that finds an interactive
+run behind a side question cuts a copy of its session at `behindLine`
+before the run is let go and its file removed (`branchAt`, a cut copy as
+in [Tool results another request answers first](#tool-results-another-request-answers-first)),
+and a new interactive run resumes the copy, told only the turn's
+messages. Before, every turn after a suggestion was told whole to a new
+run (bbfatx on X). There is no cut with a client's own cache marks, with
+an image known only by its URL, or for a run with no session or no line;
+then the turn is told whole, as before.
+`TestClaudeInteractiveSideQuestionBranchesBeforeIt` holds it.
 
 A turn after a reply that starts a new run logs why none waited
 (`whyNoRun`, "claude: no run waits for this turn: …"): its run went on
@@ -636,6 +673,12 @@ session's. The request matches one when all of these hold:
   only these changed (`looseTurn.rewrote`):
   - a user message had one part taken out (`cutFrom`), not all of it;
   - the reply is a non-empty start of what the run said.
+
+An aside of a run that was told tools (`asideOf`, above) is never taken
+as rewritten: `looseTurn`'s key has no tools, so a title asked with no
+tools looked like the conversation rewritten, and the conversation's run
+went on with it and waited at the title afterwards (bbfatx on X).
+`TestClaudeAsideLeavesTheConversationsRun` holds both.
 
 It is taken only when exactly one run or saved session matches. Two that
 could be it are two conversations alike as far as their words go, and a
@@ -905,6 +948,44 @@ there and gets a run started anew (`answeredElsewhere` in the log). It is
 never refused: Claude Code doesn't retry a 409, and the agent that sent it
 stops (ylorn on Discord).
 
+Such a run doesn't start from the whole conversation (`branch`). Told in
+one message, the conversation is a prefix the cache has never seen, so a
+900K conversation was written to the cache again for each fork. Aisiverto
+on X saw two requests 100ms apart: one read 900K and the other wrote 877K.
+Each cost about a fifth of a Pro plan's five hours. The run that made the
+calls instead keeps where in its session each call of the client's tools
+was written: the uuid on Claude Code's `assistant` line (`noteLines`). As
+it parks on them, it also keeps the conversation those calls answered
+(`historyKey`, set in `park`). A request no run takes, whose last reply's
+calls a live run of the same owner made, from the same conversation, goes
+on in a branch of that run's session. The branch's run copies the
+session's lines up to the reply's uuid into a session file of its own
+next to it, its `sessionId` set to the copy's id (`cutSession`, which waits
+up to `cutWait` for that line to be whole), and starts with
+`--resume <copy>` in the mode its source run had (`savedSession.tui`):
+interactive for an interactive run, `-p` for a `-p` one (`branch` in
+`claudePrint` is only for the latter). Claude Code's own
+`--fork-session --resume-session-at` cut is not used, as the interactive
+mode ignores `--resume-session-at` and resumes the whole session, and a
+`-p` branch of an interactive run's session read only tools and system from
+the cache (the prompts differ; measured on mote with 30 MCP tools). The
+copy is Claude Code's session as it asked it of Anthropic, so it reads the
+lead's cache: with the real Claude Code 2.1.316 on mote, a cut copy
+resumed interactively read 7648 tokens and wrote 14, and with `-p` read
+24009 and wrote 13. The translator passes each interactive assistant row's
+uuid through (`TestTranslatorTellsTheRowsUUID`), so an interactive run's
+lines can be cut. It is told only the results and what came after, as a
+turn after an unshelve is. The lead's session file stays the lead's, and
+the branch owns its copy, as an unshelved run owns its session.
+Calls it answered nothing for get a synthetic error result. There is no
+branch with a client's own cache marks, of a `-p` run under Interactive
+only, from a run that was rewound, closed or has no session (Windows and
+WSL keep none on disk), or when the conversation before the reply isn't
+the one the run answered. Then, and when the cut or the resume fails, the
+run is told the whole conversation as before.
+`TestClaudeCutSessionCopiesAsFarAsTheLine` and
+`TestClaudeForkBranchesOffTheLeadsSession` holds it.
+
 ## The user's words beside tool results (#872, #1878)
 
 A user message can hold tool results and, after them, text blocks of the
@@ -994,7 +1075,11 @@ Discord: Claude Desktop on Fable 5.1 got
   earlier calls and that writing one calls nothing. A prompt with no call in
   it is told as before.
 - `readOutput` holds back a reply's words from the first line that opens
-  with `[tool call ` (`textCalls`); words before it, and lines that only
+  with `[tool call `, `<invoke name=` or `<function_calls>`
+  (`textCallOpens`, `textCalls`): the last two are Claude's own call
+  written out (packinggoodsllc_07668: Claude Code through a group of
+  Claude models was shown `<invoke name="ToolSearch">…` and a
+  `*Result: …*` the model made up). Words before it, and lines that only
   start like it, go on as they come. A reply that ends there with end_turn
   and calls none of the client's tools isn't ended: once its turn's
   `result` is in, the run is told `textCallsAsk` as a user message, and the
@@ -1004,6 +1089,43 @@ Discord: Claude Desktop on Fable 5.1 got
   words reach the client as written. A run with no input to write to, or a
   reply that called the client's tools too (the text is left out), is
   not asked.
+
+## A refusal Claude Code goes on from (Chixi_Fang on X)
+
+Claude Code 2.1.316 doesn't end a turn at a refusal. At the first
+`stop_reason: refusal` it writes a `system/informational` line and a
+synthetic user message and asks the same model again; at the second it
+writes `system/model_refusal_fallback` and asks its fallback model
+(claude-opus-4-8 for an Opus 5.5 run), whose answer ends the turn with
+`result` `success`. Only when the fallback refuses too does it write
+`system/model_refusal_no_fallback` and a `<synthetic>` "API Error: …"
+message, and end with `stop_reason: refusal` (`-p`) or
+`error_during_execution` with `api_error_status` 0 (the TUI). The TUI's
+lines are whole messages; the retracted try is left out of them.
+
+So `readOutput` doesn't end the reply at a refusal from Claude Code's own
+model (`refused`, not `theirs`, not a schema reply): the next message goes
+on with the same reply, as a continuation does, and its words follow the
+ones streamed before. A refusal's `stop_details` (its category) is held
+(`heldIfRefused`) and told only if it stands: at a `result` with no API
+status, or at the end of the output (`refusal`). The client then gets a
+refusal with its stop_details, as before, so the gateway's `hw.refused`
+still decides about the next account (b01766d13). A `result` with a
+status after a refusal is that error (a retry that failed), not a
+refusal. A fallback that answers is a 200 with no refusal anywhere, so
+nothing moves to another account.
+
+The model that went on is told on the continuing `KUsage` as `Model` and
+`Served`: a stream has named its model at `message_start` and can't
+change it, but the try records the fallback model (`Served`, `Swapped`),
+and a reply told whole takes it as its model (`collector`). Words a
+retracted try streamed before its refusal stay in a stream; Claude Code
+shows the user the same. A reply that called the client's tools before
+the refusal ends there, as before.
+
+Claude Code's other fallback, on overload (529), needs
+`--fallback-model`, which the bridge doesn't pass, as Claude Code itself
+doesn't by default; that path is unchanged.
 
 ## The account's allowance on the reply (#1257)
 
@@ -1047,6 +1169,7 @@ go test -tags nogui ./internal/gateway/ -run '^TestClaudeLeanPrompt' -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeTUIChosen$' -count=1
 go test ./internal/claudetui/ -count=1
 go test -tags nogui ./internal/claudecode/ -count=1
+go test -tags nogui ./internal/claudecode/ -run TestKeepCurrent -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeCodeGivenTheBridgeForASOCKSProxy$' -count=1
 go test -tags nogui ./internal/provider/ -run '^TestClaudeSignInBridgesASOCKSProxy$' -count=1
 go test -tags nogui ./internal/netproxy/ -run '^TestEnvForBunWith' -count=1
@@ -1055,7 +1178,7 @@ go test -tags nogui ./internal/gateway/ -run 'TestClaudeRunsHeldToTheRoom|TestCl
 go test -tags nogui ./internal/cli/ -run '^TestClaudeCodeRuns' -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeRunsNamesEachProcess$' -count=1
 go test -tags nogui ./internal/settings/ -run '^TestClaudeRunsMostIsMachineLocal$' -count=1
-go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle|ClaudeSideQuestion|ClaudeNoRunSaysWhy|ClaudeToolResultsNoRunSaysWhy|ClaudePromptToldUserText|ClaudePromptKeepsInstructions|ClaudeToolResultsGoOnWithTheUsersWords|ClaudeToolResultsKeepInstructions|ToolResultKeepsUserTextSentMidTurn|ClaudeTextToolCalls|ClaudeTextCallsHoldsOnlyTheLine|ClaudePromptSaysPastCallsAreARecord' -count=1
+go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle|ClaudeSideQuestion|ClaudeInteractiveSideQuestion|ClaudeCutSession|ClaudeForkBranches|ClaudeToolChoiceNone|ClaudeAside|ClaudeNoRunSaysWhy|ClaudeToolResultsNoRunSaysWhy|ClaudePromptToldUserText|ClaudePromptKeepsInstructions|ClaudeToolResultsGoOnWithTheUsersWords|ClaudeToolResultsKeepInstructions|ToolResultKeepsUserTextSentMidTurn|ClaudeTextToolCalls|ClaudeTextCallsHoldsOnlyTheLine|ClaudePromptSaysPastCallsAreARecord' -count=1
 go test -tags nogui ./internal/gateway/ -run 'TestClaudeTaskNotification|TestWithTaskNotices|TestClaudeTurnToldTheTaskNotification' -count=1
 ```
 

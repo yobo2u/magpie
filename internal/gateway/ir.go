@@ -196,6 +196,10 @@ type Request struct {
 	envUnknown bool
 	// remoteCaller: the request came from another computer (not local).
 	remoteCaller bool
+	// branch, for the Claude bridge, is the session of the run whose
+	// reply made the calls this request answers after another request
+	// did: its run branches off it there (subscriptionBridge.branch).
+	branch *savedSession
 	// hourMarks has the cache marks magpie adds on Anthropic's Messages
 	// (anthropicBody) last an hour: a Responses client's (Codex's), whose
 	// turns are often more than five minutes apart and whose own vendor
@@ -206,6 +210,11 @@ type Request struct {
 	// draws asks the model for images beside text: a drawing asked on
 	// Gemini's API of a model not named for images (drawCodeAssist).
 	draws bool
+
+	// strictSaid has a Chat request's tools say strict as each is set,
+	// false included, as OpenCode's own do: Zen's free tier
+	// (zenFreeTools).
+	strictSaid bool
 
 	Model      string
 	System     string
@@ -685,6 +694,9 @@ func (c *collector) add(ev Event) {
 	case KUsage:
 		c.res.Usage.add(ev.Usage)
 		c.res.Usage.add(Usage{RequestID: ev.RequestID})
+		if ev.Model != "" {
+			c.res.Model = ev.Model // another model went on with the reply
+		}
 	case KError:
 		c.err, c.errStatus, c.errCode, c.errSaid = ev.Text, ev.Status, ev.Code, ev.Said
 	case KSearch:
