@@ -262,6 +262,14 @@ type Group struct {
 	// naming one is still served. A group in it keeps its own, as it
 	// says. Not while the group is switched off.
 	Unlists bool `json:"unlists,omitempty"`
+	// Accounts hold the group to some accounts or keys of the providers
+	// they name (duanckham on X: a personal and a company GPT account,
+	// each group's tasks on its own), as a gateway key's account list
+	// does (#905) and in its form, "<provider>/<account stable id or key
+	// fingerprint>": a request through the group is sent only on those
+	// of a provider it names, a provider it names none of on every
+	// account it has. Empty, every account of every member serves.
+	Accounts []string `json:"accounts,omitempty"`
 	// Auto is set on a group magpie found: one model served by several
 	// providers. It is derived, never stored.
 	Auto bool `json:"auto,omitempty"`
@@ -417,6 +425,7 @@ func cloneGroups(gs []Group) []Group {
 	for i, g := range gs {
 		g.Members, g.Match, g.Matched, g.Placed = slices.Clone(g.Members), slices.Clone(g.Match), slices.Clone(g.Matched), slices.Clone(g.Placed)
 		g.Off, g.Levels, g.Fast = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast)
+		g.Accounts = slices.Clone(g.Accounts)
 		g.Weights = maps.Clone(g.Weights)
 		if g.Rules != nil {
 			rs := make([]Rule, len(g.Rules))
@@ -534,6 +543,7 @@ func (g Group) own() Group {
 	g.Off = slices.Clone(g.Off)
 	g.Levels = slices.Clone(g.Levels)
 	g.Fast = slices.Clone(g.Fast)
+	g.Accounts = slices.Clone(g.Accounts)
 	g.Weights = maps.Clone(g.Weights)
 	g.Rules = slices.Clone(g.Rules)
 	for i, r := range g.Rules {
@@ -1445,6 +1455,13 @@ func SaveGroup(g Group) error {
 	if err := cleanWeights(entries, &g); err != nil {
 		return err
 	}
+	var was []string
+	if i := slices.IndexFunc(f.Groups, func(x Group) bool { return x.ID == g.ID }); i >= 0 {
+		was = f.Groups[i].Accounts
+	}
+	if g.Accounts, err = cleanGroupAccounts(g.Accounts, was); err != nil {
+		return err
+	}
 	if g.Routing != Manual && len(g.Members) > 0 && len(g.Off) == len(g.Members) {
 		return fmt.Errorf("every model in %s is switched off: switch one on, or it has nothing to send to", g.Name)
 	}
@@ -1520,6 +1537,44 @@ func SaveGroup(g Group) error {
 	}
 	f.Groups = append(f.Groups, g)
 	return store(f)
+}
+
+// cleanGroupAccounts is a group's account list as kept: each entry
+// "<provider>/<account>", resolved as a gateway key's are (ResolveAccount)
+// — an account by its stable id or the name it is shown by, a key by its
+// fingerprint — trimmed, each once, in the order given. One the group
+// held already and its provider has no more (an account signed out, a key
+// rotated) is kept as it was, matching nothing, so the group stays held
+// rather than let off to every account; a new one must be one magpie has.
+func cleanGroupAccounts(in, was []string) ([]string, error) {
+	var out []string
+	for _, a := range in {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		pid, ref, ok := strings.Cut(a, "/")
+		if !ok || pid == "" || ref == "" {
+			return nil, errors.New("a group's account is <provider>/<account> or <provider>/<key id>, like codex/me@example.com: " + a)
+		}
+		if len(a) > 300 {
+			return nil, errors.New("a group's account is at most 300 characters")
+		}
+		kept, err := ResolveAccount(pid, ref)
+		if err != nil {
+			if !slices.ContainsFunc(was, func(w string) bool { return strings.EqualFold(strings.TrimSpace(w), a) }) {
+				return nil, err
+			}
+			kept = a
+		}
+		if !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, kept) }) {
+			out = append(out, kept)
+		}
+	}
+	if len(out) > 500 {
+		return nil, errors.New("a group can list at most 500 accounts")
+	}
+	return out, nil
 }
 
 // groupsInGroup checks the groups a group has in it: each one magpie has,

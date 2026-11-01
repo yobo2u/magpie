@@ -665,6 +665,10 @@ button.rt-session { cursor: pointer; }
    desktop app's member row doesn't wrap (only body.web's does) */
 .rt-gedit .fbrow .rt-inner { flex: 0 1 auto; min-width: 0; }
 .rt-gedit .fbrow .rt-inner > span { overflow: hidden; text-overflow: ellipsis; }
+/* a group's account choice (Group.Accounts): a long account name ellipsizes */
+.rt-gedit .fbrow .rt-gacct { flex: 0 1 auto; min-width: 0; }
+.rt-gedit .fbrow .rt-gacct > span { overflow: hidden; text-overflow: ellipsis; }
+.rt-gedit > .rt-gacc[hidden] { display: none; }
 .rt-gadd {
   justify-self: start; display: inline-flex; align-items: center; gap: 6px;
   height: 28px; padding: 0 11px 0 9px; border-radius: 8px;

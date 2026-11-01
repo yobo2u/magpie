@@ -104,11 +104,19 @@ func ServerHub(name string, direct bool) (*Result, error) {
 // hubServerFor is the entry agent t is given for the hub, at the address
 // the agent reaches the gateway at, with a key when it reaches it from
 // another machine (a WSL distro under NAT, a computer on the LAN).
-func hubServerFor(t *Target) *Server {
+func (l *Library) hubServerFor(t *Target) *Server {
 	base := strings.TrimRight(gatewayOf(t), "/")
 	s := &Server{Name: HubEntry, Transport: "http", URL: base + gateway.HubMCPPath + url.PathEscape(t.Agent.ID)}
 	if k := agent.KeyAt(base); k != gateway.Token {
 		s.Headers = map[string]string{"Authorization": "Bearer " + k}
+	}
+	// Pi connects to a server it doesn't wait for (the hub's, reached by
+	// codemode) while the first prompt is already written, so only a
+	// description gives that prompt its line of what the hub serves
+	// (extensions/mcp, serverSummary): told the router's instructions
+	// alone, a Pi asked about a repository never saw DeepWiki (11-01)
+	if t.MCP != nil && t.MCP.Format == fmtPiNative {
+		s.about = gateway.HubLine(hubAbouts(l.hubServers(t.Agent.ID)))
 	}
 	return s
 }
@@ -151,7 +159,7 @@ func (l *Library) hubFor(t *Target, a *Applied, entries map[string]map[string]an
 	if !slices.ContainsFunc(l.MCP, func(s *Server) bool { return slices.Contains(s.Agents, id) && inHub(s, id) }) {
 		return nil, ""
 	}
-	hs := hubServerFor(t)
+	hs := l.hubServerFor(t)
 	if err := t.MCP.supports(hs); err != nil {
 		return nil, hubNoRemote
 	}
@@ -187,6 +195,11 @@ func hubServers(agentID string) []*Server {
 	if err != nil || !l.MCPHub {
 		return nil
 	}
+	return l.hubServers(agentID)
+}
+
+// hubServers are the servers the hub gives agentID from l, by name.
+func (l *Library) hubServers(agentID string) []*Server {
 	var out []*Server
 	for _, s := range l.MCP {
 		if (agentID == "" || slices.Contains(s.Agents, agentID)) && inHub(s, agentID) {
@@ -194,6 +207,17 @@ func hubServers(agentID string) []*Server {
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (theHub) Servers(agentID string) []gateway.HubServer { return hubAbouts(hubServers(agentID)) }
+
+// hubAbouts are ss as an agent is told of them.
+func hubAbouts(ss []*Server) []gateway.HubServer {
+	out := make([]gateway.HubServer, len(ss))
+	for i, s := range ss {
+		out[i] = gateway.HubServer{Name: s.Name, About: serverAbout(s)}
+	}
 	return out
 }
 

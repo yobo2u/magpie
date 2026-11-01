@@ -24,12 +24,92 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-// Prompt is Codex's generic system prompt (Apache-2.0, openai/codex,
-// core/gpt-5.2-codex_prompt.md). Third-party models need one because the
-// bundled catalog only carries prompts for OpenAI models.
+// Prompt is what Codex itself sends as the instructions of a model its
+// catalog doesn't list (Apache-2.0, openai/codex rust-v0.166.0,
+// models-manager/prompt.md: BASE_INSTRUCTIONS, model_info_from_slug). A
+// model_catalog_json entry has to carry its own (Codex fails the whole
+// catalog on one with neither base_instructions nor
+// model_messages.instructions_template), so a model no official entry
+// matches carries this one, as official Codex would send for it. Until
+// 11-01 every third-party model got core/gpt-5.2-codex_prompt.md, a GPT-5.2
+// prompt Codex no longer sends for any model (#3759, #4008, #4783).
 //
 //go:embed codex_prompt.md
 var Prompt string
+
+// bundled is the instructions of each model in Codex's own bundled catalog
+// (rust-v0.166.0, models-manager/models.json: model_messages'
+// instructions_template), by slug, word for word; TestBundledIsCodexOwn
+// checks it against that file in testdata.
+//
+//go:embed codex_instructions.json
+var bundledJSON []byte
+
+var bundled = func() map[string]string {
+	var b struct {
+		Instructions map[string]string `json:"instructions"`
+	}
+	if err := json.Unmarshal(bundledJSON, &b); err != nil {
+		panic(err)
+	}
+	return b.Instructions
+}()
+
+// longestPrefix is the slug of slugs Codex takes a model's entry from:
+// the longest one the model's id starts with (codex-rs models-manager
+// find_model_by_longest_prefix), so a dated snapshot or a -mini of a
+// model takes that model's. "" when none.
+func longestPrefix(id string, slugs func(func(string) bool)) string {
+	best := ""
+	for s := range slugs {
+		if s != "" && strings.HasPrefix(id, s) && len(s) > len(best) {
+			best = s
+		}
+	}
+	return best
+}
+
+// officialFor is the instructions official Codex sends for the model a
+// magpie model serves, and the model_messages they come with, never a
+// word of magpie's. The model is the id's own model (mycpa/gpt-6-astra,
+// openai/gpt-6-astra on a relay, a found auto/gpt-6.1-sol), matched as
+// Codex matches a slug (longestPrefix) against Codex's own entries: those
+// of the ChatGPT account it last listed (models_cache.json, own), which
+// are this Codex version's and carry model_messages too, else its bundled
+// catalog's (bundled, instructions alone, whose model_messages may not be
+// the shape an older Codex reads). A routing group may hand a turn to any
+// model, and a model no entry matches is unknown to Codex: both get
+// Prompt, Codex's for an unknown model.
+func officialFor(own map[string]map[string]any, id string) (string, map[string]any) {
+	if strings.HasPrefix(id, "group/") {
+		return Prompt, nil
+	}
+	slug := strings.ToLower(id[strings.LastIndex(id, "/")+1:])
+	if s := longestPrefix(slug, maps.Keys(own)); s != "" {
+		e := own[s]
+		msgs, _ := e["model_messages"].(map[string]any)
+		text, _ := e["base_instructions"].(string)
+		if text == "" {
+			text, _ = msgs["instructions_template"].(string)
+		}
+		if text != "" {
+			return text, msgs
+		}
+	}
+	if s := longestPrefix(slug, maps.Keys(bundled)); s != "" {
+		return bundled[s], nil
+	}
+	return Prompt, nil
+}
+
+// Official is the instructions official Codex sends for the OpenAI model
+// slug when no list of the account's carries them: its bundled catalog's
+// entry for it (matched as Codex matches a slug), else Codex's prompt for
+// an unknown model.
+func Official(slug string) string {
+	text, _ := officialFor(nil, slug)
+	return text
+}
 
 // DefaultEffort picks the middle of the road: "medium" or "high" when
 // offered, else whatever the list starts with.
@@ -131,19 +211,23 @@ type tier struct {
 	Description string `json:"description"`
 }
 type model struct {
-	Slug          string  `json:"slug"`
-	DisplayName   string  `json:"display_name"`
-	Description   string  `json:"description"`
-	Instructions  string  `json:"base_instructions"`
-	DefaultEffort *string `json:"default_reasoning_level"`
-	Efforts       []level `json:"supported_reasoning_levels"`
-	Shell         string  `json:"shell_type"`
-	Visibility    string  `json:"visibility"`
-	InAPI         bool    `json:"supported_in_api"`
-	Priority      int     `json:"priority"`
-	Verbosity     bool    `json:"support_verbosity"`
-	DefVerbosity  *string `json:"default_verbosity"`
-	ApplyPatch    string  `json:"apply_patch_tool_type"`
+	Slug         string `json:"slug"`
+	DisplayName  string `json:"display_name"`
+	Description  string `json:"description"`
+	Instructions string `json:"base_instructions"`
+	// the model_messages of the official entry Instructions came from,
+	// when that is one Codex itself was handed (officialFor): the rest of
+	// what official Codex sends that model, as it sends it
+	Messages      map[string]any `json:"model_messages,omitempty"`
+	DefaultEffort *string        `json:"default_reasoning_level"`
+	Efforts       []level        `json:"supported_reasoning_levels"`
+	Shell         string         `json:"shell_type"`
+	Visibility    string         `json:"visibility"`
+	InAPI         bool           `json:"supported_in_api"`
+	Priority      int            `json:"priority"`
+	Verbosity     bool           `json:"support_verbosity"`
+	DefVerbosity  *string        `json:"default_verbosity"`
+	ApplyPatch    string         `json:"apply_patch_tool_type"`
 	Truncation    struct {
 		Mode  string `json:"mode"`
 		Limit int    `json:"limit"`
@@ -259,9 +343,10 @@ func entriesAt(ms []catalog.Model, after int, effort string) []any {
 			entries = append(entries, e)
 			continue
 		}
+		text, msgs := officialFor(own, m.ID)
 		e := model{
 			Slug: m.ID, DisplayName: shownName(m), Description: m.Name + " via magpie",
-			Instructions: Prompt, Efforts: []level{},
+			Instructions: text, Messages: msgs, Efforts: []level{},
 			Shell: "unified_exec", Visibility: "list", InAPI: true, Priority: after + i + 1,
 			ApplyPatch: "freeform", Tools: []string{}, Modalities: []string{"text"},
 			Tiers: []tier{}, SearchTool: true, Parallel: true,
@@ -918,7 +1003,14 @@ func ownEntry(raw map[string]any, id, name string, priority int) map[string]any 
 	delete(e, "upgrade")
 	e["slug"], e["display_name"], e["priority"], e["visibility"] = id, name, priority, "list"
 	if s, _ := e["base_instructions"].(string); s == "" {
-		e["base_instructions"] = Prompt
+		// an entry with model_messages alone carries its instructions
+		// there; one with neither, those official Codex sends its model
+		msgs, _ := e["model_messages"].(map[string]any)
+		s, _ = msgs["instructions_template"].(string)
+		if slug, _ := raw["slug"].(string); s == "" {
+			s = Official(slug)
+		}
+		e["base_instructions"] = s
 	}
 	return e
 }

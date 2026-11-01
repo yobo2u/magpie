@@ -90,6 +90,7 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 	g = g.Live()
+	r = heldByGroup(r, g) // held to the group's accounts, if it is
 	keyWho, keyHeld := keyHolds(r)
 	accWho, accHeld := accountHolds(r)
 	// a gateway key held to some models (#882) names the group, or the
@@ -272,6 +273,9 @@ func (s *Server) askDecisionGroup(wait time.Duration, model string, intents []st
 	g = g.Live()
 	ms, _ = provider.PausedOut(g, ms, RouterAgent, "", ruleClock())
 	cs, _, _ := s.decideTries(g, ms)
+	// held to the group's own accounts, if it is: no request carries a
+	// caller here to hold (heldByGroup)
+	cs = slices.DeleteFunc(cs, func(c candidate) bool { return groupHeld(c, []provider.Group{g}) != "" })
 	cs = probeOne(cs) // of those resting, only the one back soonest (#1799)
 	if len(cs) == 0 {
 		return verdict{}, true, fmt.Errorf("no decision model of the group %s can be asked now", g.Name)

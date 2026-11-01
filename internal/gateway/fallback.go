@@ -564,7 +564,7 @@ func planFallbackGroup(g provider.Group, ms []provider.Member, from provider.Pro
 	at, leftAt, unlistedAt := len(pl.order), len(pl.left), len(pl.unlistedW)
 	var asides []candidate
 	var wAsides []Weighed
-	out := planLevel(g, ms, 0, from, pl, &asides, &wAsides)
+	out := planLevel(g, ms, 0, from, pl, &asides, &wAsides, []provider.Group{g})
 	if sinks(g.Sink, g.Routing) {
 		var order []Weighed
 		out, order = sinkPlanned(out, pl.order[at:])
@@ -599,7 +599,7 @@ func (s *Server) planGroup(g provider.Group, ms []provider.Member, from provider
 	var pl planned
 	var asides []candidate
 	var wAsides []Weighed
-	out := planLevel(g, ms, 0, from, &pl, &asides, &wAsides)
+	out := planLevel(g, ms, 0, from, &pl, &asides, &wAsides, nil)
 	if sinks(g.Sink, g.Routing) {
 		out, pl.order = sinkPlanned(out, pl.order)
 	}
@@ -652,9 +652,27 @@ func innerPatience(m provider.Member) int {
 // planLevel orders the models ms of g, a group depth groups down from the
 // one asked for, adding to pl's order as it goes: those set aside and
 // those unlisted it gathers for planGroup to put last.
-func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.Protocol, pl *planned, asides *[]candidate, wAsides *[]Weighed) []candidate {
+func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.Protocol, pl *planned, asides *[]candidate, wAsides *[]Weighed, hold []provider.Group) []candidate {
 	keys := func(m provider.Member) []candidate {
 		cs, aside, left, barred := perKeyBarred(m.Provider, m.Model, from)
+		// a group the member is reached through that is held to some
+		// accounts (Group.Accounts) holds it to them: one it leaves out
+		// is said on the plan's left, held, as a gateway key's are
+		if by := append(slices.Clip(hold), m.Via...); slices.ContainsFunc(by, func(h provider.Group) bool { return len(h.Accounts) > 0 }) {
+			out := func(l []candidate) []candidate {
+				return slices.DeleteFunc(l, func(c candidate) bool {
+					name := groupHeld(c, by)
+					if name == "" {
+						return false
+					}
+					w := weighed(c, m.Provider, weighing{}, false, from)
+					w.Held, w.HeldBy, w.Via = true, name, m.Groups()
+					pl.left = append(pl.left, w)
+					return true
+				})
+			}
+			cs, aside, left, barred = out(cs), out(aside), out(left), out(barred)
+		}
 		// the effort the member is fixed at goes with each of its keys:
 		// the same model at another effort is another member's
 		for _, l := range [][]candidate{cs, aside, left, barred} {
@@ -712,7 +730,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 					j++
 				}
 				var sub planned
-				cs := planLevel(m.Via[depth], ms[i:j], depth+1, from, &sub, asides, wAsides)
+				cs := planLevel(m.Via[depth], ms[i:j], depth+1, from, &sub, asides, wAsides, hold)
 				cs, sub.order = sinkOwn(m.Via[depth], cs, sub.order)
 				pl.left = append(pl.left, sub.left...)
 				pl.capped = append(pl.capped, sub.capped...)
@@ -804,7 +822,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 				j++
 			}
 			at := len(pl.order)
-			cs := planLevel(m.Via[depth], ms[i:j], depth+1, from, pl, asides, wAsides)
+			cs := planLevel(m.Via[depth], ms[i:j], depth+1, from, pl, asides, wAsides, hold)
 			var order []Weighed
 			cs, order = sinkOwn(m.Via[depth], cs, pl.order[at:])
 			pl.order = append(pl.order[:at], order...)
@@ -1126,12 +1144,14 @@ func restLast(out []candidate, pl planned) ([]candidate, planned) {
 // busyOf is the load c's plugin last reported for its model, and whether
 // that is over the percent over (settings.BusyLoad; 0 is off). A model
 // with no load reported, or none within plugin.LoadFresh, isn't busy:
-// unknown is never taken for idle nor for busy.
+// unknown is never taken for idle nor for busy. The plugin reports it by
+// its own id of the model, so a model the user lists by another is looked
+// up by that (axelburks on Discord).
 func busyOf(c candidate, over int, now time.Time) (float64, bool) {
 	if over <= 0 {
 		return 0, false
 	}
-	load, _, ok := plugin.ModelLoad(c.p.PluginProvider(), c.model, now)
+	load, _, ok := plugin.ModelLoad(c.p.PluginProvider(), c.p.OwnModelID(c.model), now)
 	return load, ok && load > float64(over)
 }
 
@@ -1516,12 +1536,18 @@ var unsaidWords = regexp.MustCompile(`(?i)(^|"|\\"|: )invalid request error trac
 // member has tried every API it has a URL for (forwardTranslated), and
 // another member, on another API or another vendor, may serve it (#2670:
 // a relay with a Chat URL alone, refusing tools with reasoning there).
+// A relay's own word that the provider behind it turned the request away
+// (upstreamFailedWords: "sub2api: Upstream request failed", type
+// upstream_error) is the relay's failure, not this seat's and not the
+// request's — the words the Codex compaction already reads (#866, #1511) —
+// and another member may answer (#4632: the group's second member never
+// ran, and every turn died on the first seat).
 // One that also says the account is out of quota or credit (quotaWords,
 // creditWords: "请充值") is that, and rests it (#4095).
 func shapeRefused(status int, body []byte) bool {
 	// the words are matched decoded, too (#1669)
 	body = wordsOf(body)
-	return (status == 400 || status == 422) && (shapeWords.Match(body) || unsaidWords.Match(body) || customToolRefusal.Match(body) || wrongEndpoint(status, body)) &&
+	return (status == 400 || status == 422) && (shapeWords.Match(body) || unsaidWords.Match(body) || customToolRefusal.Match(body) || wrongEndpoint(status, body) || upstreamFailedWords.Match(body)) &&
 		!quotaWords.Match(body) && !creditWords.Match(body) && !unservedWords.Match(body) && !refusedWords.Match(body)
 }
 
@@ -1642,7 +1668,10 @@ func retryable(status int, body []byte) bool {
 		// mycf_711)
 		return true
 	case status == 400, status == 422:
-		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || unsaidWords.Match(body) || regionWords.Match(body) || wrongEndpoint(status, body)
+		return quotaWords.Match(body) || unservedWords.Match(body) || refusedWords.Match(body) || shapeWords.Match(body) || unsaidWords.Match(body) || regionWords.Match(body) || wrongEndpoint(status, body) ||
+			// a relay's own word that the provider behind it turned the
+			// request away (#4632): another member may answer
+			upstreamFailedWords.Match(body)
 	}
 	return false
 }

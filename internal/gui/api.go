@@ -1380,11 +1380,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			onDock(in)
 		}
 		// the cards the menu bar shows, any of them (TrayUsage is only the first),
-		// how often, with their logos or not, beside the bird or not, and
+		// how often, with their logos or not, beside the bird or not, as
+		// Windows' icon or not, and
 		// with their Pace numbers or not, with magpie's totals' cost or not, and
 		// which of each subscription's windows
 		if (!slices.Equal(settings.Load().TrayUsages, cur.TrayUsages) || in.TrayUsageEvery != cur.TrayUsageEvery ||
-			in.TrayNoLogos != cur.TrayNoLogos || in.TrayNoBird != cur.TrayNoBird || in.TrayPace != cur.TrayPace ||
+			in.TrayNoLogos != cur.TrayNoLogos || in.TrayNoBird != cur.TrayNoBird || in.TrayNoNumber != cur.TrayNoNumber || in.TrayPace != cur.TrayPace ||
 			in.TrayNoCost != cur.TrayNoCost || !maps.EqualFunc(in.TrayWindows, cur.TrayWindows, slices.Equal)) && onTrayUsage != nil {
 			onTrayUsage()
 		}
@@ -1875,9 +1876,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	// whether only after everything else (left as it is when not sent)
 	mux.HandleFunc("POST /api/settings/codex-credits", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
-			User string
-			On   bool
-			Last *bool
+			User  string
+			On    bool
+			Last  *bool
+			First *bool
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
@@ -1887,11 +1889,18 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, fmt.Errorf("which Codex account?"))
 			return
 		}
+		// on alone keeps first or last as it was; either said sets it,
+		// and one account has one of them
 		mode := provider.CreditsOff
 		if in.On {
 			mode = provider.CreditsOn
-			if (in.Last == nil && provider.CodexCreditsLast(in.User)) || (in.Last != nil && *in.Last) {
+			switch was := provider.CodexCreditsMode(in.User); {
+			case in.Last != nil && *in.Last:
 				mode = provider.CreditsLast
+			case in.First != nil && *in.First:
+				mode = provider.CreditsFirst
+			case in.Last == nil && in.First == nil && (was == provider.CreditsLast || was == provider.CreditsFirst):
+				mode = was
 			}
 		}
 		if err := provider.SetCodexCreditsMode(in.User, mode); err != nil {
@@ -2511,6 +2520,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
+	// the agents a quit would cut off, for its question (quitask.go)
+	mux.HandleFunc("GET /api/quit", func(rw http.ResponseWriter, r *http.Request) {
+		writeJSON(rw, map[string]any{"agents": quitAgents()})
+	})
 	mux.HandleFunc("POST /api/window/{action}", func(rw http.ResponseWriter, r *http.Request) {
 		switch r.PathValue("action") {
 		case "hide":
@@ -2518,7 +2531,13 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		case "main":
 			w.ShowMain(mainView(r.URL.Query()))
 		case "quit":
-			w.Quit()
+			// the user's Quit asks first while agents are connected
+			// (quitask.go); the question's own Quit is now=1
+			if a, ok := w.(quitAsker); ok && r.URL.Query().Get("now") == "" {
+				go a.AskQuit()
+			} else {
+				w.Quit()
+			}
 		case "fit":
 			if h, g, ok := parseFit(r.URL.Query()); ok {
 				w.FitPanel(h, g)

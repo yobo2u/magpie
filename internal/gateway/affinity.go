@@ -641,7 +641,7 @@ func affine(scope, mode string, rotate, spread, inOrder bool, in http.Header, fr
 		// its cache as before; within a turn it stays, and Stays:
 		// Session or Strict, the user's own, keep it where it is
 		a.Why = "back"
-	case at > 0 && pl.order[at].Known && pl.order[at].Used >= provider.SpentShareOf(cs[at].p.Routing):
+	case at > 0 && pl.order[at].Known && pl.order[at].Used >= provider.SpentShareOf(cs[at].p.Routing) && !pl.order[at].CreditsFirst:
 		// all but used up, and put behind another: first still — the
 		// one key or account it has (#1016), or every one used up — it
 		// doesn't move
@@ -761,7 +761,7 @@ func standsInFor(c candidate, cs []candidate, order []Weighed) bool {
 		}
 		for _, w := range order {
 			if w.ID == o.rest && w.Model == o.model && w.Fixed == o.effort {
-				if w.Rest != nil || w.Known && w.Used >= provider.SpentShareOf(o.p.Routing) {
+				if w.Rest != nil || w.Known && w.Used >= provider.SpentShareOf(o.p.Routing) && !w.CreditsFirst {
 					return true
 				}
 				break
@@ -852,10 +852,10 @@ func leastHeld(scope, key string, cs []candidate, pl planned, ready bool) ([]can
 // readyForNew says whether order[i], behind order[0], is one routing would
 // put a new conversation on: not resting, nor a key for another protocol,
 // nor a fallback while the provider's own model leads, nor used past
-// lowShare.
+// lowShare unless it spends its credits first (Weighed.CreditsFirst).
 func readyForNew(order []Weighed, i int) bool {
 	w := order[i]
-	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare) && !lastBehind(order, i) && !busyBehind(order, i)
+	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare && !w.CreditsFirst) && !lastBehind(order, i) && !busyBehind(order, i)
 }
 
 // standsIn says whether order[i] is a provider's fallback while one of the

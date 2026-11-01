@@ -794,6 +794,9 @@ func Upgrade(ctx context.Context, name string) error {
 	for _, e := range Load().Plugins {
 		if (Name(e.Spec) == name || e.Spec == name) && IsGit(e.Spec) {
 			err := reinstall(ctx, e.Spec)
+			if err == nil {
+				settleWaiting()
+			}
 			Restart()
 			return err
 		}

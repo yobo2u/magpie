@@ -33,7 +33,7 @@ var Keys = []string{
 	"tray", "dock", "dockWindow", "dockNever", "lightweight", "keepAwake", "keepAwakeDisplay",
 	"noWSLAgents", "sessionTerminal", "signInLinkOnly",
 	// the menu bar's allowance cards
-	"trayUsages", "trayUsage", "trayUsageEvery", "trayNoLogos", "trayNoBird", "trayPace", "trayNoCost", "trayWindows",
+	"trayUsages", "trayUsage", "trayUsageEvery", "trayNoLogos", "trayNoBird", "trayNoNumber", "trayPace", "trayNoCost", "trayWindows",
 	// usage and alerts
 	"currency", "chineseUnits", "usageAlert", "balanceAlert", "resetReminder", "turnDoneAlert", "maskAlert",
 	// network
@@ -314,7 +314,8 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.CodexResetLead = cur.CodexResetLead         // and how early before one expires (codex-reset-lead)
 	// and which of them spend their credits, set there too
 	in.CodexNoCredits = cur.CodexNoCredits
-	in.CodexCreditsLast = cur.CodexCreditsLast // and which only after everything else
+	in.CodexCreditsLast = cur.CodexCreditsLast   // and which only after everything else
+	in.CodexCreditsFirst = cur.CodexCreditsFirst // and which before another account
 	// and each Codex account's own daily warm-up (codex-warm-at)
 	in.CodexWarmAtOf = cur.CodexWarmAtOf
 	// and the text size, which the keyboard changes too (text-size)

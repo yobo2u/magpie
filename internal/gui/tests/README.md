@@ -12,6 +12,13 @@ checks that request hooks have no provider badge. `MAGPIE_GATEWAY_ASSETS` select
 an older asset directory for a failing regression comparison; user settings and
 live gateways are never accessed.
 
+`plugin-provider-options.test.cjs` checks the same JSON options editor on a
+provider plugin's Installed row (plugins#592: Devin's keep-alive interval and
+pings): shown when its package suggests options, starting from them; absent
+for a plugin with none and one switched off; Save and a confirmed Clear post
+through the real page, in all five languages, at 980px and 420px, on Chromium
+and WebKit. The API is faked.
+
 `settings-proxy-auth.test.cjs` checks a proxy's optional username and
 password in Settings, in fields of their own for SOCKS5/SOCKS5h, HTTP,
 HTTPS and bare host:port proxies alike, using the real page with isolated

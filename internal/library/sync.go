@@ -248,7 +248,7 @@ func (l *Library) syncMCP(t *Target, b *backups, res *Result) {
 		hub = nil
 		if l.MCPHub && slices.Contains(a.MCP, HubEntry) && l.server(HubEntry) == nil &&
 			slices.ContainsFunc(l.MCP, func(s *Server) bool { return slices.Contains(s.Agents, id) && inHub(s, id) }) {
-			hub = hubServerFor(t)
+			hub = l.hubServerFor(t)
 		}
 	}
 	hubbed := func(s *Server) bool { return hub != nil && inHub(s, id) }

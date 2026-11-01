@@ -196,10 +196,25 @@ type Request struct {
 	envUnknown bool
 	// remoteCaller: the request came from another computer (not local).
 	remoteCaller bool
+	// instructionsKept is set on a request whose read kept the client's
+	// instruction roles in its messages (readResponsesFor, #2532): a
+	// Responses client's own system and developer items, which a relay
+	// may be checking them by. A translated request's system message
+	// (Claude Code's environment, envInTurns) has no such standing:
+	// buildResponses folds it into the instructions, as the Chat and
+	// Anthropic builds do (#4632).
+	instructionsKept bool
 	// branch, for the Claude bridge, is the session of the run whose
 	// reply made the calls this request answers after another request
 	// did: its run branches off it there (subscriptionBridge.branch).
 	branch *savedSession
+	// told, for the Claude bridge's interactive mode, is a run's being
+	// told the conversation whole, not given it as a transcript
+	// (replaySession), as after Claude Code couldn't go on from one
+	told bool
+	// replayed: the run started was given the conversation as a
+	// transcript (replaySession)
+	replayed bool
 	// hourMarks has the cache marks magpie adds on Anthropic's Messages
 	// (anthropicBody) last an hour: a Responses client's (Codex's), whose
 	// turns are often more than five minutes apart and whose own vendor

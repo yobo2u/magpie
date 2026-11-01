@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,6 +49,10 @@ type groupsJSON struct {
 	// Imported: import's answer, the group added and what of the text
 	// this magpie has none of (provider.ImportGroup)
 	Imported *provider.Imported `json:"imported,omitempty"`
+	// Accounts: by provider id, the accounts and keys a group may be held
+	// to (Group.Accounts), as a gateway key's list has them (#905): each
+	// provider with more than one, or one a group names already
+	Accounts map[string][]keyModelJSON `json:"accounts"`
 }
 
 type skippableJSON struct {
@@ -245,6 +250,32 @@ type clockJSON struct {
 	Offset int    `json:"offset"`
 }
 
+// groupAccounts is groupsJSON's Accounts: the accounts and keys of each
+// provider with more than one, which a group may be held to some of, and
+// of each one a group in gs names already, so its choice can be undone.
+func groupAccounts(gs []provider.Group) map[string][]keyModelJSON {
+	named := map[string]bool{}
+	for _, g := range gs {
+		for _, a := range g.Accounts {
+			if pid, _, ok := strings.Cut(a, "/"); ok {
+				named[strings.ToLower(pid)] = true
+			}
+		}
+	}
+	out := map[string][]keyModelJSON{}
+	for _, p := range provider.All() {
+		refs := p.AccountIDs()
+		if len(refs) < 2 && !named[strings.ToLower(p.ID)] {
+			continue
+		}
+		name := cmp.Or(p.Name, p.ID)
+		for _, a := range refs {
+			out[p.ID] = append(out[p.ID], keyModelJSON{ID: p.ID + "/" + a.ID, Name: a.Shown(p), Provider: p.ID, ProviderName: name, Account: !a.Key, Key: a.Key, Plan: a.Plan})
+		}
+	}
+	return out
+}
+
 func groupsState() groupsJSON {
 	_, offset := time.Now().Zone()
 	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
@@ -267,6 +298,7 @@ func groupsState() groupsJSON {
 	for _, e := range provider.OfferedDeciders(func(id string) bool { return named[id] }) {
 		out.Deciders = append(out.Deciders, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Sub: e.Provider.Account != nil})
 	}
+	out.Accounts = groupAccounts(all)
 	served := provider.Served()
 	for _, e := range served {
 		if e.Group == "" {

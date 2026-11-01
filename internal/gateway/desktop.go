@@ -425,20 +425,7 @@ func desktopNames(entries []provider.Entry) []string {
 // or without Claude Code's "[1m]"; or Claude Science's,
 // claude-magpie-<number>.
 func aliased(id string) (string, bool) {
-	id = strings.TrimSuffix(id, "[1m]")
-	var number string
-	if n, ok := strings.CutPrefix(id, desktopAlias); ok {
-		number = n
-	} else if n, ok := strings.CutPrefix(id, desktopEffortAlias); ok {
-		number = n
-	} else if n, ok := strings.CutPrefix(id, scienceAlias); ok {
-		// Claude Science's (science.go)
-		number = n
-	} else if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
-		if i := strings.Index(rest, desktopClaudeInfix); i > 0 {
-			number = rest[:i]
-		}
-	}
+	number := aliasDigits(id)
 	if len(number) != 10 {
 		return "", false
 	}
@@ -451,6 +438,38 @@ func aliased(id string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// magpieAliasAsked says asked is one of magpie's own alias ids for Claude
+// Desktop or Claude Science (aliased's forms, with or without Claude
+// Code's "[1m]"): anthropic/magpie-<number>, mythos-magpie-<number>,
+// magpie-<number>.anthropic.<Claude model> or claude-magpie-<number>, the
+// number one of magpie's own (aliasNumber's ten digits). Whether the
+// catalog still lists a model under it is not asked: a session saved on an
+// old alias is served all the same, and a reply to it must not name the
+// alias either (#4667).
+func magpieAliasAsked(id string) bool {
+	n := aliasDigits(id)
+	return len(n) == 10 && strings.IndexFunc(n, func(r rune) bool { return r < '0' || r > '9' }) < 0
+}
+
+// aliasDigits is the number in one of magpie's alias ids (aliased's forms,
+// with or without Claude Code's "[1m]"), "" when id has none of the forms.
+func aliasDigits(id string) string {
+	id = strings.TrimSuffix(id, "[1m]")
+	if n, ok := strings.CutPrefix(id, desktopAlias); ok {
+		return n
+	} else if n, ok := strings.CutPrefix(id, desktopEffortAlias); ok {
+		return n
+	} else if n, ok := strings.CutPrefix(id, scienceAlias); ok {
+		// Claude Science's (science.go)
+		return n
+	} else if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
+		if i := strings.Index(rest, desktopClaudeInfix); i > 0 {
+			return rest[:i]
+		}
+	}
+	return ""
 }
 
 // isClaudeDesktop is a request from Claude Desktop's own gateway client: its

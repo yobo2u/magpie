@@ -528,6 +528,9 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 			return
 		}
 		g, ms, isGroup := drawingGroup(d.Model, p, model)
+		if isGroup {
+			r = heldByGroup(r, g) // held to the group's accounts, if it is
+		}
 		keyWho, keyHeld := keyHolds(r)
 		if keyHeld && named && (isGroup && !groupAllowed(keyWho, g, ms) || !isGroup && !modelAllowed(keyWho, p, model)) {
 			fail(403, keyModelError(keyWho, d.Model))

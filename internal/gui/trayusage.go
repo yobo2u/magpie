@@ -145,12 +145,83 @@ func trayWindowKind(w provider.QuotaWindow) string {
 	return "name:" + strings.ToLower(strings.TrimSpace(w.Name))
 }
 
-// trayShownKinds are the kinds of ws a card's rows show, as chosen in
-// Settings (settings.TrayWindows): nil, every window, when none was chosen
-// or none chosen is among ws now, so a card is never left empty.
-func trayShownKinds(ws []provider.QuotaWindow, kinds []string) []string {
-	for _, w := range ws {
-		if slices.Contains(kinds, trayWindowKind(w)) {
+// trayChoice is a window Settings can pick for a card's rows alone, by
+// its kind, and whether the card shows it only when picked (extra).
+type trayChoice struct {
+	w     provider.QuotaWindow
+	kind  string
+	extra bool
+}
+
+// trayChoices are every window of a card that the menu bar can say as a
+// percent, for Settings to pick among (settings.TrayWindows): those it
+// shows unpicked (trayWindows) first, by how long they run, then the rest
+// the Usage card has (trayCounted), which it shows only when picked: money
+// aside, one model's window, Cursor's Grok Bot (CrazyJal on X, which the
+// picker never offered for being aside). Every choice has a kind of its
+// own. One shown unpicked keeps its span's kind ("7d") where it is the
+// only one of that span; another of that span, and every extra one, is
+// named by its model or name as well ("7d:grok bot"), so a vendor adding a
+// window never moves a pick onto another.
+func trayChoices(q provider.SubscriptionQuota) []trayChoice {
+	base := trayWindows(q)
+	var cs []trayChoice
+	n := map[string]int{}
+	for _, w := range base {
+		n[trayWindowKind(w)]++
+	}
+	for _, w := range base {
+		k := trayWindowKind(w)
+		if n[k] > 1 {
+			k = trayNamedKind(k, w)
+		}
+		cs = append(cs, trayChoice{w: w, kind: k})
+	}
+	for _, w := range q.Windows {
+		if !trayCounted(w) || slices.ContainsFunc(base, func(x provider.QuotaWindow) bool { return sameTrayWindow(x, w) }) {
+			continue
+		}
+		cs = append(cs, trayChoice{w: w, kind: trayNamedKind(trayWindowKind(w), w), extra: true})
+	}
+	// a kind twice still (two windows of one name): the later is left out
+	// rather than picked along with the first
+	seen := map[string]bool{}
+	return slices.DeleteFunc(cs, func(c trayChoice) bool {
+		dup := seen[c.kind]
+		seen[c.kind] = true
+		return dup
+	})
+}
+
+// trayNamedKind is kind with w's model, or else its pool and name, after
+// it: "7d:grok bot", "7d:opus"; a kind already of the name alone stays so.
+func trayNamedKind(kind string, w provider.QuotaWindow) string {
+	if strings.HasPrefix(kind, "name:") {
+		return kind
+	}
+	who := w.Model
+	if who == "" {
+		who = strings.TrimSpace(w.Name)
+		if w.Pool != "" && !strings.HasPrefix(who, w.Pool+" · ") { // trayShared named it so already
+			who = w.Pool + " · " + who
+		}
+	}
+	return kind + ":" + strings.ToLower(strings.TrimSpace(who))
+}
+
+// sameTrayWindow is whether a and b are one window, though trayWindows
+// may have renamed it (with its pool, its family).
+func sameTrayWindow(a, b provider.QuotaWindow) bool {
+	return a.Model == b.Model && a.Pool == b.Pool && a.Span == b.Span && a.Used == b.Used && a.Aside == b.Aside && a.Family == b.Family
+}
+
+// trayShownKinds are the kinds among cs a card's rows show, as chosen in
+// Settings (settings.TrayWindows): nil, the windows shown unpicked, when
+// none was chosen or none chosen is among cs now, so a card is never left
+// empty.
+func trayShownKinds(cs []trayChoice, kinds []string) []string {
+	for _, c := range cs {
+		if slices.Contains(kinds, c.kind) {
 			return kinds
 		}
 	}
@@ -165,12 +236,12 @@ func withTrayKinds(qs []provider.SubscriptionQuota) []provider.SubscriptionQuota
 	for i, q := range qs {
 		if len(q.Windows) > 0 {
 			ws := slices.Clone(q.Windows)
-			for _, w := range trayWindows(q) {
+			for _, c := range trayChoices(q) {
 				// the window as the menu bar has it, named with its pool
 				if j := slices.IndexFunc(ws, func(x provider.QuotaWindow) bool {
-					return x.TrayKind == "" && x.Model == w.Model && x.Pool == w.Pool && x.Span == w.Span && x.Used == w.Used && x.Aside == w.Aside && x.Family == w.Family
+					return x.TrayKind == "" && sameTrayWindow(x, c.w)
 				}); j >= 0 {
-					ws[j].TrayKind = trayWindowKind(w)
+					ws[j].TrayKind, ws[j].TrayExtra = c.kind, c.extra
 				}
 			}
 			q.Windows = ws
@@ -210,9 +281,14 @@ func trayCardText(q provider.SubscriptionQuota, now time.Time, left, pace bool, 
 	if q.ReadAt != nil && !q.ReadAt.After(now) {
 		readAt = *q.ReadAt
 	}
-	kinds = trayShownKinds(ws, kinds)
+	cs := trayChoices(q)
+	kinds = trayShownKinds(cs, kinds)
 	var short, long []string
-	for _, w := range ws {
+	for _, c := range cs {
+		w, picked := c.w, kinds != nil && slices.Contains(kinds, c.kind)
+		if c.extra && !picked {
+			continue // shown nowhere unless picked
+		}
 		used := math.Max(0, math.Min(100, w.Used))
 		n := int(math.Round(used))
 		word := "used"
@@ -226,7 +302,7 @@ func trayCardText(q provider.SubscriptionQuota, now time.Time, left, pace bool, 
 			row = pct + " " + trayPace(p, left)
 			paceNote = " · pace " + trayPace(p, left)
 		}
-		if kinds == nil || slices.Contains(kinds, trayWindowKind(w)) {
+		if kinds == nil || picked {
 			short = append(short, row)
 		}
 		tipPct := pct

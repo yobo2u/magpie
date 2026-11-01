@@ -849,7 +849,10 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		}
 		window := p.WindowOf(m)
 		j := modelJSON{ID: m.ID, Name: m.Name, Efforts: provider.EffortsOf(m), On: on, Context: window, Output: provider.OutputWithin(window, p.ReplyLimitIn(m, set)), Listed: provider.ListedWindow(m), Max: m.MaxContext, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Images: images, ImageSet: imageSet, Own: own, Best: newest[m.ID]}
-		if l, _, ok := plugin.ModelLoad(p.PluginProvider(), m.ID, time.Now()); ok {
+		// a plugin reports a model's load by its own id, not one the user
+		// lists it by (axelburks on Discord)
+		ownID := p.OwnModelID(m.ID)
+		if l, _, ok := plugin.ModelLoad(p.PluginProvider(), ownID, time.Now()); ok {
 			j.Load = &l
 		}
 		if i := slices.IndexFunc(most, func(c catalog.Model) bool { return c.ID == m.ID }); j.Max == 0 && i >= 0 {
@@ -871,8 +874,8 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		}
 		j.NoAPI = noAPI(m.ID)
 		j.Same = sames[ref]
-		if own := p.OwnModelID(m.ID); own != m.ID {
-			j.Vendor = own
+		if ownID != m.ID {
+			j.Vendor = ownID
 		}
 		j.IDs = p.TakesModelIDs()
 		j.Kind = p.ModelKind(m.ID)

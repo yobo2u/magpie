@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -85,11 +86,6 @@ func askClaude(ctx context.Context, configDir, model string) error {
 func askClaudeTUI(ctx context.Context, binary claudeCLI, configDir, model string) error {
 	if _, why := claudeMachineWhy(binary); why != "" {
 		return claudeTUIErr(why)
-	}
-	if binary.wsl != nil {
-		if dir := binary.tuiWSLUnread(configDir); dir != "" {
-			return claudeTUIErr("Windows can't read " + dir + ", where Claude Code in WSL writes its transcripts")
-		}
 	}
 	tmp, err := os.MkdirTemp("", "magpie-claude-")
 	if err != nil {
@@ -177,6 +173,9 @@ func claudeUsage(ctx context.Context, configDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if claudeTUIOn() {
+		return claudeUsageTUI(ctx, binary, configDir)
+	}
 	tmp, err := os.MkdirTemp("", "magpie-claude-")
 	if err != nil {
 		return "", err
@@ -185,17 +184,7 @@ func claudeUsage(ctx context.Context, configDir string) (string, error) {
 	cmd := binary.command(ctx, claudeUsageArgs()...)
 	cmd.Dir = tmp
 	cmd.Stdin = strings.NewReader("")
-	// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC makes /usage skip its request
-	// and print only a reading another run left in the last hour, so it stays
-	// only when the user set it.
-	env := cleanClaudeEnv(os.Environ())
-	if os.Getenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") == "" {
-		env = slices.DeleteFunc(env, func(e string) bool {
-			return strings.HasPrefix(e, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=")
-		})
-	}
-	env = append(env, "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "DISABLE_AUTOUPDATER=1")
-	env, err = binary.proxied(ctx, env)
+	env, err := binary.proxied(ctx, claudeUsageEnv())
 	if err != nil {
 		return "", err
 	}
@@ -221,6 +210,74 @@ func claudeUsage(ctx context.Context, configDir string) (string, error) {
 		return "", runErr
 	}
 	return "", errors.New("Claude Code: " + clip(msg))
+}
+
+// claudeUsageEnv is the environment a /usage read runs Claude Code in:
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC makes /usage skip its request
+// and show only a reading another run left in the last hour, so it stays
+// only when the user set it.
+func claudeUsageEnv() []string {
+	env := cleanClaudeEnv(os.Environ())
+	if os.Getenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC") == "" {
+		env = slices.DeleteFunc(env, func(e string) bool {
+			return strings.HasPrefix(e, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=")
+		})
+	}
+	return append(env, "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "DISABLE_AUTOUPDATER=1")
+}
+
+// claudeUsageTUI is claudeUsage with the interactive mode on
+// (claudeTUIOn): /usage is typed in it, through its helper, which tells
+// the plan's windows its panel shows as -p's /usage lines say them
+// (claudetui's usageText). -p's /usage tells only the session's cost
+// there (Claude Code 2.1.316), so the plan's allowance is read only so.
+func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (string, error) {
+	if _, why := claudeMachineWhy(binary); why != "" {
+		return "", claudeTUIErr(why)
+	}
+	tmp, err := os.MkdirTemp("", "magpie-claude-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+	cmd, err := binary.tuiCommand(ctx, claudeTUIUsageArgs()...)
+	if err != nil {
+		return "", err
+	}
+	cmd.Dir = tmp
+	env, err := binary.proxied(ctx, claudeUsageEnv())
+	if err != nil {
+		return "", err
+	}
+	// the folder is magpie's own: asked whether to trust it, say yes
+	env = append(env, claudetui.TrustEnv+"=1")
+	cmd.Env = binary.tuiEnv(binary.env(binary.asRoot(env), configDir), configDir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return "", err
+	}
+	go func() { _, _ = io.WriteString(stdin, `{"type":"command","command":"/usage"}`+"\n") }()
+	out := &resultLines{done: func() { _ = stdin.Close() }}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = out, &stderr
+	runErr := runClaudeTree(ctx, cmd, "a Claude Code /usage read")
+	var full *claudeFull
+	if errors.As(runErr, &full) {
+		return "", runErr
+	}
+	if out.res != nil {
+		if out.res.IsError {
+			return "", errors.New("Claude Code: " + clip(out.res.Result))
+		}
+		return out.res.Result, nil
+	}
+	if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		return "", errors.New("Claude Code: " + clip(msg))
+	}
+	if runErr != nil {
+		return "", runErr
+	}
+	return "", errors.New("Claude Code ended with no answer")
 }
 
 // runClaudeTree runs a one-off Claude Code (a test, a /usage) and ends,
@@ -275,6 +332,13 @@ func claudeResult(b []byte) (claudeRun, bool) {
 func claudeUsageArgs() []string {
 	return []string{"-p", "/usage", "--output-format", "json",
 		"--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence"}
+}
+
+// claudeTUIUsageArgs are claudeUsageArgs for the interactive mode's
+// helper, /usage typed in it rather than given.
+func claudeTUIUsageArgs() []string {
+	return []string{"-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose",
+		"--tools", "", "--strict-mcp-config", "--setting-sources", ""}
 }
 
 func claudeWarmArgs(model string) []string {

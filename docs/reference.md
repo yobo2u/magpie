@@ -782,10 +782,12 @@ The list is the models the shared magpie shows Codex (its Agents page
 picks), each as the `model_catalog_json` magpie writes for a Codex on its
 own computer describes it, and only the models the key may use. Codex 0.161
 reads it by default; 0.160 needs `[features] api_key_model_discovery = true`.
-Codex reads at most 1 MiB of a catalog, and every entry carries Codex's
-prompt, so past about 125 models the list keeps the first that fit and the
-answer's `X-Magpie-Left-Out` header says how many it left out: pick fewer
-for Codex, or hold the key to fewer.
+Codex before 0.166 reads at most 1 MiB of a catalog, and every entry
+carries the instructions official Codex sends its model (about 21 KB), so
+for such a Codex past about 48 models the list keeps the first that fit and
+the answer's `X-Magpie-Left-Out` header says how many it left out: update
+Codex, pick fewer for Codex, or hold the key to fewer. Codex 0.166 and later
+read the list whole (magpie knows it by the `client_version` Codex sends).
 
 A request that reaches loopback through a proxy or tunnel on this computer
 (Cloudflare Tunnel's `cloudflared`, ngrok, Tailscale serve or funnel, frp's
@@ -2476,10 +2478,16 @@ last` (or *Only after everything else* under *Use credits*) keeps the
 credits but spends them last: once a window is used up, the account is
 tried after every other account, key and fallback that isn't on its
 credits, so the order goes subscription, then API key, then the credits.
-`magpie quota credits` lists the accounts set not to spend them and those
-that spend them last, `magpie quota credits <account>` says one's.
-It changes the gateway's routing only, never the account Codex is signed in
-to. The credits an account holds show beside its windows in `magpie quota`,
+`magpie quota credits <account> first` (or *Before moving to another
+account* under *Use credits*, on the Usage card or under the account's ⋯
+in its provider's editor) spends them before moving on: by default magpie
+sends requests to an account with room once one is nearly used up, and
+signs Codex in to it; with first, while the account holds credits, it keeps
+its place in the order and Codex stays signed in to it. First and last are
+one or the other. `magpie quota credits` lists the accounts set not to
+spend them and those that spend them first or last, `magpie quota credits
+<account>` says one's. Off and last change the gateway's routing only,
+never the account Codex is signed in to. The credits an account holds show beside its windows in `magpie quota`,
 `magpie accounts`, the Usage page and the menu bar panel.
 
 An account can have a name of your own, for telling apart seats the vendor
@@ -2992,6 +3000,7 @@ magpie quota refresh codex      # read Codex's cards again now (once per 30s)
 magpie quota wait codex         # block until a Codex account has allowance again
 magpie quota credits me@example.com off   # hold a ChatGPT account at its limit instead of spending credits
 magpie quota credits me@example.com last  # spend its credits only after every other account, key and fallback
+magpie quota credits me@example.com first # spend its credits before moving to another account
 
 magpie tools                    # the tools magpie's MCP servers give agents, with their parameters
 magpie tools generate_image     # one tool in full

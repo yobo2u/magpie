@@ -75,9 +75,12 @@ func antigravityTurnsAway(system string) bool {
 //     conversation's first developer message, and a thread begun on a GPT
 //     model keeps it when it is switched to another (/model, resume -m) or
 //     forked as an agent's thread, so such a thread on an Antigravity model
-//     never got an answer (Jodiezzzzzz on X, 10-27). magpie's own Codex
-//     prompt for other models ("You are Codex, based on GPT-5."), "an AI
-//     agent based on GPT-5" and GPT-6's prompt go through;
+//     never got an answer (Jodiezzzzzz on X, 10-27). The prompt magpie
+//     handed other models until 11-01 ("You are Codex, based on GPT-5."),
+//     "an AI agent based on GPT-5" and GPT-6's prompt go through. Codex's
+//     prompt for a model it doesn't know, which other models carry since
+//     ("You are a coding agent running in the Codex CLI"), has not been
+//     tried on a real account;
 //   - Hermes Agent's earlier default persona (its SOUL.md until Hermes
 //     replaced it: "You are Hermes Agent, an intelligent AI assistant
 //     created by Nous Research. …"), which a SOUL.md the user edited keeps

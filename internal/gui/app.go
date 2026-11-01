@@ -100,6 +100,10 @@ type host struct {
 	// screen; it is hidden once it has
 	closing atomic.Bool
 
+	// quitAt is when a Quit the user chose last asked first (AskQuit, unix
+	// nanoseconds)
+	quitAt atomic.Int64
+
 	ready     chan struct{} // closed once the main window can be shown
 	readyOnce sync.Once
 
@@ -457,6 +461,7 @@ func Run(version string, showMain bool, link string) error {
 	if !webView2Check(h.app) {
 		return nil
 	}
+	var appQuit *application.MenuItem // the Mac's app menu's Quit
 	// Wails' default Learn More replaces the current window with wails.io.
 	// Keep the native menus, but open magpie's help in the system browser.
 	// macOS only: it is the one that shows a menu bar unasked; on Linux a
@@ -466,6 +471,10 @@ func Run(version string, showMain bool, link string) error {
 		help := appMenu.FindByRole(application.HelpMenu).GetSubmenu()
 		help.Clear()
 		help.Add("Learn More").OnClick(func(*application.Context) { _ = h.OpenURL("https://usemagpie.ai") })
+		// Command-Q asks first while agents are connected (quitask.go). The
+		// role's item sends terminate:, which logging out and shutting down
+		// send too, so it is replaced rather than the app's ShouldQuit set
+		appQuit = askingQuit(appMenu, trayText(trayLang(settings.Load().Lang, systemLang), "Quit magpie"), func() { go h.AskQuit() })
 		h.app.Menu.Set(appMenu)
 	}
 	if Started != nil {
@@ -506,7 +515,7 @@ func Run(version string, showMain bool, link string) error {
 		}
 		updates.restartAsked(now)
 	})
-	quit := menu.Add(labels.quit).OnClick(func(*application.Context) { h.app.Quit() })
+	quit := menu.Add(labels.quit).OnClick(func(*application.Context) { go h.AskQuit() })
 	var ready string // the version waiting for a restart; on the main thread
 	relabel := func() {
 		l := trayMenuLabels(trayLang(settings.Load().Lang, systemLang), version, ready)
@@ -518,6 +527,9 @@ func Run(version string, showMain bool, link string) error {
 		restart.SetLabel(l.restart)
 		quit.SetLabel(l.quit)
 		menu.Update()
+		if appQuit != nil {
+			appQuit.SetLabel(l.quit)
+		}
 	}
 	onLang = func() { application.InvokeSync(relabel) }
 	updates.onReady = func(v string) {

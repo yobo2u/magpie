@@ -16,6 +16,7 @@ import (
 	"github.com/yetone/magpie/internal/desktopdir"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // Target is where one agent keeps each of the three: an empty path is
@@ -484,6 +485,19 @@ func targetOf(a *agent.Agent) *Target {
 		// ProjectSettingsContent.context_servers, zed-industries/zed
 		// 2c99f547; lc on Discord)
 		t.MCP = &mcpFile{Path: a.Path, Format: fmtZed}
+	case "kiro-cli":
+		// Kiro CLI — and the Kiro IDE, which reads the same files — finds
+		// its global skills in ~/.kiro/skills, its user-wide MCP servers
+		// in ~/.kiro/settings/mcp.json, mcpServers of command/args/env or
+		// url/headers that hot-reloads, and ~/.kiro/steering/AGENTS.md of
+		// its global steering, always included (kiro.dev/docs/skills,
+		// /docs/mcp/configuration, /docs/steering; #4769). The app is
+		// found by the kiro-cli program alone (apps): ~/.kiro is Kiro
+		// Crew's and the Kiro IDE's too
+		d := filepath.Join(h, ".kiro")
+		t.Instructions = filepath.Join(d, "steering", "AGENTS.md")
+		t.MCP = &mcpFile{Path: filepath.Join(d, "settings", "mcp.json"), Format: fmtKiro}
+		t.Skills = filepath.Join(d, "skills")
 	case "claude-desktop":
 		// Claude Desktop reads only commands from its file: a remote server
 		// is added in its own Connectors settings. In its 3p mode (magpie's
@@ -778,7 +792,8 @@ func wslOwnFolder(a *agent.Agent) *Target {
 }
 
 // apps are what the library can give MCP servers to that aren't agents
-// magpie sets up: known by the folder they keep their settings in.
+// magpie sets up: known by the folder they keep their settings in
+// (Claude Desktop), or by their program alone (Kiro CLI).
 func apps() []*agent.Agent {
 	// Desktop's own folder (%APPDATA%\Claude on Windows, the MSIX
 	// package's for a packaged Desktop, which doesn't see a file written
@@ -789,9 +804,25 @@ func apps() []*agent.Agent {
 	if !isDir(dir) && isDir(d.ThreeP) {
 		dir = d.ThreeP
 	}
-	return []*agent.Agent{
+	out := []*agent.Agent{
 		{ID: "claude-desktop", Name: "Claude Desktop", Icon: "claude-color", Dir: dir, Path: filepath.Join(dir, "claude_desktop_config.json")},
 	}
+	// Kiro CLI (#4769) is no agent magpie wires a model into, but the
+	// library can give it skills, MCP servers and instructions. It is
+	// found by the kiro-cli program alone — PATH, ~/.local/bin, Kiro
+	// CLI.app, where provider.KiroExecutable looks — never by ~/.kiro,
+	// which Kiro Crew and the Kiro IDE keep too. Bin is the path itself,
+	// so a copy the installer put where magpie's PATH doesn't reach is
+	// found as it was (Detected looks a Bin up by PATH alone). It is
+	// listed when kiro-cli isn't found too, and then not Detected, so not
+	// a target: held still lists one uninstalled with what magpie gave it,
+	// for that to be unticked and taken out of ~/.kiro
+	bin := provider.KiroExecutable()
+	if bin == "" {
+		bin = "kiro-cli"
+	}
+	out = append(out, &agent.Agent{ID: "kiro-cli", Name: "Kiro CLI", Icon: "kiro-color", Bin: bin})
+	return out
 }
 
 // Targets are the agents on this machine that magpie can give any of the
@@ -957,11 +988,12 @@ func targetByID(id string) *Target {
 // then given nothing.
 func Takes(q, kind string) (string, error) {
 	var a *agent.Agent
-	for _, app := range apps() {
-		if strings.EqualFold(app.ID, q) || strings.EqualFold(app.Name, q) {
-			a = app
+	for _, x := range apps() {
+		if strings.EqualFold(x.ID, q) || strings.EqualFold(x.Name, q) {
+			a = x
 		}
 	}
+	app := a != nil
 	if a == nil {
 		var err error
 		if a, err = agent.Find(q); err != nil {
@@ -969,6 +1001,11 @@ func Takes(q, kind string) (string, error) {
 		}
 	}
 	what := map[string]string{"instructions": "instructions", "mcp": "MCP servers", "skills": "skills"}[kind]
+	// an app found by its program alone (Kiro CLI) that isn't here: told
+	// so, not recorded and then given nothing, as Targets leaves it out
+	if app && a.Bin != "" && !a.Detected() {
+		return "", fmt.Errorf("%s isn't installed here; nothing reads its %s until it is", a.Name, what)
+	}
 	// gone for its CLI, as Targets leaves it out (#2254): told so, not
 	// recorded and then given nothing ("every agent already has it")
 	if a.CLIMissing() {

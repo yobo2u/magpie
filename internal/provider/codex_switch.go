@@ -304,6 +304,11 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	if keep || !known || q.Error != "" || !q.Held && !usedPast(q, share, now) && !capped(from, q) {
 		return "", "", false, false
 	}
+	if agent == "codex" && !q.Held && !capped(from, q) && spendsFirst(from, q) {
+		// set to spend its credits before another account, and holding
+		// some: Codex stays on it (jojonas_xyz on X)
+		return "", "", false, false
+	}
 	users := make([]string, 0, len(spares))
 	for _, l := range spares {
 		users = append(users, l.User)
@@ -340,6 +345,13 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 		return from, best, false, true
 	}
 	return "", "", false, false
+}
+
+// spendsFirst says whether the Codex account user, read as q, is set to
+// spend its credits before another account (CodexCreditsFirst) and holds
+// some, as its windows say (QuotaWindow.Credits).
+func spendsFirst(user string, q SubscriptionQuota) bool {
+	return CodexCreditsFirst(user) && slices.ContainsFunc(q.Windows, func(w QuotaWindow) bool { return w.Credits })
 }
 
 // roomMargin is how much more room (roomLeft) an account past its line

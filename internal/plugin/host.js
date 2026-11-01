@@ -1264,7 +1264,7 @@ async function loadPlugins(list) {
     // magpie's own (OpenCode has none): the plugin's options as the user
     // set them in magpie, read when wanted, so a change reaches the
     // plugin without a restart (#2038)
-    magpie: { option: optionValue, options: optionValues, load: reportLoad },
+    magpie: { option: optionValue, options: optionValues, load: reportLoad, usage: reportUsage, account: keyFor },
   }
   // pi's packages and extensions are loaded as pi loads them (pi.js)
   let pi
@@ -1981,6 +1981,37 @@ function reportLoad(provider, loads) {
   }
   if (n) send({ event: "load", provider, loads: out })
   return n
+}
+
+// reportUsage is magpie.usage(provider, call): a request a plugin sent its
+// vendor on its own, outside any request magpie handed it (Devin's cache
+// keepalive ping, plugins#592), for the request log and the usage totals
+// to list and count. call is {kind, model, input?, output?, cacheRead?,
+// cacheWrite?, status?, ms?, error?, account?}: kind says what the
+// request was for ([a-z0-9_-], 1–40: "cache_keepalive"), model the
+// model's id as magpie handed it to the plugin; the tokens are whole
+// numbers from 0 (input without the cache's), status the vendor's (0 for
+// none), ms how long it took. account is the account the request was
+// sent for, as magpie.account(provider) named it while a request of
+// magpie's was in the plugin's hands; without it, the account of the
+// request being served now, else the provider's first. It returns true
+// when the call was sent on.
+const USAGE_KIND = /^[a-z0-9_-]{1,40}$/
+function reportUsage(provider, call) {
+  if (typeof provider !== "string" || !provider || provider.length > 200) throw new TypeError("magpie.usage: provider must be a provider id")
+  if (!call || typeof call !== "object" || Array.isArray(call)) throw new TypeError("magpie.usage: call must be an object")
+  if (typeof call.kind !== "string" || !USAGE_KIND.test(call.kind)) throw new TypeError("magpie.usage: kind must be 1–40 of [a-z0-9_-]")
+  const model = shown(call.model, 200)
+  if (!model) throw new TypeError("magpie.usage: model must be the model's id")
+  const n = (v, most = 1e12) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.min(Math.floor(v), most) : 0)
+  const account = typeof call.account === "string" && call.account && providerOf(call.account) === provider ? call.account : keyFor(provider)
+  send({
+    event: "usage",
+    provider,
+    account,
+    usage: { kind: call.kind, model, input: n(call.input), output: n(call.output), cacheRead: n(call.cacheRead), cacheWrite: n(call.cacheWrite), status: n(call.status, 999), ms: n(call.ms), error: shown(call.error, 500) },
+  })
+  return true
 }
 
 // optionValue is one of provider's options as it stands; false for a key

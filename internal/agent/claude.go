@@ -985,7 +985,22 @@ func claudeIn(at place) *Agent {
 		// tier rows out of /model with the built-in lineup (Claude Code
 		// keeps only the Default row and the picker's own), so a tier's
 		// model keeps its row then, or it would be in /model nowhere.
-		replace := provider.OwnModelsHidden("claude")
+		//
+		// A list narrowed in magpie (only the picked models, or some taken
+		// out) asks the same: the built-in lineup's rows go to magpie too
+		// while Claude Code runs on it, and the one no tier names (Fable,
+		// left unset for a main of no Fable) listed a model the user had
+		// not picked beside the routing groups they had (yyhhyyyyyy on
+		// Discord). A custom option of the user's own
+		// (ANTHROPIC_CUSTOM_MODEL_OPTION), which the flag hides too, keeps
+		// the lineup.
+		// ownOption: the user's custom row, in settings.json's env or, for
+		// this computer's Claude Code, the login shell's (a distro's
+		// environment magpie can't read)
+		ownOption := func() bool {
+			return env(claudeCustomOptionEnv) != "" || at.spell == nil && claudeShellEnv(claudeCustomOptionEnv) != ""
+		}
+		replace := provider.OwnModelsHidden("claude") || claudeNarrowed() && !ownOption()
 		var onTier []string
 		for _, t := range claudeTiers {
 			if replace {
@@ -2965,4 +2980,17 @@ func magpiesPicker(path string) bool {
 		}
 	}
 	return true
+}
+
+// claudeCustomOptionEnv is the one row a user adds to Claude Code's /model
+// themselves, beside its built-in lineup; replaceBuiltInOptions hides it
+// with the lineup.
+const claudeCustomOptionEnv = "ANTHROPIC_CUSTOM_MODEL_OPTION"
+
+// claudeNarrowed says whether Claude Code's list leaves out some of
+// magpie's catalog: only the models picked for it, some taken out one by
+// one, or a visibility of families (provider.CatalogFor's kept list).
+func claudeNarrowed() bool {
+	_, hidden := provider.CatalogFor("claude")
+	return len(hidden) > 0
 }

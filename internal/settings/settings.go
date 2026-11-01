@@ -314,6 +314,12 @@ type Settings struct {
 	// fallback not on its credits, instead of in its place. Not one of
 	// CodexNoCredits: an account set not to spend them is held.
 	CodexCreditsLast []string `json:"codexCreditsLast,omitempty"`
+	// CodexCreditsFirst are the ChatGPT accounts (lower-case) that spend
+	// their credits before routing moves to another account: a window used
+	// up doesn't send requests or Codex's sign-in elsewhere while the
+	// account goes on on its credits (jojonas_xyz on X). Not one of
+	// CodexNoCredits nor CodexCreditsLast.
+	CodexCreditsFirst []string `json:"codexCreditsFirst,omitempty"`
 	// WorkBuddyCheckin presses WorkBuddy's daily check-in (签到) for each
 	// signed-in WorkBuddy (China) account once a Beijing day, claiming the
 	// credits it gives while its event runs.
@@ -531,6 +537,10 @@ type Settings struct {
 	// cards are there, the cards alone (KevinXC on Discord); a click on one
 	// still opens the panel, and with no cards the bird is shown.
 	TrayNoBird bool `json:"trayNoBird,omitempty"`
+	// TrayNoNumber keeps magpie's icon in Windows' tray while cards are
+	// picked; off by default, the icon is the first card's figure
+	// (Benjaminliang_1 on X), as Windows' tray shows no text beside it.
+	TrayNoNumber bool `json:"trayNoNumber,omitempty"`
 	// TrayPace puts each window's Pace number beside its figure in the
 	// menu bar ("42% +12%"), as the Usage page's cards have it (fflake33
 	// on Discord); off by default, as it widens every card.
@@ -1314,7 +1324,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.WindowMaximised, s.KeepAwake, s.KeepAwakeDisplay = cur.WindowMaximised, cur.KeepAwake, cur.KeepAwakeDisplay
 	s.WindowAt = cur.WindowAt
 	s.TrayUsages, s.TrayUsage, s.TrayUsageEvery, s.TrayNoLogos, s.TrayNoBird, s.TrayPace, s.TrayNoCost = cur.TrayUsages, cur.TrayUsage, cur.TrayUsageEvery, cur.TrayNoLogos, cur.TrayNoBird, cur.TrayPace, cur.TrayNoCost
-	s.TrayWindows = cur.TrayWindows
+	s.TrayWindows, s.TrayNoNumber = cur.TrayWindows, cur.TrayNoNumber
 	s.GatewayMode = cur.GatewayMode
 	s.NoWSLAgents = cur.NoWSLAgents
 	s.QuotaReads = cur.QuotaReads
@@ -2151,6 +2161,10 @@ func saveOwn(s Settings, recording, reads bool) error {
 		s.CodexCreditsLast[i] = strings.ToLower(u)
 	}
 	s.CodexCreditsLast = ids(s.CodexCreditsLast)
+	for i, u := range s.CodexCreditsFirst {
+		s.CodexCreditsFirst[i] = strings.ToLower(u)
+	}
+	s.CodexCreditsFirst = ids(s.CodexCreditsFirst)
 	s.TrayUsage = ""
 	if len(s.TrayUsages) > 0 {
 		s.TrayUsage = s.TrayUsages[0]

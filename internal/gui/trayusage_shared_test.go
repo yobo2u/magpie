@@ -61,8 +61,9 @@ func TestTrayAntigravityPools(t *testing.T) {
 	if strings.Contains(tip, "Gemini 2.5 Flash") {
 		t.Errorf("the tooltip lists the models the pools stand for:\n%s", tip)
 	}
-	// Settings is offered the pools' window, and the card's own windows
-	// are left as the cache has them
+	// Settings is offered each pool's window, by its pool as the two have
+	// one span, and each model's window too, which the card shows only
+	// when picked; the card's own windows are left as the cache has them
 	out := withTrayKinds([]provider.SubscriptionQuota{q})
 	var kinds []string
 	for _, w := range out[0].Windows {
@@ -70,8 +71,13 @@ func TestTrayAntigravityPools(t *testing.T) {
 			kinds = append(kinds, w.Pool+"="+w.TrayKind)
 		}
 	}
-	if !slices.Equal(kinds, []string{"Gemini=7d", "Claude & GPT=7d"}) {
+	if !slices.Equal(kinds, []string{"=name:claude opus 4.6 (thinking)", "=name:claude sonnet 4.6 (thinking)", "=name:gemini 2.5 flash", "=name:gemini 3 flash",
+		"=name:gemini 3.8 flash (high)", "=name:gpt-oss 120b (medium)", "Gemini=7d:gemini · 7 days", "Claude & GPT=7d:claude & gpt · 7 days"}) {
 		t.Fatalf("kinds %q", kinds)
+	}
+	// the Gemini pool alone
+	if cells, _, _ := trayCardsView([]provider.SubscriptionQuota{q}, now, true, false, map[string][]string{"antigravity": {"7d:gemini · 7 days"}}); !slices.Equal(cells[0].Rows, []string{"94%"}) {
+		t.Fatalf("the Gemini pool alone: %q", cells[0].Rows)
 	}
 	if q.Windows[6].Name != "7 days" || q.Windows[6].TrayKind != "" {
 		t.Fatalf("the cache's window was written: %+v", q.Windows[6])

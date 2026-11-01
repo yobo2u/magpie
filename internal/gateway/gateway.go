@@ -1545,6 +1545,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	if countHeld(w, r, provider.Anthropic, id) {
 		return
 	}
+	// a routing group held to some accounts counts on one of them, or
+	// the local estimate says the count, as for a key's (countOn)
+	r = heldByGroupAt(r, id)
 	// nor on one the user disabled (#1867)
 	if countOff(w, provider.Anthropic, id) {
 		return
@@ -2204,6 +2207,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	maskDone = true
 	logBody(body)
+	// a routing group held to some accounts holds the request to them
+	// from here on, as a gateway key's accounts do
+	if isGroup {
+		r = heldByGroup(r, g)
+	}
 	// a gateway key held to some models (#882) is refused another, or a
 	// group it doesn't name with one it may not use in it
 	keyWho, keyHeld := keyHolds(r)
@@ -2561,7 +2569,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// not use (#905), the plan's left saying so: told before the barred
 		// and ready ones it may also have
 		call.Status, call.Error = 403, "every account outside the key's accounts"
+		if keyWho.Group != "" {
+			call.Error = "every account outside the group's accounts"
+		}
 		writeError(w, from, 403, keyAccountsError(keyWho, call.Model))
+		turnedAway()
+		return
+	}
+	if len(cands) == 0 && slices.ContainsFunc(pl.left, func(w Weighed) bool { return w.HeldBy != "" }) &&
+		!slices.ContainsFunc(pl.left, func(w Weighed) bool { return !w.Barred && !w.Held && w.Capped == 0 }) {
+		// every one left was held by a group in the group, or a group a
+		// fallback reached, held to other accounts
+		call.Status, call.Error = 403, "every account outside the group's accounts"
+		writeError(w, from, 403, groupsHeldError(call.Model, pl.left))
 		turnedAway()
 		return
 	}
@@ -2791,7 +2811,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if from == provider.Gemini {
 		streams = strings.Contains(r.URL.Path, "streamGenerateContent")
 	}
-	gaveWay := map[string]bool{} // keys and accounts that gave way, full, to one free (laneMate)
+	gaveWay := map[string]bool{} // keys and accounts that gave way, full, to one free (laneMate, waitMate)
+	// the slot a request waiting in a full lane took of the key or account
+	// it went to instead (waitMate), for that one's try; given back if it
+	// isn't the one tried next, or when serve ends with it unused
+	var handed struct {
+		who     string
+		release func()
+		waited  time.Duration // how long it waited where it was, the first try's
+	}
+	defer func() {
+		if handed.release != nil {
+			handed.release()
+		}
+	}()
 	// a group's members that failed in a way that passes are asked again,
 	// once each has been, for up to its Patience (#1418): a member of a
 	// group in the group uses the innermost that sets Patience (#2410)
@@ -2841,9 +2874,22 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the plan as it stands for the tries: whether the one that answers
 	// stood in for a member listed ahead of its own (standsInFor)
 	plannedCs, plannedOrder := slices.Clone(cands), pl.order
+	// the row of the try before, when it failed, billed something and
+	// handed the request on, written once the next try begins
+	var failedRow func()
 	for i := 0; i < len(cands); i++ {
+		if failedRow != nil {
+			failedRow()
+			failedRow = nil
+		}
 		c := cands[i]
-		if j := s.laneMate(cands, i, isGroup, gaveWay); j > i {
+		if handed.release != nil && handed.who != c.who() {
+			handed.release()
+			handed.release = nil
+		}
+		if handed.release != nil {
+			// it holds a slot of this one already: no giving way
+		} else if j := s.laneMate(cands, i, isGroup, gaveWay); j > i {
 			// its key or account is full, and another of its provider's,
 			// or of its group, has a slot free: that one is asked first,
 			// this one keeps its place after it (#892)
@@ -3254,7 +3300,46 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// machine)
 			// a streaming agent waiting is kept alive meanwhile
 			queuedAlive := hw.keepQueued()
-			release, inLane, err := s.lanes.take(ctx, c.who(), c.p.LaneLimit(), c.p.QueueLimit, time.Duration(c.p.QueueWait)*time.Second)
+			var release func()
+			var inLane time.Duration
+			var err error
+			var mate candidate
+			if handed.release != nil {
+				// it left a full lane's queue for this one, whose slot it
+				// took as it did (waitMate): the wait there is its queue
+				release, handed.release = handed.release, nil
+				inLane, handed.waited = handed.waited, 0
+			} else {
+				// waiting, it goes to the first other key or account with
+				// room, not resting, once there is one (01huadalang on
+				// Discord: the requests already waiting for a third ZCode
+				// account waited on once the first two were back)
+				release, inLane, err = s.lanes.take(ctx, c.who(), c.p.LaneLimit(), c.p.QueueLimit, time.Duration(c.p.QueueWait)*time.Second, func() (bool, time.Time) {
+					m, rel, next, ok := s.waitMate(cands, i, isGroup, gaveWay, all)
+					if !ok {
+						return false, next
+					}
+					mate, handed.who, handed.release = m, m.who(), rel
+					return true, time.Time{}
+				})
+			}
+			if errors.Is(err, errMoved) {
+				// nothing was sent, and nobody failed: the one with room is
+				// asked now, this one keeps its place after it. The try
+				// never went out, so the route lists it no more
+				queuedAlive()
+				stop()
+				s.trace.update(tr, func(t *Route) { t.Tries = t.Tries[:len(t.Tries)-1] })
+				if firstBegan.Equal(began) {
+					// the first try's wait is the next one's queue, not a
+					// failed try's time
+					firstBegan, handed.waited = time.Time{}, inLane
+				}
+				gaveWay[c.who()] = true
+				cands = movedAhead(cands, i, mate)
+				i--
+				continue
+			}
 			var inMinute time.Duration
 			if err == nil && c.p.RPMLimit() > 0 {
 				// with a MaxRPM, it then waits for room in the minute, and
@@ -3286,6 +3371,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				}()
 			}
 			stop()
+		}
+		if handed.release != nil && handed.who == c.who() {
+			// answered without asking (verifyHeld, quotaHeld): the slot
+			// taken for it goes back
+			handed.release()
+			handed.release = nil
 		}
 		if laneErr != nil {
 			// its key's or account's queue was full, or it waited as long
@@ -3397,6 +3488,38 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		call.FirstReasoning = 0
 		if try.FirstReasoning > 0 {
 			call.FirstReasoning = sinceStart(began.Sub(start), hw.first.reasoning)
+		}
+		// A try that fails from here and hands the request on, to another
+		// account or member or the same one again, is in the ledger with
+		// what its vendor billed for it, as a refusal's is: a Claude
+		// subscription run that failed after Anthropic began its reply had
+		// written the whole conversation to that account's cache, and the
+		// next account wrote it again, while the Usage page counted the
+		// second alone, "2 tries" the only sign of the first (hhxk233 and
+		// Kayrainforest on X). A failure that billed nothing has no row.
+		failedRow = func() {
+			if call.To == "" {
+				return
+			}
+			u := call.Usage.billed()
+			if u.Input+u.Output+u.CacheRead+u.CacheWrite == 0 {
+				return
+			}
+			rec := usage.Record{RouteID: tr.ID, Time: began, Agent: call.Agent, Via: call.Via, Provider: call.Provider, Host: where, Model: c.model,
+				ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,
+				Requested: call.Model, Served: call.Usage.Served, Upstream: call.Usage.Upstream,
+				Input: u.Input, Output: u.Output, CacheRead: u.CacheRead,
+				CacheWrite: u.CacheWrite, CacheWrite1h: u.CacheWrite1h, CacheUnknown: u.cacheNotCounted(), Reasoning: u.Reasoning, Credits: call.Usage.Credits, Effort: wentAt, Millis: try.Millis, Status: call.Status,
+				TierAsked: tierAsked, TierSent: wentTier, TierServed: call.Usage.Tier,
+				TTFT: try.TTFT, FirstText: try.FirstText, FirstReasoning: try.FirstReasoning, ReasoningHidden: try.ReasoningHidden, Flow: try.Flow, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
+				RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To, c.p, c.model), Archive: call.archiveName(), HandedOn: true}
+			failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
+			failed := &Call{RequestBody: call.RequestBody, RequestTruncated: call.RequestTruncated, ResponseBody: string(hw.errBody()), maskIn: call.maskIn}
+			if call.wholeIn != nil {
+				failed.wholeIn, failed.wholeOut = call.wholeIn, hw.errBody()
+			}
+			withBodies(&rec, failed)
+			appendUsage(r, rec)
 		}
 		sentMs, ownMs, retriedMs, queuedMs = 0, 0, 0, 0
 		if at := wrote.Load(); at > 0 && call.TTFT > 0 {
@@ -3614,6 +3737,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				withBodies(&rec, refusal)
 				appendUsage(r, rec)
 			}
+			failedRow = nil // its row is written
 			continue
 		}
 		if !last && hw.failed() && hw.turnedAway {
@@ -3658,6 +3782,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				withBodies(&rec, refusal)
 				appendUsage(r, rec)
 			}
+			failedRow = nil // its row is written
 			continue
 		}
 		if !last && hw.failed() && promptRefused(hw.code(), hw.errBody()) {
@@ -4887,7 +5012,7 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// magpie never does. A test asked as Codex asks with them
 		// (provider.TestAs)
 		seen := http.Header{}
-		lite := liteKept(p, to, true)
+		lite := liteKept(p, to, true, modelOf(body))
 		for k, vs := range in {
 			if !lite && strings.EqualFold(k, liteHeader) {
 				// the body left Lite (fromLite), so does its header
@@ -4898,7 +5023,9 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 				seen[k] = vs
 			}
 		}
-		provider.SawClient(provider.ClientCodex, seen)
+		if codexNamed(in) {
+			provider.SawClient(provider.ClientCodex, seen)
+		}
 	}
 	if p.Account == nil && biliProxied(req.URL.Path) {
 		// a billion-context proxy put in front of the provider (#3052)
@@ -5058,10 +5185,36 @@ func claudeCodeHeader(k string) bool {
 // desktop app or ACP adapter — by the User-Agent (codex_cli_rs/0.159.2
 // (Mac OS 26.6.0; arm64) kitty, Codex Desktop/0.162.3 …) or the originator it gives
 // (codex_cli_rs, codex_exec, codex_vscode, Codex Desktop, acp-extension-codex).
+// VS Code's Agents window runs `codex app-server` under the name
+// vscode_agent_host, which Codex sends as both: those are Codex's turns
+// too, though they are counted under VS Code (agent.vscodeAgentHostUA).
+// Without it one of Codex's own models asked there was answered 404
+// "magpie knows no model" rather than going on Codex's sign-in
+// (codexOwnOffMagpie; justruman on Discord).
 func fromCodex(in http.Header) bool {
+	return codexNamed(in) || hostedCodex(in)
+}
+
+// codexNamed is a request whose User-Agent or originator is one of Codex's
+// own names, not an app's that runs it: only those are Codex's shape for
+// a test asked as Codex (provider.SawClient).
+func codexNamed(in http.Header) bool {
 	for _, v := range []string{in.Get("User-Agent"), in.Get("originator")} {
 		v = strings.ToLower(v)
 		if strings.HasPrefix(v, "codex") || strings.HasPrefix(v, "acp-extension-codex") {
+			return true
+		}
+	}
+	return false
+}
+
+// hostedCodex is a Codex an app runs under the app's own name and that
+// name only Codex is run under: VS Code's agent host (its codexAgent.ts
+// CLIENT_INFO). An app that runs Codex as its own engine under a name it
+// uses for more than that (Lody) is not told apart this way.
+func hostedCodex(in http.Header) bool {
+	for _, v := range []string{in.Get("User-Agent"), in.Get("originator")} {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "vscode_agent_host") {
 			return true
 		}
 	}
@@ -5140,7 +5293,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// Responses Lite's shape, its tools as an input item (#350) and its
 		// reasoning context, goes only to OpenAI; anyone else is sent what
 		// Codex sends a model that isn't Lite
-		if !liteKept(p, proto, fromCodex(r.Header)) {
+		if !liteKept(p, proto, fromCodex(r.Header), modelOf(body)) {
 			body = fromLite(body)
 		}
 		// only the ChatGPT backend runs Codex's tool search as Codex sends it
@@ -7305,6 +7458,8 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	// a glm-5.3-flash* replica's CR stitched into a call's arguments
 	// (tool_args_cr.go, #4256)
 	request.CR = glmServed(wiresOf(r.Context()), p, model)
+	// Grok's reasoning, carried in its calls' ids (reasoning_carry.go)
+	askSealedReasoning(p, from, request)
 	// a model's 2500.0 in a call's arguments, which Codex turns away, is
 	// rewritten at the encoder and at render (grok_integral.go, #1431,
 	// #3152)
@@ -7360,7 +7515,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		}
 		return writeVendorError(w, from, res.StatusCode, msg, b), msg
 	}
-	dec := decoderFor(p, actual)
+	dec := carryReasoning(decoderFor(p, actual), from, actual)
 	rd, sse := eventStream(res)
 	if !sse {
 		// the provider ignored stream:true; read the whole reply as one
@@ -7587,6 +7742,9 @@ func parseRequest(proto provider.Protocol, body []byte, facts, keepInstructions 
 func afterParse(proto provider.Protocol, body []byte, req *Request) (*Request, error) {
 	// a call's id may carry Gemini's thought signature (gemini_signature.go)
 	unsignCalls(req)
+	// and the sealed reasoning a Responses upstream gave before it
+	// (reasoning_carry.go)
+	unreasonCalls(req)
 	req.LastIsTurn = proto == provider.Chat || proto == provider.Responses
 	if req.ToolChoice == "required" && len(req.Tools) == 0 && !req.WebSearch && requiredAllowlist(proto, body) {
 		return nil, fmt.Errorf("required tool choice has no callable tools after filtering")
@@ -7620,6 +7778,15 @@ func requiredAllowlist(proto provider.Protocol, body []byte) bool {
 func buildFor(p provider.Provider, proto provider.Protocol, r *Request, model string) ([]byte, error) {
 	if proto == provider.Gemini && p.IsVertex() {
 		return buildVertex(r, model)
+	}
+	if proto == provider.Responses && p.Account != nil && p.Account.Agent == "codex" && !r.instructionsKept {
+		// the account's send shapes the instructions itself (codexBody):
+		// the client's system rides first as a developer item and the
+		// input's system items stand as developer ones, in place — the
+		// fold would move them out of conversation order (#4632)
+		c := *r
+		c.instructionsKept = true
+		r = &c
 	}
 	return build(proto, r, model, buildHost(p), p.RejectsTemperature(model))
 }

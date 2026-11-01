@@ -837,6 +837,7 @@ func (s *Server) Unrest(key string) bool {
 	}
 	unsink(key)
 	s.trace.lifted()
+	s.lanes.signal() // a request waiting in a full lane may go to it now (waitMate)
 	return ok
 }
 
@@ -862,6 +863,7 @@ func (s *Server) UnrestAll(key string) int {
 	}
 	unsinkAll(key)
 	s.trace.lifted()
+	s.lanes.signal() // a request waiting in a full lane may go to it now (waitMate)
 	return n
 }
 
@@ -1960,8 +1962,9 @@ type left struct {
 	amount, of float64
 	unit       string
 	// credits: a Codex account that goes on on its credits once its
-	// allowance is used up (spendsCredits)
-	credits bool
+	// allowance is used up (spendsCredits); first: one set to spend them
+	// before another account (provider.CodexCreditsFirst)
+	credits, first bool
 	// bal is a prepaid wallet's balance in balUnit (Allowance.Left,
 	// #3950); balIn says whose wallet it is, provider and unit, and is
 	// empty when no balance was told: routes.Seat.LeftIn
@@ -2042,6 +2045,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			rs := a.Restarts(now)
 			l := left{used: u, renews: r, fullest: a.Fullest(c.model, now), soon: a.Renewal(c.model, now), lapse: a.Lapse(c.model, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
 				restarts: rs, dueRestart: !rs.IsZero() && due.Equal(rs), credits: spendsCredits(c.p, a)} // one not known counts as unused
+			l.first = l.credits && provider.CodexCreditsFirst(c.p.Account.User)
 			if b, bu, has := a.Left(c.model); has {
 				// a wallet's figure is weighed only against the same
 				// provider's in the same unit (routes.Seat.LeftIn)
@@ -2068,7 +2072,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			pace = provider.FreshPace
 		}
 		seats[i] = routes.Seat{Key: c.rest, Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
-			Used: l.used, Soon: l.soon, Lapse: l.lapse, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits,
+			Used: l.used, Soon: l.soon, Lapse: l.lapse, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits, First: l.first,
 			Left: l.bal, LeftIn: l.balIn, Spent: spentRest(c)}
 	}
 	routed.Unlock()

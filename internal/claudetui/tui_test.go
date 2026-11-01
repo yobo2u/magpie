@@ -80,6 +80,62 @@ func fakeTrust(r *bufio.Reader) {
 	}
 }
 
+// fakeOnboard shows Claude Code 2.1.316's onboarding where its config
+// folder has none done (FAKE_ONBOARD set): the text style, the security
+// notes, and with "terminal" whether to set up the terminal. Each is
+// drawn again 150ms after it is first, the keys before that lost; Enter
+// goes on, and Esc skips the terminal setup, whose Enter (Yes) is written
+// down as "terminal-set-up". Gone through, it writes "onboarded" in the
+// config folder, and shows none of it again. With "stuck" the notes come
+// back after each Enter.
+func fakeOnboard(r *bufio.Reader, how string) {
+	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
+	if _, err := os.Stat(filepath.Join(cfg, "onboarded")); err == nil {
+		return
+	}
+	screens := []string{
+		"\r\n Let's get started.\r\n\r\n Choose\x1b[1Cthe text style that looks best with your terminal\r\n ❯ 1. Dark mode ✔\r\n   2. Light mode\r\n",
+		// a space a move of the cursor or a no-break space, as 2.1.316
+		// draws them
+		"\r\n Security\x1b[1Cnotes:\r\n\r\n 1. Claude can make mistakes\r\n    You should always review Claude's responses\r\n\r\n 2. Due to prompt injection risks, only use it with code you trust\r\n\r\n Press\u00a0Enter\x1b[1Cto\x1b[1Ccontinue…\r\n",
+	}
+	if how == "terminal" {
+		screens = append(screens, "\r\n Use Claude Code's terminal\x1b[1Csetup?\r\n\r\n For the optimal coding experience, enable the recommended settings\r\n for your terminal: Option+Enter for newlines and no audible bell\r\n\r\n ❯ 1. Yes, use recommended settings\r\n   2. No, maybe later with /terminal-setup\r\n\r\n Enter to confirm · Esc to skip\r\n")
+	}
+	for i := 0; i < len(screens); i++ {
+		fmt.Print("\x1b[2J\x1b[H" + screens[i])
+		deaf := make(chan struct{})
+		time.AfterFunc(150*time.Millisecond, func() {
+			fmt.Print("\x1b[2J\x1b[H" + screens[i])
+			close(deaf)
+		})
+		for {
+			c, err := r.ReadByte()
+			if err != nil {
+				os.Exit(0)
+			}
+			select {
+			case <-deaf:
+			default:
+				continue
+			}
+			terminal := strings.Contains(screens[i], "terminal\x1b[1Csetup")
+			if c == '\r' && terminal {
+				_ = os.WriteFile(filepath.Join(cfg, "terminal-set-up"), nil, 0o600)
+			}
+			if c == '\r' && how == "stuck" && i == 1 {
+				i--
+				break
+			}
+			if c == '\r' || c == 0x1b && terminal {
+				break
+			}
+		}
+	}
+	_ = os.MkdirAll(cfg, 0o700)
+	_ = os.WriteFile(filepath.Join(cfg, "onboarded"), nil, 0o600)
+}
+
 func fakeClaude(args []string) {
 	if slices.Contains(args, "-p") {
 		sc := bufio.NewScanner(os.Stdin)
@@ -98,13 +154,6 @@ func fakeClaude(args []string) {
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
-	if os.Getenv("FAKE_NOTES") == "1" {
-		// onboarding not done: the first-run notes, as 2.1.316 draws them,
-		// a space a move of the cursor or a no-break space
-		fmt.Print("\r\n Security\x1b[1Cnotes:\r\n\r\n 1. Claude can make mistakes\r\n    You should always review Claude's responses\r\n\r\n 2. Due to prompt injection risks, only use it with code you trust\r\n\r\n Press\u00a0Enter\x1b[1Cto\x1b[1Ccontinue…\r\n")
-		time.Sleep(time.Minute)
-		os.Exit(0)
-	}
 	sid := ""
 	if i := slices.Index(args, "--session-id"); i >= 0 {
 		sid = args[i+1]
@@ -115,6 +164,9 @@ func fakeClaude(args []string) {
 	// outside one sends it
 	fakeRaw()
 	r := bufio.NewReader(os.Stdin)
+	if v := os.Getenv("FAKE_ONBOARD"); v != "" {
+		fakeOnboard(r, v)
+	}
 	if os.Getenv("FAKE_TRUST") == "1" {
 		fakeTrust(r)
 	}
@@ -131,6 +183,13 @@ func fakeClaude(args []string) {
 		if tapped != nil {
 			_, _ = tapped.WriteString(`{"tap":"on"}` + "\n")
 		}
+	}
+	// FAKE_MCP_DELAY: magpie's tool server is listed that long after the
+	// prompt shows, as Claude Code connects its MCP servers beside it; a
+	// message sent before then is answered without the tools
+	listed := mcpListed(args)
+	if d, err := time.ParseDuration(os.Getenv("FAKE_MCP_DELAY")); err == nil && listed != "" {
+		time.AfterFunc(d, func() { _ = os.WriteFile(listed, nil, 0o600) })
 	}
 	streams := 0
 	fmt.Print("\r\n❯ ")
@@ -188,6 +247,11 @@ func fakeClaude(args []string) {
 		line := typed.String()
 		typed.Reset()
 		mu.Unlock()
+		if listed != "" {
+			if _, err := os.Stat(listed); err != nil {
+				line += " (without magpie's tools)"
+			}
+		}
 		if tapped != nil {
 			streams++
 			n := streams
@@ -201,6 +265,12 @@ func fakeClaude(args []string) {
 				_, _ = fmt.Fprintf(tapped, `{"s":%d,"e":%s}`+"\n", n, e)
 			}
 			_, _ = fmt.Fprintf(tapped, `{"s":%d,"end":"done"}`+"\n", n)
+		}
+		if line == "/usage" {
+			// its panel, as Claude Code 2.1.316 drew it
+			b, _ := os.ReadFile(os.Getenv("FAKE_USAGE"))
+			_, _ = os.Stdout.Write(b)
+			continue
 		}
 		f, _ := os.OpenFile(filepath.Join(dir, sid+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		rows := []any{
@@ -246,6 +316,11 @@ func runShim(t *testing.T, env []string, pargs []string, lines []string, want in
 	})
 	t.Setenv("MAGPIE_TUI_TEST_CFG", cfg)
 	for _, l := range lines {
+		// a line after "raw:" is said as it is
+		if raw, ok := strings.CutPrefix(l, "raw:"); ok {
+			_, _ = io.WriteString(stdin, raw+"\n")
+			continue
+		}
 		// a line that is JSON is the message's content blocks
 		var content any = l
 		if json.Valid([]byte(l)) {
@@ -459,7 +534,7 @@ func TestShimNeverPrints(t *testing.T) {
 		{"untrusted folder", "trust the folder", []string{"FAKE_TRUST=1"}},
 		// at once, not after readyWait: runEnds waits 30s (#4504)
 		{"asks to sign in", "sign", []string{"FAKE_LOGIN=1"}},
-		{"first-run notes", "notes", []string{"FAKE_NOTES=1"}},
+		{"first-run screens it stays on", "first-run screens", []string{"FAKE_ONBOARD=stuck"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -474,6 +549,54 @@ func TestShimNeverPrints(t *testing.T) {
 			out, stderr, err = runEnds(t, home, nil)
 			if err != nil || strings.Contains(out, "print mode") || !strings.Contains(out, "echo: hello") {
 				t.Fatalf("the next run ended %v, wrote %q, stderr %q", err, out, stderr)
+			}
+		})
+	}
+}
+
+// The first message waits for Claude Code to have listed the tools of
+// magpie's tool server, which it connects as its prompt shows: sent at
+// the prompt, it was answered without the agent's tools (MinhuWang on X,
+// a pi agent, the MCP server slow to load).
+func TestShimFirstMessageWaitsForTools(t *testing.T) {
+	listed := filepath.Join(t.TempDir(), "listed")
+	cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		"magpie": map[string]any{"command": "magpie", "args": []string{MCPCommand, "callback", "tools.json", listed}},
+	}})
+	args := slices.Clone(pArgs)
+	args[slices.Index(args, "--mcp-config")+1] = string(cfg)
+	start := time.Now()
+	out := runShim(t, []string{"FAKE_MCP_DELAY=2s"}, append([]string{fakePath(t)}, args...), []string{"hello"}, 3)
+	b, _ := json.Marshal(out[1]["message"])
+	if out[1]["type"] != "assistant" || !strings.Contains(string(b), "echo: hello") || strings.Contains(string(b), "without magpie's tools") {
+		t.Fatalf("the first turn said %s", b)
+	}
+	if d := time.Since(start); d < 2*time.Second {
+		t.Fatalf("answered in %s, before the tools were listed", d)
+	}
+}
+
+// A config folder whose onboarding isn't done (the account Claude Code
+// is signed in to where `claude` was never run, #4817) is gone through
+// as a person would: the text style kept, the security notes read on,
+// the terminal setup skipped. Claude Code records it done, and the next
+// run is shown none of it.
+func TestShimGoesThroughOnboarding(t *testing.T) {
+	for _, how := range []string{"1", "terminal"} {
+		t.Run(how, func(t *testing.T) {
+			home := t.TempDir()
+			for run := range 2 {
+				out, stderr, err := runEnds(t, home, []string{"FAKE_ONBOARD=" + how})
+				if err != nil || !strings.Contains(out, "echo: hello") || strings.Contains(out, "print mode") {
+					t.Fatalf("run %d ended %v, wrote %q, stderr %q", run, err, out, stderr)
+				}
+			}
+			cfg := filepath.Join(home, "claude")
+			if _, err := os.Stat(filepath.Join(cfg, "onboarded")); err != nil {
+				t.Fatal("the onboarding wasn't recorded done")
+			}
+			if _, err := os.Stat(filepath.Join(cfg, "terminal-set-up")); err == nil {
+				t.Fatal("the user's terminal was set up")
 			}
 		})
 	}
@@ -591,5 +714,62 @@ func TestShimInWSL(t *testing.T) {
 	}
 	if want := []string{"WSLENV=CLAUDE_CONFIG_DIR/p:TERM:BUN_OPTIONS:" + tapEnv, "BUN_OPTIONS=--preload /mnt/c/t/tap.js", tapEnv + "=/mnt/c/t/tap.jsonl"}; !slices.Equal(bun, want) {
 		t.Fatalf("env %q, want %q", bun, want)
+	}
+}
+
+// /usage is typed, and the windows its panel shows are told as -p's
+// /usage lines say them, in a result naming its local command; the
+// panel is the bytes Claude Code 2.1.316 drew, a bar, then "81%", then
+// "used", each placed by a move of the cursor.
+func TestShimReadsUsage(t *testing.T) {
+	panel, _ := filepath.Abs(filepath.Join("testdata", "usage-2.1.316.bin"))
+	out := runShim(t, []string{"FAKE_USAGE=" + panel}, append([]string{fakePath(t)}, pArgs...), []string{`raw:{"type":"command","command":"/usage"}`}, 2)
+	want := "Current session: 0% used · resets 12am (Asia/Shanghai)\nCurrent week (all models): 81% used · resets Nov 4 at 6am (Asia/Shanghai)"
+	if r := out[1]; r["type"] != "result" || r["is_error"] != false || r["local_command"] != "usage" || r["result"] != want {
+		t.Fatalf("told %v", r)
+	}
+}
+
+// A command other than /usage is told as an error, and none is typed.
+func TestShimRunsNoOtherCommand(t *testing.T) {
+	out := runShim(t, nil, append([]string{fakePath(t)}, pArgs...), []string{`raw:{"type":"command","command":"/login"}`}, 2)
+	if r := out[1]; r["type"] != "result" || r["is_error"] != true || !strings.Contains(r["result"].(string), "/login") {
+		t.Fatalf("told %v", r)
+	}
+}
+
+func TestUsageText(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "usage-2.1.316.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Current session: 0% used · resets 12am (Asia/Shanghai)\nCurrent week (all models): 81% used · resets Nov 4 at 6am (Asia/Shanghai)"
+	if got := usageText(ansi.ReplaceAllString(string(b), " ")); got != want {
+		t.Fatalf("usageText = %q, want %q", got, want)
+	}
+	for screen, want := range map[string]string{
+		// a window drawn again is told as drawn last, the Sonnet week its own
+		"Current session ██ 10% used Resets 7pm (Asia/Shanghai) Current session ███ 12% used Resets 7pm (Asia/Shanghai) Current week (Sonnet only) █ 4% used Resets Nov 4 at 6am (UTC)": "Current session: 12% used · resets 7pm (Asia/Shanghai)\nCurrent week (Sonnet only): 4% used · resets Nov 4 at 6am (UTC)",
+		// with no reset drawn
+		"Current session  0% used": "Current session: 0% used",
+		"Current session ████ 100% used Resets 7pm (UTC) You are using your overages": "Current session: 100% used · resets 7pm (UTC)\nYou are currently using your overages to power your Claude Code usage.",
+		// no window: told as drawn, for its words to say why
+		"Settings  Usage   /usage is only available for subscription plans.": "Settings Usage /usage is only available for subscription plans.",
+	} {
+		if got := usageText(screen); got != want {
+			t.Errorf("usageText(%q) = %q, want %q", screen, got, want)
+		}
+	}
+}
+
+// A long paste is waited for as long as Claude Code takes it in: a real
+// 3MB one showed "[Pasted text" after 35s, where pasteWait alone would
+// press Enter while the paste was still being taken in.
+func TestShownWaitGrowsWithThePaste(t *testing.T) {
+	if got := shownWait(100); got != pasteWait {
+		t.Fatalf("a short paste: %v", got)
+	}
+	if got := shownWait(3 << 20); got < 40*time.Second {
+		t.Fatalf("a 3MB paste waits %v", got)
 	}
 }

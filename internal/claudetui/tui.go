@@ -92,13 +92,19 @@ type shim struct {
 	nimages int
 
 	// wsl is a Claude Code in a WSL distro (WSLEnv); nil for this
-	// machine's
-	wsl *WSL
+	// machine's. wslr reads its transcript inside the distro, when
+	// Windows can't (wslread.go)
+	wsl  *WSL
+	wslr *wslRead
 
 	// tap copies the replies' streams (tap.go), nil with none; env is
 	// what Claude Code is given for it
 	tap *tap
 	env []string
+
+	// listed is the file magpie's tool server writes once Claude Code has
+	// listed its tools (mcpListed), "" for a run without it
+	listed string
 }
 
 // Run runs Claude Code at path, args being the bridge's `claude -p` ones,
@@ -115,7 +121,7 @@ func Run(args []string) error {
 	var wsl *WSL
 	if v := os.Getenv(WSLEnv); v != "" {
 		wsl = &WSL{}
-		if err := json.Unmarshal([]byte(v), wsl); err != nil || len(wsl.Args) == 0 || wsl.Projects == "" {
+		if err := json.Unmarshal([]byte(v), wsl); err != nil || len(wsl.Args) == 0 || wsl.Projects == "" && wsl.Distro == "" {
 			return fmt.Errorf("%s: %q", WSLEnv, v)
 		}
 		// wsl.exe's own arguments, then Claude Code's
@@ -126,7 +132,7 @@ func Run(args []string) error {
 		return fmt.Errorf("Claude Code's interactive mode didn't run: %s", why)
 	}
 	args = interactiveArgs(pargs[len(wslArgs(wsl)):])
-	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl}
+	s := &shim{out: os.Stdout, changed: make(chan struct{}, 1), rowsCh: make(chan struct{}, 1), exited: make(chan struct{}), wsl: wsl, listed: mcpListed(args)}
 	resume := ""
 	for i, a := range args {
 		if a == "--resume" && i+1 < len(args) {
@@ -140,8 +146,19 @@ func Run(args []string) error {
 		args = append(args, "--session-id", s.sid)
 	}
 	s.projects = filepath.Join(configDir(), "projects")
-	if wsl != nil {
+	if wsl != nil && wsl.Projects != "" {
 		s.projects = wsl.Projects
+	} else if wsl != nil {
+		dir, err := os.MkdirTemp("", "magpie-claude-wsl-")
+		if err != nil {
+			return fail(err.Error())
+		}
+		defer os.RemoveAll(dir)
+		if s.wslr, err = startWSLRead(wsl.Distro, s.sid, dir); err != nil {
+			return fail(err.Error())
+		}
+		defer s.wslr.stop()
+		s.projects = dir
 	}
 	// a resumed session's file has its earlier turns: only what is
 	// written after the start is read
@@ -307,35 +324,77 @@ func lastAt(re *regexp.Regexp, p string) int {
 	return m[len(m)-1][0]
 }
 
-var errUntrusted = errors.New("Claude Code asks whether to trust the folder, which only its user answers")
+var errUntrusted = errors.New(Untrusted + ", which only its user answers")
 
 // signIn is what Claude Code's interactive mode shows where it is not
 // signed in, as -p may be (CLAUDE_CODE_OAUTH_TOKEN, a container whose
 // ~/.claude.json has no onboarding done): nothing the helper may answer.
 var signIn = regexp.MustCompile(`Select login method|Log in with your Claude account|claude\.ai/oauth/authorize`)
 
-// firstRun is the notes Claude Code's interactive mode shows where its
-// onboarding isn't done (a config folder only -p was run in, given
-// CLAUDE_CODE_OAUTH_TOKEN): agreeing to them is the user's, as is what
-// comes after them. It is matched in the screen's words, any space
-// between them one: Claude Code draws some by moving the cursor.
-var firstRun = regexp.MustCompile(`Security notes:.*Press Enter to continue`)
+// The screens Claude Code's interactive mode shows where its onboarding
+// isn't done (a config folder only -p was run in, or one signed in where
+// `claude` was never run, #4817), after its text style (theme): the
+// security notes, which Enter goes past as it would for a person, and,
+// in a terminal it knows how to set up (TERM_PROGRAM Apple_Terminal,
+// vscode, …), whether to set it up, which Esc skips: magpie's terminal is
+// no one's. Once past them, Claude Code records the onboarding done
+// itself (2.1.316: hasCompletedOnboarding, lastOnboardingVersion), and
+// the next run shows none of them. They are matched in the screen's
+// words, any space between them one: Claude Code draws some by moving the
+// cursor.
+var (
+	firstRun      = regexp.MustCompile(`Security notes:.*Press Enter to continue`)
+	terminalSetup = regexp.MustCompile(`terminal setup\?.*Esc to skip`)
+)
+
+// onboardTries is how often one onboarding screen is answered before the
+// run ends.
+const onboardTries = 3
 
 // ready waits for Claude Code's prompt. Asked whether to trust the folder
 // it runs in, it is told yes, as a person would, when TrustEnv says so.
 func (s *shim) ready() error {
 	deadline := time.After(readyWait)
 	answered := 0
+	prompted := false
 	var yesAt, downAt time.Time
+	// an onboarding screen is answered once it has stayed drawn
+	// trustSettle: a key sent as it is first drawn can be lost to its
+	// being drawn again, and nothing then draws it once more
+	shownAt := map[string]time.Time{}
+	pressed := map[string]int{}
+	onboard := func(screen, key string) error {
+		if shownAt[screen].IsZero() {
+			shownAt[screen] = time.Now()
+		}
+		if time.Since(shownAt[screen]) < trustSettle {
+			return nil
+		}
+		if pressed[screen] >= onboardTries {
+			return fmt.Errorf("Claude Code's interactive mode stays on its first-run screens, its onboarding not done; run Claude Code once in a terminal and go through them: %s", s.lastScreen())
+		}
+		pressed[screen]++
+		delete(shownAt, screen)
+		s.clearScreen()
+		_, _ = io.WriteString(s.pty, key)
+		return nil
+	}
 	for {
 		p := s.plain()
+		words := strings.Join(strings.Fields(p), " ")
 		switch {
 		case strings.Contains(p, "trust this folder") && os.Getenv(TrustEnv) != "1":
 			return errUntrusted
 		case signIn.MatchString(p):
 			return fmt.Errorf("Claude Code's interactive mode asks to sign in: %s", s.lastScreen())
-		case firstRun.MatchString(strings.Join(strings.Fields(p), " ")):
-			return fmt.Errorf("Claude Code's interactive mode shows its first-run notes, its onboarding not done: %s", s.lastScreen())
+		case firstRun.MatchString(words):
+			if err := onboard("notes", "\r"); err != nil {
+				return err
+			}
+		case terminalSetup.MatchString(words):
+			if err := onboard("terminal", "\x1b"); err != nil {
+				return err
+			}
 		case strings.Contains(p, "trust this folder") && answered < 3:
 			// the choice is the last one drawn after ❯, "No, exit" at
 			// first. A key sent as the question is first drawn can be lost
@@ -366,11 +425,21 @@ func (s *shim) ready() error {
 			// --no-chrome
 			s.clearScreen()
 			_, _ = io.WriteString(s.pty, "\x1b")
-		case strings.Contains(p, "Choose the text style"):
-			s.clearScreen()
-			_, _ = io.WriteString(s.pty, "\r")
+		case strings.Contains(words, "Choose the text style"):
+			if err := onboard("theme", "\r"); err != nil {
+				return err
+			}
 		case strings.Contains(p, "❯ "):
-			// drawn: a moment for its input to be listened to
+			if !s.toolsListed() {
+				// drawn before Claude Code has its MCP servers' tools: it
+				// connects them as the prompt shows, and a message sent
+				// now is answered without the agent's tools, which
+				// magpie's tool server carries (MinhuWang on X)
+				prompted = true
+				break
+			}
+			// drawn: a moment for its input to be listened to, and for
+			// the tools just listed to be taken up
 			time.Sleep(300 * time.Millisecond)
 			return nil
 		}
@@ -380,9 +449,47 @@ func (s *shim) ready() error {
 		case <-s.exited:
 			return fmt.Errorf("Claude Code ended before it showed its prompt (%v): %s", s.exit, s.lastScreen())
 		case <-deadline:
+			if prompted {
+				return fmt.Errorf("Claude Code showed its prompt, but hadn't listed the tools of magpie's tool server in %s", readyWait)
+			}
 			return fmt.Errorf("Claude Code showed no prompt in %s: %s", readyWait, s.lastScreen())
 		}
 	}
+}
+
+// toolsListed is whether Claude Code has listed magpie's tool server's
+// tools, or the run has no such server.
+func (s *shim) toolsListed() bool {
+	if s.listed == "" {
+		return true
+	}
+	_, err := os.Stat(s.listed)
+	return err == nil
+}
+
+// mcpListed is the file magpie's tool server (MCPCommand) is told, in the
+// --mcp-config of args, to write once Claude Code has listed its tools;
+// "" when it isn't told one.
+func mcpListed(args []string) string {
+	for i, a := range args {
+		if a != "--mcp-config" || i+1 >= len(args) {
+			continue
+		}
+		var c struct {
+			Servers map[string]struct {
+				Args []string `json:"args"`
+			} `json:"mcpServers"`
+		}
+		if json.Unmarshal([]byte(args[i+1]), &c) != nil {
+			continue
+		}
+		for _, srv := range c.Servers {
+			if len(srv.Args) == 4 && srv.Args[0] == MCPCommand {
+				return srv.Args[3]
+			}
+		}
+	}
+	return ""
 }
 
 func (s *shim) emit(v any) {
@@ -408,6 +515,7 @@ func (s *shim) input(r io.Reader) error {
 			Message struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
+			Command string `json:"command"`
 		}
 		if json.Unmarshal(sc.Bytes(), &m) != nil {
 			continue
@@ -420,6 +528,10 @@ func (s *shim) input(r io.Reader) error {
 					"error": "Claude Code's interactive mode takes no " + m.Request.Subtype + " request"}
 			}
 			s.emit(map[string]any{"type": "control_response", "response": resp})
+		case "command":
+			if err := s.command(m.Command); err != nil {
+				return err
+			}
 		case "user":
 			pieces, err := s.userPieces(m.Message.Content)
 			if err != nil {
@@ -438,6 +550,109 @@ func (s *shim) input(r io.Reader) error {
 		}
 	}
 	return sc.Err()
+}
+
+// how long a command's panel may take to be drawn, and how long it stays
+// as it is before it is taken as drawn whole
+var (
+	commandWait   = 20 * time.Second
+	commandSettle = time.Second
+)
+
+// command runs /usage, which Claude Code answers itself, asking no model:
+// it is typed, and what Claude Code shows for it is told as the result -p's
+// /usage gives (usageText), its local_command named. The panel is closed
+// after. It is the one command a line {"type":"command"} runs: the plan's
+// allowance read in the interactive mode, where -p's /usage tells no
+// window of it (Claude Code 2.1.316).
+func (s *shim) command(name string) error {
+	if name != "/usage" {
+		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
+			"result": "the helper types no " + name + " in Claude Code's interactive mode"})
+		return nil
+	}
+	for _, c := range name {
+		if _, err := io.WriteString(s.pty, string(c)); err != nil {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// the command menu drawn as it was typed settles, and is left out of
+	// what is read
+	time.Sleep(commandSettle)
+	s.clearScreen()
+	if _, err := io.WriteString(s.pty, "\r"); err != nil {
+		return err
+	}
+	by := time.After(commandWait)
+	last, quiet := "", time.Now()
+	for waiting := true; waiting; {
+		p := s.plain()
+		if p != last {
+			last, quiet = p, time.Now()
+		}
+		// drawn: its windows, and the panel still a moment; or anything
+		// else (an error, a plan with no allowance) still for longer
+		still := time.Since(quiet)
+		if strings.TrimSpace(p) != "" && (usageUsed.MatchString(p) && still >= commandSettle || still >= 3*commandSettle) {
+			break
+		}
+		select {
+		case <-s.changed:
+		case <-time.After(100 * time.Millisecond):
+		case <-by:
+			waiting = false
+		case <-s.exited:
+			return fmt.Errorf("Claude Code ended (%v): %s", s.exit, s.lastScreen())
+		}
+	}
+	_, _ = io.WriteString(s.pty, "\x1b")
+	s.emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "session_id": s.sid,
+		"local_command": "usage", "result": usageText(last)})
+	return nil
+}
+
+var (
+	usageName  = regexp.MustCompile(`^(session|week(?: \([^)]*\))?)`)
+	usageUsed  = regexp.MustCompile(`([0-9.]+)%\s+used`)
+	usageReset = regexp.MustCompile(`Resets (.*?\))`)
+)
+
+// usageText is the plan's allowance as /usage's panel shows it, each
+// window a bar ("Current session ███▌ 99% used", then "Resets 7pm
+// (Asia/Shanghai)" below), said as -p's lines say it: "Current session:
+// 99% used · resets 7pm (Asia/Shanghai)", a window drawn again told as
+// drawn last. Overages are said as /usage says them. A panel with no
+// window is told as drawn, for its words to say why.
+func usageText(screen string) string {
+	t := strings.Join(strings.Fields(screen), " ")
+	var names []string
+	said := map[string]string{}
+	for _, chunk := range strings.Split(t, "Current ")[1:] {
+		name, used := usageName.FindString(chunk), usageUsed.FindStringSubmatch(chunk)
+		if name == "" || used == nil {
+			continue
+		}
+		line := "Current " + name + ": " + used[1] + "% used"
+		if r := usageReset.FindStringSubmatch(chunk[strings.Index(chunk, used[0]):]); r != nil {
+			line += " · resets " + r[1]
+		}
+		if _, ok := said[name]; !ok {
+			names = append(names, name)
+		}
+		said[name] = line
+	}
+	var lines []string
+	for _, n := range names {
+		lines = append(lines, said[n])
+	}
+	if strings.Contains(t, "using your overages") {
+		lines = append(lines, "You are currently using your overages to power your Claude Code usage.")
+	}
+	if len(lines) == 0 {
+		return t
+	}
+	return strings.Join(lines, "\n")
 }
 
 // piece is a part of a user message as it is pasted: words, or the path
@@ -696,6 +911,13 @@ func (s *shim) pasteImage(path string, after int) (int, error) {
 	}
 }
 
+// shownWait is how long a paste of n bytes may take to show: Claude Code
+// takes a long one in at about 100KB a second (a real 3MB paste showed
+// "[Pasted text" after 35s), so pasteWait and a second for every 64KB.
+func shownWait(n int) time.Duration {
+	return pasteWait + time.Duration(n/(64<<10))*time.Second
+}
+
 // shown waits for the prompt to show pasted text: its last words, or
 // Claude Code's "[Pasted text" for a long one. Text "" waits for nothing.
 func (s *shim) shown(text string) error {
@@ -709,7 +931,7 @@ func (s *shim) shown(text string) error {
 	if r := []rune(tail); len(r) > 16 {
 		tail = string(r[len(r)-16:])
 	}
-	shownBy := time.After(pasteWait)
+	shownBy := time.After(shownWait(len(text)))
 shown:
 	for {
 		p := s.plain()
@@ -799,6 +1021,7 @@ func (s *shim) tail(from int64) {
 		select {
 		case <-s.exited:
 			// what it wrote last
+			s.wslr.settle()
 			if line, _ := rd.ReadBytes('\n'); len(line) > 0 {
 				t.row(append(part, line...))
 			}

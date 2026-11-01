@@ -58,6 +58,11 @@ type Seat struct {
 	// credits, and is let spend them. All but used up, it goes before
 	// those used up with nothing to go on with.
 	Credits bool
+	// First: such an account the user set to spend its credits before
+	// another account (provider.CodexCreditsFirst): its windows running
+	// out never put it behind the others (seatTier), so it keeps the
+	// place an account with room has.
+	First bool
 	// TTFT is how long it took lately to the first of its reply, in ms,
 	// for the model this seat would be asked for: a decayed average of its
 	// recent streamed answers, 0 when it hasn't answered one lately.

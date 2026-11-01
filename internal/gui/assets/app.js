@@ -1066,18 +1066,12 @@ function profileDetail(p, footed) {
   return d;
 }
 
-// driftNote: under the name of an agent whose config something else
-// rewrote since magpie set it — the row still shows a magpie model while the
-// agent no longer reaches magpie, or it was put back on a model of its own —
-// what happened, and the one click that sets it again.
-// driftFix is the one thing a drifted agent shows: an amber pill after its
-// name that sets magpie's settings again. What is off is its tooltip; taking
-// the config as it is now is in the row's menu.
-// An agent whose config is right but whose address doesn't answer (#1013)
-// has nothing to set again: its pill says what has to listen there, unless
-// WSL now reaches Windows at another address, which it moves the config to.
-// Likewise one whose requests for magpie go through a proxy that doesn't
-// pass them on (proxied: Codex, Muma102kMichael on X).
+// driftFix: an amber pill after a drifted agent's name (its config was
+// rewritten since magpie set it) that sets magpie's settings again; what is
+// off is its tooltip. With the config right but its address not answering
+// (#1013), or its requests through a proxy that drops them (Codex,
+// Muma102kMichael on X), it says what must listen there, or moves a WSL
+// config to Windows' new address.
 function driftFix(a, label = "Apply again") {
   const d = a.drift, f = a.fields.find((x) => x.key === d.field);
   const want = (f && optionFor(f, d.want)?.label) || d.want;
@@ -13166,6 +13160,11 @@ function renderAccounts(a, p) {
     const capFor = (w) => windowCapOf(p, l.user, w);
     // how many requests it has out at once, and waiting (#892)
     if (p) pill(laneLimitPill(p, l.user, p.id + "@" + String(l.user).toLowerCase(), l.user));
+    // its credits, as on its Usage card (jojonas_xyz on X)
+    if (a.agent === "codex" && !sub?.plugin && !unusable(l)) {
+      const c = creditsRow({ provider: "codex", user: l.user }, "acc-credits");
+      if (c) tools.append(c);
+    }
     const held = capHeldOf(quota?.[l.user], capFor);
     if (held) line.append(capHeldNote(held, held.cap, several, direct));
     line.append(el("span", "grow"));
@@ -13215,7 +13214,7 @@ function renderAccounts(a, p) {
       const forget = forgetOf(true);
       if (l === back) {
         const again = el("span", "using", t("First again once it has room"));
-        again.title = t("magpie signs {agent} back in to this account once it has room again", { agent: a.agentName });
+        again.title = t("magpie signs {agent} back in to this account once it has room again", { agent: a.agentName }) + (a.agent === "codex" ? " " + t("To spend its credits first: ⋯ › Use credits › Before moving to another account.") : "");
         line.append(again);
       }
       if (kept) {
@@ -13236,7 +13235,7 @@ function renderAccounts(a, p) {
       }
     }
     if (quota && !l.lapsed) line.querySelector(".plan").after(accountRefresh(a.agent, p, l.user));
-    row.append(accountQuota(l.lapsed ? { [l.user]: { error: t(l.lapsed) } } : quota, l.user, capFor, p ? (m, w) => windowCapMeter(m, p, l.user, w) : null));
+    row.append(accountQuota(l.lapsed ? { [l.user]: { error: t(l.lapsed) } } : quota, l.user, capFor, p ? (m, w) => windowCapMeter(m, p, l.user, w) : null, a.agent));
     row.classList.add("with-aq"); // not :has(.aq), which Safari 15.0 lacks (#220)
     // Remove goes under ⋯ too, but beside Sign in again while signed out
     if (!row.classList.contains("signed-out")) tools.append(...line.querySelectorAll(":scope > .text.quiet"));
@@ -13547,8 +13546,9 @@ function loginUsageOf(agent) {
 const SIGN_IN_GONE = /sign-in has (expired|lapsed)|sign in again/i;
 
 function quotaError(err, q) {
-  // signed in again in place, settings kept, from the row's Sign in again
-  // (blue12345655 on Discord looked for a way to add it again, found none)
+  // first-run screens the helper can't pass (#4817)
+  if (/^Claude Code: claude-tui: .{0,40}(stays on its first-run screens|shows its first-run notes)/.test(err)) return t("Finish Claude Code's first-run setup, then refresh. Run magpie claude-code to find its executable.");
+  // signed in again in place from the row's Sign in again (blue12345655)
   if (/sign-in has expired/.test(err)) return t("Signed out — choose Sign in again on this account under Providers");
   // a Copilot account GitHub refused the token of (copilot_lapsed.go), as
   // its row says it, in English or already in the user's language
@@ -13566,14 +13566,11 @@ function quotaError(err, q) {
   // it with (accessKeyCard, #1821): the card used to be left out unsaid
   if (/^this plan's usage is read with the account's access key: give its SecretId/.test(err)) return t("This plan's usage needs the account's SecretId and SecretKey — give them in the provider's settings");
   if (/^this plan's usage is read with the account's access key/.test(err)) return t("This plan's usage needs the account's AccessKey ID and Secret — give them in the provider's settings");
-  // ZCode with no GLM Coding Plan and no Start Plan left: nothing to spend,
-  // not a failed read (#1001). The plugin's card (NO_START, packages/zcode)
-  // names no way out, so it is said here; anchored on the whole sentence so
-  // the sign-in errors and "could not be read" are left alone.
+  // ZCode with no plan left: nothing to spend, not a failed read (#1001);
+  // the plugin's card names no way out. Whole sentence, so others pass.
   if (/^this account has no GLM Coding Plan, and ZCode's Start Plan has ended or was never started$/.test(err)) return t("ZCode: no GLM Coding Plan, and no free Start Plan — subscribe to a GLM Coding Plan to use this account");
-  // an OpenCode Go key's windows (planWindows, planquota.go): Go is the
-  // subscribing member's, in their workspace, so a key from anyone else
-  // reads none — said with the way out, as a phone can't hover for it
+  // an OpenCode Go key's windows (planquota.go): only the subscribing
+  // member's key reads them; said with the way out
   if (/^this key has no OpenCode Go subscription/.test(err)) return t("No OpenCode Go on this key — use a key made by the member who subscribed, in that workspace");
   if (/^OpenCode didn't take this key/.test(err)) return t("OpenCode didn't take this key — paste a current one in the provider's settings");
   // a GLM key Zhipu or Z.ai refused (zhipuRefused, planquota.go): the key
@@ -13590,9 +13587,8 @@ function quotaError(err, q) {
   // a remote magpie's gateway key card (#1547, remote_key_limits.go)
   if (/^remote magpie is too old to tell this key's limit/.test(err)) return t("That computer's magpie is too old to tell this key's limit — update magpie there");
   if (/answered its key's limit in a form magpie doesn't read$/.test(err)) return t("That computer answered this key's limit in a form magpie doesn't read — hover for more");
-  // a ClinePass card with its balance but not its limits (#79): the
-  // built-in key card (clineLimitsUnread, cline_usage.go) and the Cline
-  // plugin both begin their error with these words
+  // a ClinePass card with its balance but not its limits (#79): the key
+  // card (cline_usage.go) and the Cline plugin both begin so
   if (/^ClinePass limits couldn't be read/.test(err)) return t("ClinePass limits couldn't be read — hover for why");
   const bal = balanceError(err);
   if (bal) return bal;
@@ -13698,7 +13694,7 @@ function accountRefresh(agent, p, user) {
 
 // accountQuota: an account's allowance as a line of small meters under its
 // name, the reset time on the ones nearly used up, credits and held resets.
-function accountQuota(data, user, capFor = () => 0, settable = null) {
+function accountQuota(data, user, capFor = () => 0, settable = null, prov) {
   const line = el("div", "aq");
   if (!data) {
     line.append(el("span", "skeleton sk-aq"), el("span", "skeleton sk-aq"));
@@ -13710,10 +13706,15 @@ function accountQuota(data, user, capFor = () => 0, settable = null) {
     line.append(el("span", "aq-asof", asOfText(q)));
   }
   if (q?.resets?.count && !q.error) {
-    const words = resetsWords(q.resets);
-    const resets = el("span", "aq-w aq-resets");
-    resets.title = tipLines(words.textContent, words.title);
+    // Codex's are used from here too, as on Usage (roamlog on X)
+    const words = resetsWords(q.resets), use = prov == "codex" && !q.resets.byWindow;
+    const resets = el("span", "aq-w aq-resets" + (use ? " aq-set" : ""));
+    resets.title = tipLines(words.textContent, words.title, use && "\n" + resetUseTitle(q));
     resets.append(words.querySelector(".resets-n"));
+    if (use) {
+      spanBtn(resets).setAttribute("aria-haspopup", "dialog");
+      resets.onclick = (e) => { e.stopPropagation(); askReset({ ...q, provider: prov, user }); };
+    }
     line.append(resets);
   }
   // an account on no plan says so, whatever else can be read of it
@@ -13973,21 +13974,12 @@ function pillNumber(at, val, ph, cls, label, parse, bad, own, set) {
 }
 
 // windowCapMeter: a window's meter on an account's row as the button that
-// sets the window's own cap, in the app's menu: the account's cap, none on
-// this window, a share, or one typed in place. A window of a model family
-// shown as one figure (tiers) stands for several windows and isn't set
-// here; one the cap doesn't count (on-demand) has none to set.
+// sets the window's own cap; not a family's (tiers) or on-demand's.
 function windowCapMeter(m, p, user, w) {
   if (!w.capId || w.tiers) return m;
   const own = windowOwnCapOf(p, user, w), cap = accountCapOf(p, user);
   const name = t(w.name);
-  // a span acting as the button: a <button> here, a flex item of the
-  // wrapping meter line, leaves WebKit's row its one-line height until the
-  // next layout, and the row grows under the pointer at the first click
-  const b = el("span", m.className + " aq-set" + (own ? " own" : ""));
-  b.setAttribute("role", "button");
-  b.tabIndex = 0;
-  b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); b.click(); } };
+  const b = spanBtn(el("span", m.className + " aq-set" + (own ? " own" : "")));
   b.append(...m.childNodes);
   if (own) b.append(el("span", "aq-own", own >= 100 ? t("No cap") : t("Cap {n}%", { n: own })));
   const reset = m.title || (w.resetsAt ? resetText(new Date(w.resetsAt), new Date(w.resetsAt).toLocaleString(intlLang())) : "");
@@ -14134,6 +14126,13 @@ function to100(v) { return Math.max(0, Math.min(100, v)); }
 // quotaNoShare: no share was said (0 is one, absent is not, #3650), or the
 // window is a wallet's balance (#3950): its text or figure is all there is
 function quotaNoShare(w) { return !!w.text || w.used == null || w.balance != null; }
+// spanBtn: a span as a button: a <button> in a wrapping line keeps WebKit's row one line high till the next layout
+function spanBtn(b) {
+  b.tabIndex = 0;
+  b.setAttribute("role", "button");
+  b.onkeydown = (e) => { if (e.key == "Enter" || e.key == " ") { e.preventDefault(); b.click(); } };
+  return b;
+}
 function tipLines(...a) { return a.filter(Boolean).join("\n"); }
 function quotaFill(w) {
   if (w.used == null) return 0;
@@ -15837,6 +15836,8 @@ function renderQuotas(lazy) {
         who.dataset.card = trayCardID(sub);
         if (sub.balanceCard) who.dataset.balCard = sub.balanceCard;
         who.append(...quotaWho(sub));
+        const warm = quotaWarm(sub);
+        if (warm) who.append(warm);
         // in brief, its resets and whether it uses them by itself (#719)
         const auto = brief && autoResetBrief(sub);
         if (auto) who.append(auto);
@@ -15898,8 +15899,8 @@ function renderQuotas(lazy) {
       const credits = !brief && !history && creditsRow(sub, "quota-credits");
       if (credits) card.append(credits);
     }
-    // in the card's head, beside its name: no line of its own
-    // (of the keys in sight: the ones folded away are the foot's button's)
+    // in the card's head, beside its name, of the keys in sight (the
+    // folded ones are the foot's button's)
     if (several) head.append(usageMore(folded.size ? subs.filter((q) => !folded.has(q)) : subs, "text quota-more"));
     if (keys && (folded.size || usageKeysAll.has(first.provider))) card.append(keysMore(first.provider, folded.size));
     if (accts && (folded.size || usageAcctsAll.has(first.provider))) card.append(acctsMore(first.provider, folded.size));
@@ -16067,16 +16068,9 @@ function byUsageOrder(list) {
   return list.map((q, i) => [q, i]).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([q]) => q);
 }
 
-// keyCards puts a key's balance on its plan's card (#1658, MizuIro-H): a
-// Command Code key is told both its plan's 5-hour and weekly windows and
-// its credits, and read apart they were two cards of one name, "Command
-// Code" twice. As a subscription's credits beside its windows (Command
-// Code's own), the balance is the plan card's row under the windows. The
-// same key: one of the plan's name, or with the plan of a provider's one
-// key unnamed, that provider's one balance. A balance that failed or
-// stands in for one that did is left its own card, which says so. The
-// balance's card id goes with it (balanceCard), for a menu bar cell
-// that opens it.
+// keyCards puts a key's balance on its plan's card, a row under the
+// windows, rather than a second card of one name (#1658); one that failed
+// keeps its own card. balanceCard is its id, for the menu bar.
 function keyCards(list) {
   list = sharedBalances(list);
   const plan = (q) => q.windows?.length && !q.balance && !q.error;
@@ -16094,15 +16088,9 @@ function keyCards(list) {
   return gone.size ? list.filter((q) => !gone.has(q)).map((q) => merged.get(q) || q) : list;
 }
 
-// packUsage lays the Usage page's cards out in columns, each as tall as
-// itself, the next going to the column that ends highest (#860). The order
-// reads left to right and stays the page's, for dragging, Alt+arrows and a
-// screen reader. As many 260px columns as fit, unless one fewer leaves much
-// less empty for a page not much taller; decided again when the cards
-// change or the width fits another count. A card growing only packs them
-// again, so what was clicked stays put as the scrollbar comes and goes.
-// Each column's last card reaches down to the tallest column's end, so the
-// bottoms line up (ikunbots on X).
+// packUsage lays the Usage cards in 260px columns, the next card to the
+// column that ends highest, the order still the page's (#860); each
+// column's last reaches the tallest's end (ikunbots on X).
 const USAGE_MIN = 260, USAGE_GAP = 7;
 let usagePacked = null, usagePackFrame = 0;
 function packUsage() {
@@ -17518,12 +17506,8 @@ function panelQuotaCard(q) {
         : i || w.members ? ringName(w) + " " + resetClock(at) : resetText(at);
     }).join(" · ")
     : ws.some((w) => w.used > 0) ? "" : t("Not used yet"));
-  // The first window's own pace as well, in the line already about its
-  // deadline: the thin line under it has no room for what it only hints at,
-  // and a card with no readings of that window has nothing to say (#2079).
-  // Only while that line is drawn (curves on), and only when the deadline
-  // the line names is that window's alone: after "Resets 14:26 · Weekly Oct 31"
-  // it would read as the week's.
+  // the first window's own pace too, while its line is drawn and the
+  // deadline named is that window's alone (#2079)
   const line = quotaRange !== "off" && begun.length === 1 && begun[0] === ws[0] && !ws[0].tiers ? quotaWindowLine(q, ws[0]) : null;
   const pace = line ? quotaEtaText(line, Date.now()) : "";
   if (pace) say.append(el("span", "pq-pace", " · " + pace));
@@ -17598,7 +17582,7 @@ function panelQuotaCard(q) {
       }
       if (credits) {
         if (policy) say.append(document.createTextNode(" · "));
-        say.append(el("b", "", t("Use credits:")), document.createTextNode(" " + t(creditsLast(q) ? "On, after everything else" : creditsOn(q) ? "On" : "Off")));
+        say.append(el("b", "", t("Use credits:")), document.createTextNode(" " + t(creditsLast(q) ? "On, after everything else" : creditsFirst(q) ? "On, before another account" : creditsOn(q) ? "On" : "Off")));
       }
       row.append(say);
       card.append(row);
@@ -17612,10 +17596,7 @@ function panelQuotaCard(q) {
 // panelOptsFolded: the panel cards, by id, whose options are folded.
 const panelOptsFolded = new Set(kept("panelOptsFolded", []));
 
-// resetsWords: a Codex account's rate-limit resets, "↺ 2 resets · until
-// Sat 22:30", the date only when one of them runs out. A GLM Coding team
-// plan's are counted by window, "↺ 2 five-hour resets · 1 weekly reset",
-// and spent on the vendor's page, not here.
+// resetsWords: "↺ 2 resets · until Sat 22:30"; a GLM team's by window.
 function resetsWords(r, q) {
   const w = el("span", "resets-words");
   if (r.byWindow) {
@@ -17652,9 +17633,7 @@ function resetsWords(r, q) {
   return w;
 }
 
-// resetsEach lists every reset left and when it runs out, a line each,
-// soonest first, as the vendor said them (#960: the hover only named the
-// first, which the card already shows).
+// resetsEach: every reset left and when it runs out, soonest first (#960)
 function resetsEach(r) {
   return r.each.map((c, i) => {
     const when = c.until ? new Date(c.until).toLocaleString(intlLang()) : "";
@@ -17664,8 +17643,7 @@ function resetsEach(r) {
   }).join("\n");
 }
 
-// resetUseTitle says which reset a use spends: the one that runs out
-// first, so no one hesitates for fear of losing one that lasts longer.
+// resetUseTitle: a use spends the one that runs out first
 function resetUseTitle(q) {
   const r = q.resets;
   return (r.until
@@ -17812,9 +17790,8 @@ function autoResetButton(q, c) {
   return b;
 }
 
-// Whether a Codex account spends its credits once a window is used up
-// (settings' codexNoCredits, on by default; off, routing holds it till the
-// window renews), and spends them last (codexCreditsLast, gokoshiki).
+// A Codex account's credits: spent (codexNoCredits, on by default), last
+// (codexCreditsLast, gokoshiki) or first (codexCreditsFirst, jojonas_xyz on X).
 function creditsKept(q) {
   return !!(q.user && q.provider === "codex");
 }
@@ -17823,6 +17800,9 @@ function creditsOn(q) {
 }
 function creditsLast(q) {
   return creditsOn(q) && (state.settings?.codexCreditsLast || []).includes(q.user.toLowerCase());
+}
+function creditsFirst(q) {
+  return creditsOn(q) && !creditsLast(q) && (state.settings?.codexCreditsFirst || []).includes(q.user.toLowerCase());
 }
 
 // creditsRow: that say on an account's card, its switches beside it.
@@ -17836,12 +17816,18 @@ function creditsRow(q, cls) {
   row.dataset.user = q.user;
   row.append(say, creditsButton(q));
   if (on) {
-    const last = creditsLast(q);
-    const line = el("div", "ar-case ar-credits-last" + (last ? " on" : ""));
-    const words = el("span", "ar-case-say", t("Only after every other account, key and fallback"));
-    words.title = t(last ? "On: past its windows, it goes after every other account, key and fallback, so its credits are spent last. Click to turn it off." : "Off: past its windows, it keeps its place and answers on its credits there.");
-    line.append(words, creditsSwitch(q, "credits-last", last, words.title, { on: true, last: !last }, t("Use credits") + " · " + words.textContent, last ? "{who} spends its credits when its windows run out" : "{who} spends its credits only after everything else"));
-    row.append(line);
+    // one of first and last at most
+    const first = creditsFirst(q), last = creditsLast(q);
+    const line = (cls, on, say, title, body, said) => {
+      const l = el("div", "ar-case " + cls + (on ? " on" : ""));
+      const words = el("span", "ar-case-say", t(say));
+      words.title = t(title);
+      l.append(words, creditsSwitch(q, cls.slice(3), on, words.title, body, t("Use credits") + " · " + words.textContent, on ? "{who} spends its credits when its windows run out" : said));
+      row.append(l);
+    };
+    line("ar-credits-first", first, "Before moving to another account", first ? "On: past its windows, it keeps its place and Codex's sign-in while it holds credits. Click to turn it off."
+      : "Off: nearly used up, it gives way to an account with room, Codex's sign-in too. Click to turn it on.", { on: true, first: !first }, "{who} spends its credits before moving to another account");
+    line("ar-credits-last", last, "Only after every other account, key and fallback", last ? "On: past its windows, it goes after every other account, key and fallback, so its credits are spent last. Click to turn it off." : "Off: past its windows, it answers on its credits when Routing comes to it.", { on: true, last: !last }, "{who} spends its credits only after everything else");
   }
   return row;
 }
@@ -17870,6 +17856,8 @@ function creditsSwitch(q, cls, on, title, body, label, said) {
       prefs = await writingPrefs(api("settings/codex-credits", { user: q.user, ...body }));
       state.settings = prefs;
       status(t(said, { who: q.user }), "ok");
+      // under an account's ⋯ on Providers, that list again
+      if (b.closest(".acc")) renderProviders();
       renderQuotas();
     } catch (err) {
       b.disabled = false;
@@ -17879,13 +17867,9 @@ function creditsSwitch(q, cls, on, title, body, label, said) {
   return b;
 }
 
-// checkinRow is a WorkBuddy (China), Trae CN or MiniMax Code account's daily check-in
-// on its Usage card: today's (a Beijing day) done, with the credits and
-// the streak, or why not, or the last day it was; the vendor's first such
-// row also holds the switch, which is Settings' "Daily check-in", and a
-// press for its accounts not in yet today (#694, Dazzle-sys:
-// 卡片显示今日是否已经签到; Hu9956: TRAE cn 也有每天签到送100积分;
-// #811, MiniMax Code's).
+// checkinRow: an account's daily check-in on its Usage card, today's
+// (Beijing) or why not; the vendor's first row holds its switch and press
+// (#694, #811)
 const CHECKINS = {
   "": {
     pref: "workbuddyCheckin", api: "workbuddy-checkin",
@@ -18080,6 +18064,8 @@ async function askReset(q) {
   try { await import("./resetask.js"); } catch (err) { return statusErr(err); }
   askResetSheet(q);
 }
+// a Quit's question (quitask.js); unloaded, it quits
+window.askQuit = () => import("./quitask.js").then(() => askQuitSheet(), () => api("window/quit?now=1", {}));
 // closes a confirmation, nothing more (its Cancel, or an OK that only dismisses)
 function cancelAsk(e) { e.stopPropagation(); closeConfirmAsk(); }
 // THIRD_PARTY_NOTICES, which every build carries
@@ -18300,11 +18286,10 @@ function quotaRefresh(q, then) {
     const began = quotaRefreshVersion;
     try {
       const qs = await api("usage/quotas/refresh?provider=" + encodeURIComponent(q.provider) + (q.user ? "&user=" + encodeURIComponent(q.user) : ""), {});
-      const fresh = Array.isArray(qs) && qs.find(x => usageAcctKey(x) === key);
+      let fresh = Array.isArray(qs) && qs.find(x => usageAcctKey(x) === key);
       if (fresh) {
         quotaRefreshVersions.set(key, ++quotaRefreshVersion);
-        // The reply includes every card, but only this one was refreshed.
-        // Another card may have completed its own refresh in the meantime.
+        // only this card was read; others may be newer
         const kept = quotas || [];
         quotas = kept.some(x => usageAcctKey(x) === key) ? kept.map(x => usageAcctKey(x) === key ? fresh : x) : [...kept, fresh];
         quotasAt = Date.now();
@@ -18320,12 +18305,14 @@ function quotaRefresh(q, then) {
         }
         if (!placed) next.push(...replacement);
         quotas = keepRefreshedQuotas(next, began); quotasAt = Date.now();
+        fresh = !q.user && replacement.find(x => x.error && quotas.includes(x));
         // Protect the new identities and the old keys they replaced, so a
         // pending GET can neither erase the new cards nor restore the old.
         const version = ++quotaRefreshVersion;
         for (const x of [q, ...before, ...quotas]) if (belongs(x)) quotaRefreshVersions.set(usageAcctKey(x), version);
       }
       if (then) await then();
+      if (fresh?.error) status(quotaError(fresh.error, fresh), "err");
     } catch (err) {
       statusErr(err);
     } finally {
@@ -19790,8 +19777,8 @@ function renderSettings() {
     $(`#${id}CheckinSegs`).replaceChildren(segs([["off", t("Off")], ["on", t("On")]], s[on] ? "on" : "off", (v) => savePrefs({ ...keep, [on]: v === "on" })));
     sub.textContent = [say, ...ciLines(s[on + "s"])].filter(Boolean).join(" · ");
     sub.title = as;
-    list.querySelectorAll(".ci-acct").forEach((x) => x.remove());
-    list.append(...checkinAccountRows(s, id === "wb" ? "" : id));
+    list.querySelectorAll(".ci-acct, .ci-now-row").forEach((x) => x.remove());
+    list.append(...checkinAccountRows(s, id === "wb" ? "" : id), ...checkinNowRow(s, id === "wb" ? "" : id));
   }
   setWarmTab(warmTab);
   // and the plugins that check in themselves, a row each, their tab shown
@@ -20645,8 +20632,8 @@ function renderTrayUsage(s, keep) {
   $("#trayPaceRow").hidden = !ids.length || document.documentElement.classList.contains("win");
   $("#trayPaceSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")]], s.trayPace ? "on" : "off",
     (v) => savePrefs({ ...keep, trayPace: v === "on" })));
-  // which windows a card shows
-  if (!ids.length) $("#trayWindowsRow").hidden = true;
+  // a card's windows
+  if (!ids.length) $("#trayWindowsRow").hidden = $("#trayNumberRow").hidden = true;
   else import("./traywindows.js").then(() => trayWindowsRow(s, keep, ids, mac), () => {});
   // and the cost beside magpie's own totals, in their cards and the
   // tooltip, which every OS shows with or without cards (BussanQ)
@@ -21037,10 +21024,9 @@ function renderWarmAtOwn(s) {
   }
 }
 
-// renderWarmNow is Warm up now (a Windows user on Discord): one account's
-// warm-up request, the one the scheduled warm-up sends, sent at once. One
-// account is sent at a press; with more the press asks which. What it came
-// to stays on the row's line (warmNowSaid) across renders.
+// renderWarmNow is Warm up now (a Windows user on Discord): the scheduled
+// warm-up's request to one account at once, of several the menu's; what it
+// came to stays on its line (warmNowSaid). An account's card: quotaWarm.
 const warmNowSaid = {};
 function renderWarmNow(agent, users, rowId) {
   const row = $(rowId), sub = row.querySelector(".sub"), box = row.lastElementChild;
@@ -22554,8 +22540,7 @@ async function renderUpdate(r, u) {
   if (kept && !pageShown) kept.remove();
 }
 
-// renderPluginCheckins draws a Daily check-in row for each plugin's
-// provider that checks in itself (auth.checkin), under the Plugins tab.
+// a Daily check-in row per plugin that checks in itself (auth.checkin)
 function renderPluginCheckins(s) {
   const ps = s.checkinPlugins || [];
   $("#warmTab-plugins").hidden = !ps.length;
@@ -22578,13 +22563,21 @@ function renderPluginCheckins(s) {
       }
     }));
     row.append(who, segBox);
-    return [row, ...checkinAccountRows(s, "plugin:" + p.id)];
+    return [row, ...checkinAccountRows(s, "plugin:" + p.id), ...checkinNowRow(s, "plugin:" + p.id)];
   }).flat());
 }
 
-// checkinAccountRows are an Off/On row for each account vendor by checks
-// in (#1902, magicLaLa: 根据每个账号设置是否开启自动签到), under its Daily
-// check-in; none for a vendor of one account, whose switch is its own.
+// one account's Check in now (xiaowu_95660), drawn by checkinnow.js
+function checkinNowRow(s, by) {
+  if (!(s.checkinAccounts || []).some((a) => (a.by || "") === by)) return [];
+  const row = el("div", "row pref warm-now ci-now-row");
+  if (window.ciNowFill) ciNowFill(row, s, by);
+  else { row.hidden = true; import("./checkinnow.js").then(() => ciNowFill(row, s, by), () => {}); }
+  return [row];
+}
+
+// checkinAccountRows: an Off/On row per account under vendor by's Daily
+// check-in when it has two or more (#1902, magicLaLa)
 function checkinAccountRows(s, by) {
   const accts = (s.checkinAccounts || []).filter((a) => (a.by || "") === by);
   if (accts.length < 2) return [];
@@ -22661,7 +22654,7 @@ function prefsKeep(s) {
     codexWarmAts: warmTimes(s.codexWarmAts, s.codexWarmAt), claudeWarmAts: warmTimes(s.claudeWarmAts, s.claudeWarmAt), workbuddyCheckin: !!s.workbuddyCheckin, traeCheckin: !!s.traeCheckin, minimaxCheckin: !!s.minimaxCheckin, qoderCheckin: !!s.qoderCheckin, noStats: !!s.noStats, noUsageStats: !!s.noUsageStats, signInLinkOnly: !!s.signInLinkOnly,
     memberModel: !!s.memberModel, noLoopGuard: !!s.noLoopGuard, claudeLeanPrompt: !!s.claudeLeanPrompt, claudePrintMode: !!s.claudePrintMode, refusalRetries: s.refusalRetries ?? null,
     noUpdatePill: !!s.noUpdatePill, noAutoUpdate: !!s.noAutoUpdate, updateEvery: s.updateEvery || 360, autoRestart: !!s.autoRestart, noAutoDownload: !!s.noAutoDownload, updateChannel: s.updateChannel || "",
-    trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, trayNoLogos: !!s.trayNoLogos, trayNoBird: !!s.trayNoBird, trayPace: !!s.trayPace, trayNoCost: !!s.trayNoCost, trayWindows: s.trayWindows || {}, vision: s.vision || "", visionEffort: s.visionEffort || "", searcherEffort: s.searcherEffort || "", imageGen: s.imageGen || "", imageTimeout: s.imageTimeout || 0, classifyTimeout: s.classifyTimeout || 0, searcher: s.searcher || "", searchFirst: s.searchFirst || "", currency: s.currency || "usd",
+    trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, trayNoLogos: !!s.trayNoLogos, trayNoBird: !!s.trayNoBird, trayNoNumber: !!s.trayNoNumber, trayPace: !!s.trayPace, trayNoCost: !!s.trayNoCost, trayWindows: s.trayWindows || {}, vision: s.vision || "", visionEffort: s.visionEffort || "", searcherEffort: s.searcherEffort || "", imageGen: s.imageGen || "", imageTimeout: s.imageTimeout || 0, classifyTimeout: s.classifyTimeout || 0, searcher: s.searcher || "", searchFirst: s.searchFirst || "", currency: s.currency || "usd",
     chineseUnits: !!s.chineseUnits, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0,
     turnDoneAlert: s.turnDoneAlert || 0, maskAlert: !!s.maskAlert };
 }
@@ -24462,4 +24455,5 @@ if (mode === "window" && params.get("import")) {
     if (providers && view === "providers") renderProviders();
   }).catch(() => {});
 }
+if (mode === "window" && params.get("ask") === "quit") { params.delete("ask"); history.replaceState(null, "", "?" + params); askQuit(); }
 if (mode === "window" && params.get("view") === "providers" && params.get("edit")) editing = params.get("edit");

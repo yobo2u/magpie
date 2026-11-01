@@ -669,7 +669,9 @@ const TOOLS = {
     const t = await ready(session, args);
     if (t.dialog) return fail(notices(t).join("\n"));
     const src = String(args.script).trim();
-    const fn = /^(async\s+)?(function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.test(src);
+    // async may touch its parameters (async()=>…), and a parameter list
+    // holds no parentheses, so (async () => …)() stays an expression.
+    const fn = /^(async\b\s*)?(function\b|\([^()]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.test(src);
     let r;
     if (args.ref) {
       const el = await find(t, args.ref);

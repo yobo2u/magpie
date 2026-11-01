@@ -447,6 +447,44 @@ function quotaWho(q) {
   return out;
 }
 
+// quotaWarm is Warm up on the card of a Codex or Claude account whose
+// 5-hour window isn't running (01huadalang on Discord, who looked here, not
+// in Settings): the request Settings › Usage's Warm up now sends (POST
+// /api/warm-now {agent, user}), for this account. Idle is as the
+// warm-up tells it (idle in codex_warmup.go): nothing used and its reset a
+// whole window away, or gone by; or not read at all, which a Claude account
+// never used is, while a Codex account with no 5-hour window has none to
+// start. One just warmed reads the same for warmSlack, so it waits that out.
+const quotaWarmed = new Map();
+function quotaWarm(q) {
+  const agent = q.provider, user = q.user, key = agent + "\n" + user?.toLowerCase();
+  if (!user || q.error || !(state.settings?.[agent + "Users"] || []).some((u) => u.toLowerCase() === user.toLowerCase())) return null;
+  const w = q.windows?.find((x) => x.name === "5 hours"), now = Date.now(), at = w?.resetsAt ? Date.parse(w.resetsAt) : 0;
+  if (w ? !(at && at <= now) && (w.used > 0 || at && at - now < 5 * 3600e3 - 600e3) : agent !== "claude") return null;
+  const busy = quotaWarmed.get(key);
+  if (busy && busy !== true && now - busy < 600e3) return null;
+  const b = el("button", "text acct-warm" + (busy === true ? " busy" : ""), t("Warm up"));
+  b.type = "button";
+  b.disabled = busy === true;
+  b.title = t("The 5-hour window hasn't started: one tiny request starts it now");
+  b.onclick = async (e) => {
+    e.stopPropagation();
+    quotaWarmed.set(key, true);
+    renderQuotas();
+    try {
+      await api("warm-now", { agent, user });
+      quotaWarmed.set(key, Date.now());
+      status(t("Warmed up {who}", { who: user }), "ok");
+    } catch (err) {
+      quotaWarmed.delete(key);
+      status(t("Couldn't warm up {who}: {why}", { who: user, why: err.message }), "err");
+    }
+    renderQuotas();
+    loadQuotas(); // the window it started
+  };
+  return b;
+}
+
 function ownCalls(n) {
   return t("{n} by magpie itself", { n: fmtN(n) });
 }

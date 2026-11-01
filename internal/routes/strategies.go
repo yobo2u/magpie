@@ -29,6 +29,16 @@ func tier(share float64) int {
 	return 0
 }
 
+// seatTier is tier of the seat's share used, but 0 for one set to spend
+// its credits before another account (Seat.First): a window it uses up
+// doesn't send its requests elsewhere (jojonas_xyz on X).
+func seatTier(s Seat) int {
+	if s.First {
+		return 0
+	}
+	return tier(s.Used)
+}
+
 // byLeft is how a pool's wallets go by what they have left (Seat.Left),
 // as a comparison of two seats by their index: of seats whose balance is
 // in one provider's one unit (Seat.LeftIn), the one with more left first;
@@ -121,7 +131,7 @@ var Smart = Strategy{Order: func(_ string, seats []Seat) []int {
 	left := byLeft(seats, nil)
 	var fine, low, spent []int
 	for i, s := range seats {
-		switch tier(s.Used) {
+		switch seatTier(s) {
 		case 2:
 			spent = append(spent, i)
 		case 1:
@@ -224,7 +234,9 @@ func Drained(key string) {
 // it on the first not used up, in the listed order. Asking again with
 // nothing changed gives the same order, so a preview moves nothing.
 var Drain = Strategy{Exact: true, Order: func(pool string, seats []Seat) []int {
-	spent := func(s Seat) bool { return s.Spent || s.Known && s.Used >= provider.SpentShareOf(provider.Drain) }
+	spent := func(s Seat) bool {
+		return s.Spent || !s.First && s.Known && s.Used >= provider.SpentShareOf(provider.Drain)
+	}
 	drains.Lock()
 	defer drains.Unlock()
 	on := drains.m[pool]
@@ -261,12 +273,54 @@ var Rotate = Strategy{Order: func(pool string, seats []Seat) []int {
 // share of its allowance used, as the vendor says; then, and for other
 // keys, by what magpie sent it lately; prepaid wallets, which have no
 // share, by what they have left first (Seat.Left). Of those all but used up, one that
-// goes on on its credits goes first (spentBefore).
+// goes on on its credits goes first (spentBefore). A seat that tells no
+// share — a pay-as-you-go key, a wallet, an account whose use wasn't read
+// — has Used read 0, and by that 0 alone it went first, burning paid
+// balance while subscription quota sat idle (#4535): it goes after those
+// whose share was told and has room, and before those running low or
+// spent, as Smart and Pace keep the unknown. One not known that tells
+// what it has left as it answers goes first, once, as in Smart and Pace.
 var LeastUsed = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 	left := byLeft(seats, fewerTokens)
+	// shared: the seat's share of its allowance was told — a use past 0
+	// read from it, or a window it renews by. Without one, Used reads 0
+	// because it isn't known, not because there is room.
+	shared := func(s Seat) bool {
+		if !s.Known {
+			return false
+		}
+		if s.Used > 0 {
+			return true
+		}
+		for _, at := range s.Soon {
+			if !at.IsZero() {
+				return true
+			}
+		}
+		return false
+	}
+	// where the seat lands: a learning account first, once, as in Smart
+	// and Pace; then those with room whose share was told; then the
+	// shareless, kept for their cost before a share nearly gone; then
+	// those running low, then spent
+	place := func(s Seat) int {
+		switch t := tier(s.Used); {
+		case s.Learns:
+			return 0
+		case t == 0 && shared(s):
+			return 1
+		case t == 0:
+			return 2
+		default:
+			return t + 2
+		}
+	}
 	idx := identity(len(seats))
 	sort.SliceStable(idx, func(a, b int) bool {
 		sa, sb := seats[idx[a]], seats[idx[b]]
+		if pa, pb := place(sa), place(sb); pa != pb {
+			return pa < pb
+		}
 		if ta, tb := tier(sa.Used), tier(sb.Used); ta == 2 && tb == 2 && sa.Credits != sb.Credits {
 			return sa.Credits
 		}
@@ -311,7 +365,7 @@ var Pace = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 	// band's top and part two alike behind it
 	var byPace []int
 	for i, s := range seats {
-		if tier(s.Used) == 0 && !s.Learns {
+		if seatTier(s) == 0 && !s.Learns {
 			byPace = append(byPace, i)
 		}
 	}
@@ -332,7 +386,7 @@ var Pace = Strategy{ByUse: true, Order: func(_ string, seats []Seat) []int {
 	idx := identity(len(seats))
 	sort.SliceStable(idx, func(a, b int) bool {
 		sa, sb := seats[idx[a]], seats[idx[b]]
-		if ta, tb := tier(sa.Used), tier(sb.Used); ta != tb {
+		if ta, tb := seatTier(sa), seatTier(sb); ta != tb {
 			return ta < tb
 		} else if ta == 2 && sa.Credits != sb.Credits {
 			return sa.Credits

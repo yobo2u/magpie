@@ -174,6 +174,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		CodexResetLead:       180,
 		CodexNoCredits:       []string{"me@example.com"},
 		CodexCreditsLast:     []string{"two@example.com"},
+		CodexCreditsFirst:    []string{"three@example.com"},
 		CodexWarmAtOf:        map[string]string{"me@example.com": "09:00"},
 		TextSize:             125,
 		UpdateSkip:           "0.1.500",

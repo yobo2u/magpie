@@ -103,6 +103,17 @@ func TestBrowserToolsInARealBrowser(t *testing.T) {
 
 	ok("browser_scroll", map[string]any{"direction": "down", "amount": 600}, "Scrolled down 600px")
 	ok("browser_evaluate", map[string]any{"script": "window.scrollY"}, "600")
+	// An async function is called and awaited however it is spaced, and
+	// an expression that calls one is awaited, not called again.
+	for _, script := range []string{
+		"async()=>{await new Promise(r=>setTimeout(r,50));return 'awaited'}",
+		"async () => { await null; return 'awaited' }",
+		"async function(){ await null; return 'awaited' }",
+		"(async()=>{await new Promise(r=>setTimeout(r,50));return 'awaited'})()",
+		"Promise.resolve('awaited')",
+	} {
+		ok("browser_evaluate", map[string]any{"script": script}, `"awaited"`)
+	}
 	ok("browser_text", nil, "Magpie fixture", "Bottom of the page")
 
 	shot := call("browser_screenshot", nil)
