@@ -236,7 +236,8 @@ chose "No, exit" in the real gateway, and every run went `-p`.
 A run is `-p`, as before, when (`claudeTUI`):
 
 - Settings › Models › Replies › Claude Code's interactive mode is Off
-  (`claudePrintMode`);
+  (`claudePrintMode`); (with Interactive only, each case below fails instead:
+  see [Interactive only](#interactive-only-claudetuionly));
 - it is Claude Code in WSL whose home the probe didn't find, or, in
   the distro user's own folder, one Windows can't read;
 - the request has safeguards, client cache marks, a JSON schema, an image
@@ -290,6 +291,35 @@ it could become `-p`, and every try was answered 502 "Claude Code has
 not answered magpie's initialize request in 10s" (#4504). A helper that
 answers nothing even then is ended, the mark is written, and `start`
 starts the turn again as `-p`.
+
+### Interactive only (`claudeTUIOnly`)
+
+The setting has a third choice, Interactive only, for users who would
+rather a request fail than go out as `-p`. With it (`claudeTUIOnly()`,
+which `claudePrintMode` set too overrides):
+
+- a run that `claudeTUI` would make `-p` (any reason above) is not
+  started; the request gets an error naming the reason and the setting
+  (`claudeOnlyErr`, `claudeNotTUIWhy`);
+- the helper is handed `MAGPIE_CLAUDE_TUI_ONLY=1` (`claudetui.OnlyEnv`,
+  `claudeCLI.tuiEnv`). Where it would become `-p` (no start, `ready`'s
+  sign-in, first-run notes, untrusted folder or timeout) it exits with
+  the reason instead (`fallBack` in `Run`), and it ignores the broken mark;
+- a helper that never answers `initialize` ends the turn with an error,
+  not a `-p` try. The mark is still written, but the `broken` code is
+  not counted under Interactive only (`claudeMachineWhy`), so the next
+  run tries the interactive mode again;
+- the model test's and warm-up's "hi" (`askClaude`) goes through the
+  helper too (`askClaudeTUI`), in stream-json, and its stdin is closed at
+  the first result.
+
+Reading the plan's allowance (`/usage`) asks no model and stays `-p`.
+The provider page's "Claude Code runs as" row reads `ClaudeMode.Only`:
+with the interactive mode in use it says a request it can't take fails,
+and its card says nothing runs as `-p`; where the interactive mode can't
+run, the pill names Interactive only, never `claude -p`, and says Claude
+requests fail and why, with Change in Settings. A request refused this
+way never ran, so it isn't the row's last request (`noteClaudeRun`).
 
 ## Why turns go on in one run
 

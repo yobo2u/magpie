@@ -120,8 +120,10 @@ type Provider struct {
 	// its window resets first, so less allowance is lost at reset.
 	// The window can be shorter than a week. "weight" by each key's
 	// weight, a key with 3 taking three requests to one with 1's.
-	// Whichever it is, one out of credit, out of quota, rate limited or
-	// failing is passed over for as long as that lasts.
+	// "drain" one until it is used up, then the next, which keeps them
+	// when an earlier one renews (routes.Drain). Whichever it is, one out
+	// of credit, out of quota, rate limited or failing is passed over for
+	// as long as that lasts.
 	Routing string `json:"routing,omitempty"`
 
 	// Sink sends a key or account that a 429 rate limited while it still
@@ -163,6 +165,14 @@ type Provider struct {
 	// in the order they came (see Concurrency). nil follows what a
 	// plugin's provider says it takes, else none; 0 is no limit.
 	MaxConcurrency *int `json:"maxConcurrency,omitempty"`
+	// MaxAccounts is how many of its accounts or keys take requests at
+	// the same time (01huadalang on Discord: ZCode's firewall blocks the
+	// address that three of its accounts ask from at once, and two are
+	// fine). Routing goes over the first that many it would ask, in its
+	// order and not resting; the others wait as reserves until one of
+	// those rests (out of quota, rate limited, failing). nil follows what
+	// a plugin's provider says, else none; 0 is no limit (see AtOnce).
+	MaxAccounts *int `json:"maxAccounts,omitempty"`
 	// AccountConcurrency is, for one account or key, its own limit over
 	// MaxConcurrency (#892): an account by its name in lower case, a key
 	// by its KeyID; 0 there is no limit for it. One not in it takes the
@@ -563,7 +573,7 @@ type file struct {
 }
 
 // Path is the file the user's providers live in.
-func Path() string { return filepath.Join(appdir.Config(), "providers.json") }
+func Path() string { return appdir.Join(appdir.Config(), "providers.json") }
 
 // load is the file for a read that goes on without it: start-up, the
 // gateway, the catalog. One that can't be read is taken as empty there;
@@ -767,6 +777,10 @@ func (p Provider) clone() Provider {
 		v := *p.MaxConcurrency
 		p.MaxConcurrency = &v
 	}
+	if p.MaxAccounts != nil {
+		v := *p.MaxAccounts
+		p.MaxAccounts = &v
+	}
 	if p.ZhipuTeam != nil {
 		v := *p.ZhipuTeam
 		p.ZhipuTeam = &v
@@ -837,6 +851,7 @@ func withPicks(a, pk Provider) Provider {
 	a.CapStop, a.CapCareful = pk.CapStop, pk.CapCareful
 	a.AccountNames = pk.AccountNames
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
+	a.MaxAccounts = pk.MaxAccounts
 	a.AccountConcurrency, a.QueueLimit, a.QueueWait = pk.AccountConcurrency, pk.QueueLimit, pk.QueueWait
 	a.AccountWeights = pk.AccountWeights
 	a.MaxRPM = pk.MaxRPM
@@ -858,11 +873,14 @@ func withPicks(a, pk Provider) Provider {
 	return a
 }
 
-// Hidden lists the signed-in accounts the user removed from magpie.
+// Hidden lists the signed-in accounts the user removed from magpie. The
+// file is read once, as parsed until it changes: a parse of it for each
+// account was 68 MB of the Providers page's 1.4 GB in twenty loads.
 func Hidden() []Provider {
 	var out []Provider
+	saved := storedFile().Providers
 	for _, a := range Accounts() {
-		for _, p := range load().Providers {
+		for _, p := range saved {
 			if p.ID == a.ID && p.Hidden {
 				a.Quiet, a.Tucked = p.Quiet, p.Tucked
 				out = append(out, a)
@@ -982,7 +1000,7 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, BestInFamily: p.BestInFamily, RateWindows: p.RateWindows, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, HiddenDrawers: p.HiddenDrawers, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, CapStop: p.CapStop, CapCareful: p.CapCareful, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PriceRate: p.PriceRate, CountFree: p.CountFree, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, PromptAsWritten: p.PromptAsWritten, Unredacted: p.Unredacted, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, NoModels: p.NoModels, BestInFamily: p.BestInFamily, RateWindows: p.RateWindows, PickedFrom: p.PickedFrom, Delisted: p.Delisted, Unlisted: p.Unlisted, HiddenDrawers: p.HiddenDrawers, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, CapStop: p.CapStop, CapCareful: p.CapCareful, AccountNames: p.AccountNames, MaxConcurrency: p.MaxConcurrency, MaxAccounts: p.MaxAccounts, AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PriceRate: p.PriceRate, CountFree: p.CountFree, QuotaRest: p.QuotaRest, QuotaResetAt: p.QuotaResetAt, RestCap: p.RestCap, PinUpstream: p.PinUpstream, NativeCompaction: p.NativeCompaction, PromptAsWritten: p.PromptAsWritten, Unredacted: p.Unredacted, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
 	} else {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
@@ -1506,7 +1524,7 @@ func normalize(p Provider) Provider {
 	if (p.Preset == OMLXPreset || p.Preset == MLXServePreset || p.Preset == "ollama" || p.Preset == "ollama-cloud") && p.Decide == "" && p.Chat != "" {
 		p.Decide = p.Chat
 	}
-	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && !PluginRouting(p.Routing) {
+	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && p.Routing != Drain && !PluginRouting(p.Routing) {
 		p.Routing = ""
 	}
 	if !slices.Contains(Affinities, p.Affinity) {
@@ -1517,6 +1535,10 @@ func normalize(p Provider) Provider {
 	}
 	if p.MaxConcurrency != nil && *p.MaxConcurrency < 0 {
 		p.MaxConcurrency = new(int)
+	}
+	if p.MaxAccounts != nil {
+		v := min(max(*p.MaxAccounts, 0), MaxLimit)
+		p.MaxAccounts = &v
 	}
 	p.AccountConcurrency = normalAccountConcurrency(p.AccountConcurrency)
 	p.AccountWeights = normalAccountWeights(p.AccountWeights)
@@ -1678,21 +1700,32 @@ func (p Provider) Base(proto Protocol) string {
 	return ""
 }
 
+// speaksLooked counts Speaks' looks, for a test.
+var speaksLooked atomic.Int64
+
 // Speaks lists the protocols the vendor serves natively, preferred first.
 func (p Provider) Speaks() []Protocol {
+	speaksLooked.Add(1)
+	return slices.Collect(p.speaking)
+}
+
+// speaking is Speaks one protocol at a time, for a look that wants only
+// the first (Host): a list built for it was 8 MB of what twenty polls of
+// the Providers page allocated with real accounts.
+func (p Provider) speaking(yield func(Protocol) bool) {
 	// a Google sign-in speaks Code Assist, and only that
 	if p.Account != nil && p.Account.codeAssist != "" && !p.IsPlugin() {
-		return []Protocol{CodeAssist}
+		yield(CodeAssist)
+		return
 	}
-	var out []Protocol
 	for _, pr := range Protocols {
-		if p.Base(pr) != "" {
-			out = append(out, pr)
+		if p.Base(pr) != "" && !yield(pr) {
+			return
 		}
 	}
 	// a plugin's Gemini models, beside what else it serves
-	if p.IsPlugin() && p.Account.codeAssist != "" {
-		out = append(out, CodeAssist)
+	if p.IsPlugin() && p.Account.codeAssist != "" && !yield(CodeAssist) {
+		return
 	}
 	// Factory's Gemini models, on generateContent. A model droid didn't
 	// list stays on the other three (factoryAPIs); this is not one of them.
@@ -1703,12 +1736,11 @@ func (p Provider) Speaks() []Protocol {
 	// one).
 	if p.IsVertex() {
 		if p.vertexBase() != "" {
-			out = append(out, Gemini)
+			yield(Gemini)
 		}
 	} else if p.FactoryGemini() || p.Gemini != "" {
-		out = append(out, Gemini)
+		yield(Gemini)
 	}
-	return out
 }
 
 // FactoryGemini is Factory's sign-in, whose Gemini models are asked on its
@@ -1843,7 +1875,7 @@ func (p Provider) Host() string {
 	if p.Account != nil && p.Account.moved {
 		return p.Account.wasHost // not plugin://<id>
 	}
-	for _, pr := range p.Speaks() {
+	for pr := range p.speaking {
 		if u := p.Base(pr); u != "" {
 			return HostOf(u)
 		}
@@ -1871,8 +1903,23 @@ func (p Provider) Where() string {
 // IsOpenCode reports whether the provider is OpenCode's gateway (Zen or Go),
 // which routes and caches by conversation and turns away requests that do
 // not name one in x-opencode-session.
-func (p Provider) IsOpenCode() bool {
-	return OpenCodeURL("//" + p.Host()) // its port, if it names one, aside
+func (p Provider) IsOpenCode() bool { return openCodeAt(p.Host()) }
+
+// openCodeAt is OpenCodeURL for a host as Host gives it, its port and
+// any user aside, read without parsing a URL: the providers' page asks
+// IsOpenCode for each model, and url.Parse there was 7 MB of what twenty
+// window polls allocated.
+func openCodeAt(h string) bool {
+	if i := strings.LastIndexByte(h, '@'); i >= 0 {
+		h = h[i+1:]
+	}
+	if strings.HasPrefix(h, "[") {
+		return false // an IPv6 address
+	}
+	if i := strings.IndexByte(h, ':'); i >= 0 {
+		h = h[:i]
+	}
+	return openCodeHost(h)
 }
 
 // IsBedrock reports whether the provider is Amazon Bedrock: its runtime

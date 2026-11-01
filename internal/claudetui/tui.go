@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/wslrun"
 )
 
@@ -104,7 +105,8 @@ type shim struct {
 // with stream-json on standard input and output: interactive, with the
 // same model, tools and settings (interactiveArgs). One that doesn't come
 // up becomes the -p run it stands for (printMode), reading the input
-// still unread.
+// still unread, unless the user has it never be -p (OnlyEnv): then it
+// ends, saying why.
 func Run(args []string) error {
 	if len(args) < 1 {
 		return errors.New("usage: magpie " + Command + " <claude> [claude -p's arguments]")
@@ -119,7 +121,17 @@ func Run(args []string) error {
 		// wsl.exe's own arguments, then Claude Code's
 		pargs = append(slices.Clone(wsl.Args), pargs...)
 	}
-	if since, ok := BrokenSince(); ok {
+	only := os.Getenv(OnlyEnv) == "1"
+	// fallBack is the -p run, or with OnlyEnv the end, for why
+	fallBack := func(why string) error {
+		if only {
+			fmt.Fprintf(os.Stderr, "claude-tui: %s; the interactive mode only is set, so this run doesn't fall back to -p\n", why)
+			return fmt.Errorf("Claude Code's interactive mode didn't run, and magpie is set to use only it: %s", why)
+		}
+		fmt.Fprintf(os.Stderr, "claude-tui: %s; this run is -p\n", why)
+		return printMode(path, pargs)
+	}
+	if since, ok := BrokenSince(); ok && !only {
 		fmt.Fprintf(os.Stderr, "claude-tui: Claude Code's interactive mode failed to start %s ago; this run is -p\n", time.Since(since).Round(time.Second))
 		return printMode(path, pargs)
 	}
@@ -156,8 +168,7 @@ func Run(args []string) error {
 	if err := s.start(path, append(slices.Clone(wslArgs(wsl)), args...)); err != nil {
 		s.tap.drop()
 		MarkBroken()
-		fmt.Fprintf(os.Stderr, "claude-tui: Claude Code's interactive mode could not start (%v); this run is -p\n", err)
-		return printMode(path, pargs)
+		return fallBack(fmt.Sprintf("Claude Code's interactive mode could not start (%v)", err))
 	}
 	defer s.stop()
 	defer s.dropImages()
@@ -178,8 +189,7 @@ func Run(args []string) error {
 		signal.Reset()
 		s.stop()
 		s.tap.drop()
-		fmt.Fprintf(os.Stderr, "claude-tui: %v; this run is -p\n", err)
-		return printMode(path, pargs)
+		return fallBack(err.Error())
 	}
 	clearBroken()
 	s.emit(map[string]any{"type": "system", "subtype": "init", "session_id": s.sid})
@@ -198,7 +208,7 @@ func wslArgs(wsl *WSL) []string {
 
 // configDir is the folder Claude Code keeps its state in.
 func configDir() string {
-	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+	if d := appdir.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		return d
 	}
 	home, _ := os.UserHomeDir()

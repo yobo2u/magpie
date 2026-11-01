@@ -1057,8 +1057,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		s := state()
-		writeJSON(rw, s)
-		keepState(s)
+		if sum, ok := writeStateJSON(rw, s); ok {
+			keepStateSummed(s, sum)
+		}
 	})
 	mux.HandleFunc("POST /api/set", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Agent, Field, Value string }
@@ -1524,6 +1525,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.CodexResetLead = cur.CodexResetLead         // and how early before one expires (codex-reset-lead)
 		// and which of them spend their credits, set there too
 		in.CodexNoCredits = cur.CodexNoCredits
+		in.CodexCreditsLast = cur.CodexCreditsLast // and which only after everything else
 		// and each Codex account's own daily warm-up (codex-warm-at below)
 		in.CodexWarmAtOf = cur.CodexWarmAtOf
 		// and the text size, which the keyboard changes too (text-size below)
@@ -2049,11 +2051,13 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		writeJSON(rw, settingsState())
 	})
 	// whether a Codex account spends its credits once its allowance is
-	// used up, the Usage card's toggle, set on its own
+	// used up, the Usage card's toggle, set on its own, and with Last
+	// whether only after everything else (left as it is when not sent)
 	mux.HandleFunc("POST /api/settings/codex-credits", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			User string
 			On   bool
+			Last *bool
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
@@ -2063,7 +2067,14 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, fmt.Errorf("which Codex account?"))
 			return
 		}
-		if err := provider.SetCodexCredits(in.User, in.On); err != nil {
+		mode := provider.CreditsOff
+		if in.On {
+			mode = provider.CreditsOn
+			if (in.Last == nil && provider.CodexCreditsLast(in.User)) || (in.Last != nil && *in.Last) {
+				mode = provider.CreditsLast
+			}
+		}
+		if err := provider.SetCodexCreditsMode(in.User, mode); err != nil {
 			fail(rw, err)
 			return
 		}

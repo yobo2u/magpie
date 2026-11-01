@@ -666,6 +666,7 @@ func warmSessions() {
 var warmOnce sync.Once
 
 func warmStart() {
+	steadyGCStart()
 	go func() {
 		// a fresh install reads no agent's sessions until asked; one
 		// that read them before keeps reading them (decided once)
@@ -795,6 +796,7 @@ var tightGC struct {
 	n      int  // reads under it
 	was    int  // GOGC before the first
 	hooked bool // a retightenGC is waiting for the next collection
+	steady bool // steadyGCStart has run: retightenGC sets steadyPercent between reads
 }
 
 // tightenGC begins a read under a tight GC; undo ends it.
@@ -863,16 +865,62 @@ func tightPercent(live int64, was int) int {
 func retightenGC() {
 	tightGC.Lock()
 	defer tightGC.Unlock()
-	if tightGC.n == 0 {
+	if tightGC.n == 0 && !tightGC.steady {
 		tightGC.hooked = false
 		return
 	}
 	s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
 	metrics.Read(s)
 	if s[0].Value.Kind() == metrics.KindUint64 {
-		debug.SetGCPercent(tightPercent(int64(s[0].Value.Uint64()), tightGC.was))
+		live := int64(s[0].Value.Uint64())
+		if tightGC.n > 0 {
+			debug.SetGCPercent(tightPercent(live, tightGC.was))
+		} else {
+			debug.SetGCPercent(steadyPercent(live))
+		}
 	}
 	afterNextGC(retightenGC)
+}
+
+// steadyGCStart has the heap grow by half of what it holds before a
+// collection, or by steadyGCRoom when that is more, not Go's default of
+// all of it, for the life of the process; a GOGC the user set is kept.
+// A window resting on ~60 MB live polls /api/state, /api/drift and
+// /api/providers, ~10 MB thrown away a round, so at the default its
+// footprint peaked at 138 MB; under half, 107-108 MB, for ~9% more CPU in
+// the polls. Reads under a tight GC still set their tenth while they run.
+func steadyGCStart() {
+	if os.Getenv("GOGC") != "" {
+		return
+	}
+	tightGC.Lock()
+	defer tightGC.Unlock()
+	tightGC.steady = true
+	if tightGC.n == 0 {
+		debug.SetGCPercent(steadyPercent(0))
+	}
+	if !tightGC.hooked {
+		tightGC.hooked = true
+		afterNextGC(retightenGC)
+	}
+}
+
+// steadyGCPercent is the half steadyGCStart lets the heap grow by.
+const steadyGCPercent = 50
+
+// steadyGCRoom is the least it grows by: half of a small heap is a few
+// MB, and a heap under 64 MB grows by 32 MB, never by more than Go's
+// default.
+const steadyGCRoom = 32 << 20
+
+// steadyPercent is the GOGC steadyGCStart sets on a live heap of live
+// bytes (0 before the first collection: steadyGCPercent).
+func steadyPercent(live int64) int {
+	p := steadyGCPercent
+	if live > 0 {
+		p = max(p, int(min(steadyGCRoom*100/live, 100)))
+	}
+	return p
 }
 
 // afterNextGC runs fn on the finalizer goroutine once the next collection

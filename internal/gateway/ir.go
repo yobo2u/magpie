@@ -171,7 +171,9 @@ type Tool struct {
 
 // Request is a call to a model, whichever API it arrived in.
 type Request struct {
-	// clientCache is non-nil only for the Claude bridge's explicit opt-in.
+	// clientCache is non-nil only for a request read with its client's
+	// marks: the Claude bridge's explicit opt-in, and a Messages ask
+	// translated to an Anthropic upstream (parseTranslated, #4571).
 	clientCache *clientCache
 	// leanPrompt has the Claude bridge give the caller's instructions as
 	// the run's system prompt, in place of Claude Code's (ClaudeLeanPrompt).
@@ -918,6 +920,10 @@ func budgetOf(effort string) int {
 	}
 	return 10000
 }
+
+// ThinkingBudget is the Anthropic thinking budget the gateway reads an
+// effort level as, for an agent's config that has to name one (ZCode's).
+func ThinkingBudget(effort string) int { return budgetOf(effortOf(effort)) }
 
 // effortOfBudget goes the other way, for Anthropic clients asking others.
 func effortOfBudget(n int) string {

@@ -206,6 +206,7 @@
     for (const e of all) {
       if (!e.target.isConnected) { cardSizes.unobserve(e.target); continue; }
       const card = e.target, w = e.contentRect.width;
+      if (!w) continue; // out of sight (#4652)
       cardWidth[card.dataset.place] = w;
       // on the next frame: a class changed in the observer's own call
       // changes the card's height, which WebKit reports as a
@@ -407,6 +408,20 @@
   // opts.open: this request was opened to see its context window (the
   // Usage page's Context tab), so it shows unfolded, it alone: the next
   // request drawn in the card takes the reader's choice again
+  // a window as a thin bar, a part each
+  function stackBar(p) {
+    const w = p.window || 0, bar = el("span", "ctx-stack"), scale = Math.max(w, p.tokens, 1);
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", t("{used} of {window} tokens used", { used: fmtK(p.tokens), window: fmtK(w || p.tokens) }));
+    for (const k of PARTS) {
+      const i = el("i", "k-" + k), n = (p.parts || []).find((x) => x.kind === k)?.tokens || 0;
+      i.title = partName(k);
+      i.style.width = +(Math.max(0, n) / scale * 100).toFixed(2) + "%";
+      bar.append(i);
+    }
+    return bar;
+  }
+  window.ctxStack = stackBar;
   function ctxCard(r, opts = {}) {
     const card = el("div", "ctx-card" + (opts.foldable && ctxShut && !opts.open ? " shut" : ""));
     card.dataset.place = opts.place || "";
@@ -757,20 +772,8 @@
         const short = el("span", "ctx-short");
         short.append(num("span", "", p.tokens), window ? " / " + fmtK(window) + " · " + pct(full) : "");
         head.append(short);
-        // folded, a thin bar of what fills the window, a part each; it is
-        // morphed with the head, so a live request moves its widths only
-        const bar = el("span", "ctx-stack");
-        bar.setAttribute("role", "img");
-        bar.setAttribute("aria-label", t("{used} of {window} tokens used", { used: fmtK(p.tokens), window: fmtK(window || p.tokens) }));
-        const scale = Math.max(window, p.tokens, 1);
-        for (const k of PARTS) {
-          const n = p.parts.find((x) => x.kind === k)?.tokens || 0;
-          const i = el("i", "k-" + k);
-          i.title = partName(k);
-          i.style.width = +(Math.max(0, n) / scale * 100).toFixed(2) + "%";
-          bar.append(i);
-        }
-        head.append(bar);
+        // folded, the bar: morphed, so a live request moves widths only
+        head.append(stackBar(p));
       }
       head.append(el("span", "grow"));
       // whose request it is and the model it went to; in a narrow card the

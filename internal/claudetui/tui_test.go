@@ -425,6 +425,93 @@ func TestShimFallsBackToPrint(t *testing.T) {
 	}
 }
 
+// runOnly runs the shim with OnlyEnv, in home, told "hello", until it
+// exits or answers: what it wrote, its stderr, and how it ended.
+func runOnly(t *testing.T, home string, env []string) (out, stderr string, err error) {
+	t.Helper()
+	exe, _ := os.Executable()
+	cfg := filepath.Join(home, "claude")
+	tmp := filepath.Join(home, "tmp")
+	_ = os.Mkdir(tmp, 0o700)
+	cmd := exec.Command(exe, append([]string{fakePath(t)}, pArgs...)...)
+	cmd.Env = append(os.Environ(), "MAGPIE_TUI_TEST=shim", OnlyEnv+"=1", "HOME="+home, "XDG_CACHE_HOME="+filepath.Join(home, "cache"), "LOCALAPPDATA="+filepath.Join(home, "cache"),
+		"TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp, "CLAUDE_CONFIG_DIR="+cfg)
+	cmd.Env = append(cmd.Env, env...)
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hello"}})
+	_, _ = stdin.Write(append(b, '\n'))
+	done := make(chan string, 1)
+	go func() {
+		var all strings.Builder
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			all.WriteString(sc.Text() + "\n")
+			if strings.Contains(sc.Text(), `"type":"result"`) {
+				break
+			}
+		}
+		done <- all.String()
+	}()
+	select {
+	case out = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the shim neither answered nor ended in 30s")
+	}
+	if !strings.Contains(out, `"type":"result"`) {
+		err = cmd.Wait()
+	}
+	return out, errb.String(), err
+}
+
+// With OnlyEnv (the user's "Interactive only"), an interactive mode that
+// doesn't come up ends the run, saying why, and never becomes -p; a
+// machine marked broken tries it again.
+func TestShimOnlyNeverPrints(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		env  []string
+	}{
+		{"failed start", []string{"FAKE_FAIL=1"}},
+		{"untrusted folder", []string{"FAKE_TRUST=1"}},
+		{"asks to sign in", []string{"FAKE_LOGIN=1"}},
+		{"first-run notes", []string{"FAKE_NOTES=1"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out, stderr, err := runOnly(t, t.TempDir(), c.env)
+			if err == nil || strings.Contains(out, "print mode") {
+				t.Fatalf("ended %v, wrote %q", err, out)
+			}
+			if !strings.Contains(stderr, "doesn't fall back to -p") || !strings.Contains(stderr, "magpie is set to use only it") {
+				t.Fatalf("stderr %q", stderr)
+			}
+		})
+	}
+	t.Run("marked broken", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+		t.Setenv("LOCALAPPDATA", filepath.Join(home, "cache"))
+		MarkBroken()
+		if _, ok := BrokenSince(); !ok {
+			t.Fatal("no mark")
+		}
+		out, stderr, err := runOnly(t, home, nil)
+		if err != nil || strings.Contains(out, "print mode") || !strings.Contains(out, "echo: hello") {
+			t.Fatalf("ended %v, wrote %q, stderr %q", err, out, stderr)
+		}
+	})
+}
+
 // Each failed start in a row keeps runs on -p longer, to a day; one that
 // shows its prompt forgets them.
 func TestBrokenGrows(t *testing.T) {

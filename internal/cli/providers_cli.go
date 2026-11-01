@@ -42,8 +42,9 @@ const providerUsage = `usage:
                                           compaction=native asks the provider Codex's own compaction and hands
                                           Codex its sealed item as it came (a Responses API, a ChatGPT account,
                                           Copilot), compaction=magpie, the default, has magpie summarise
-                                          routing=smart|order|rotate|usage|pace|weight|free|fast spreads requests
-                                          over its keys or accounts (fast: the one that answered fastest lately first);
+                                          routing=smart|order|rotate|usage|pace|weight|free|fast|drain spreads requests
+                                          over its keys or accounts (fast: the one that answered fastest lately first;
+                                          drain: one until it is used up, then the next, never back to an earlier one);
                                           prompt=as-written sends Antigravity the system prompt exactly as written;
                                           prompt=default, the default, breaks up the lines Google answers with a
                                           false 429 (Codex's, Claude Code's, Hermes' old persona) with a zero-width space
@@ -92,6 +93,10 @@ const providerUsage = `usage:
                                           past either a request is turned away with a 429 (0: no bound)
   magpie provider rpm <id> [n|off]        how many requests each account or key sends the vendor in any minute;
                                           one more waits for room, up to 2 minutes, then is turned away with a 429
+  magpie provider at-once <id> [n|off|default]
+                                          how many of its accounts or keys take requests at the same time, the first
+                                          in the list; the next takes over when one runs out or fails (off: no limit,
+                                          default: what its plugin says)
   magpie provider quota-rest <id> [30m|6h|7d|until 08:00|until 00:00+08:00|default]
                                           how long a key sits out once the vendor says it is out of its allowance
                                           without saying when it is back (default: 15 minutes; at most 8 days),
@@ -630,6 +635,8 @@ func providerCmd(args []string) error {
 		return queueCmd(rest)
 	case "rpm":
 		return rpmCmd(rest)
+	case "at-once", "accounts-at-once":
+		return atOnceCmd(rest)
 	case "refresh-every":
 		return refreshEveryCmd(rest)
 	case "auto-include":
@@ -1234,7 +1241,7 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			if r == provider.Manual || r == provider.Cheapest {
 				// cheap: its keys and accounts all bill the provider's one
 				// price, so there is nothing to weigh
-				return fmt.Errorf("routing=%s is a group's: a provider's keys or accounts are routed smart, order, rotate, usage, pace, weight, free or fast", r)
+				return fmt.Errorf("routing=%s is a group's: a provider's keys or accounts are routed smart, order, rotate, usage, pace, weight, free, fast or drain", r)
 			}
 			p.Routing = r
 		case "icon":
@@ -1846,6 +1853,47 @@ func rpmCmd(rest []string) error {
 		fmt.Printf("%s · each account or key: at most %d requests a minute\n", p.Name, n)
 	} else {
 		fmt.Printf("%s · each account or key: no limit on requests a minute\n", p.Name)
+	}
+	return nil
+}
+
+// atOnceCmd shows, or sets, how many of a provider's accounts or keys take
+// requests at the same time (01huadalang on Discord: three ZCode accounts
+// at once got the address refused with a 405, two didn't). The others wait
+// in reserve, in the list's order.
+func atOnceCmd(rest []string) error {
+	usage := fmt.Errorf("magpie provider at-once <id> [n|off|default]")
+	if len(rest) < 1 || len(rest) > 2 {
+		return usage
+	}
+	p, err := provider.Find(rest[0])
+	if err != nil {
+		return err
+	}
+	if len(rest) > 1 {
+		var n *int
+		switch s := strings.ToLower(strings.TrimSpace(rest[1])); s {
+		case "default", "plugin":
+		case "off", "none", "no", "-":
+			n = new(int)
+		default:
+			v, err := strconv.Atoi(s)
+			if err != nil {
+				return fmt.Errorf("accounts at once is a whole number, off or default, not %q", rest[1])
+			}
+			n = &v
+		}
+		if err := provider.SetAtOnce(p.ID, n); err != nil {
+			return err
+		}
+		if p, err = provider.Find(p.ID); err != nil {
+			return err
+		}
+	}
+	if n := p.AtOnce(); n > 0 {
+		fmt.Printf("%s · %d of its accounts or keys take requests at once, the first in the list; the others wait in reserve\n", p.Name, n)
+	} else {
+		fmt.Printf("%s · every account or key takes requests\n", p.Name)
 	}
 	return nil
 }

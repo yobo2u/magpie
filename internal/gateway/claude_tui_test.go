@@ -57,7 +57,7 @@ func TestClaudeTUIChosen(t *testing.T) {
 		if err := settings.Save(st); err != nil {
 			t.Fatal(err)
 		}
-		if got := claudeTUI(c.req, c.binary, c.prompt); got != c.want {
+		if got, _ := claudeTUI(c.req, c.binary, c.prompt); got != c.want {
 			t.Errorf("%s: claudeTUI = %v, want %v", c.name, got, c.want)
 		}
 		if got := claudePrintWhy(c.req, c.binary, c.prompt); on && got != c.why {
