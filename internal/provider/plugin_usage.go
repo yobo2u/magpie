@@ -30,7 +30,7 @@ var movedCards = map[string]struct{ name, icon, site string }{
 	"workbuddy":       {"WorkBuddy", "workbuddy-color", "https://www.codebuddy.cn"},
 	WorkBuddyAIID:     {"WorkBuddy AI", "workbuddy-color", "https://www.workbuddy.ai"},
 	"cursor":          {"Cursor", "cursor", "https://cursor.com"},
-	"grok":            {"Grok (SuperGrok)", "xai", "https://x.ai/cli"},
+	"grok":            {"Grok", "xai", "https://x.ai/cli"},
 	"devin":           {"Devin", "devin", "https://devin.ai"},
 }
 

@@ -6690,7 +6690,7 @@ function accountPlan(a) {
   if (agent === "copilot") return named("GitHub", a.plan && cap(a.plan));
   if (agent === "claude") return named("Claude", a.plan && cap(a.plan));
   if (agent === "cursor") return named("Cursor", a.plan && cap(a.plan));
-  if (agent === "grok") return a.plan || "SuperGrok";
+  if (agent === "grok") return a.plan || "Grok";
   if (agent === "gemini" || agent === "antigravity") return a.plan || "Google";
   if (agent === "zcode") return a.plan || "GLM Coding Plan";
   if (agent === "workbuddy") return a.plan || "WorkBuddy";
@@ -12104,7 +12104,7 @@ const SUBS = [
   // cursor-agent keeps one account; signing in again replaces it
   { agent: "cursor", name: "Cursor", icon: "cursor", plans: "Pro · Ultra · Teams", single: true },
   // so does Grok Build
-  { agent: "grok", name: "Grok (SuperGrok)", icon: "xai", plans: "SuperGrok · X Premium+", own: true },
+  { agent: "grok", name: "Grok", icon: "xai", plans: "SuperGrok · X Premium+", own: true },
   // signed in with GitHub's device code; the editors' own sign-in stays theirs
   { agent: "copilot", name: "Copilot", icon: "githubcopilot", plans: "Free · Education · Pro · Pro+ · Max · Business · Enterprise", own: true },
   // Z.ai's GLM Coding Plan, signed in as ZCode does; ZCode's own account is read too
