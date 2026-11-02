@@ -3292,6 +3292,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// with the try's own, to the agent if it is the one it gets
 			// (#4145)
 			ctx = withReplySink(ctx, c.p.ID, hw.heardUpstream)
+			if from != provider.Responses {
+				// the reasoning its calls carry that this one refused
+				// earlier in the conversation isn't sent to be refused
+				// again (reasoning_carry.go, #4798)
+				ctx = withSealScope(ctx, c.p.ID, stuck, c.vendor())
+			}
 			// a key or account with a MaxConcurrency is asked once one of
 			// its slots is free, in turn; the agent gone while it waits,
 			// nothing is sent (the 499 below)
@@ -3588,6 +3594,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			i--
 			continue
+		}
+		if resealed == 0 && from != provider.Responses && !hw.passing && hw.code() >= 400 && foreignReasoning.Match(hw.errBody()) {
+			// the same refusal of a client of another API: the sealed
+			// reasoning its calls' ids carry (reasoning_carry.go), which
+			// a Responses upstream other than the one that sealed it
+			// can't read, and which every later turn of the client's
+			// history carries again. Asked again without it, and never
+			// sent here again in the conversation (#4798)
+			resealed = 2
+			if refuseCarried(stuck, c.vendor(), from, attemptBody) {
+				try.Fail = failForeign
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				i--
+				continue
+			}
 		}
 		if resealed < 2 && from == provider.Responses && !hw.passing && hw.code() >= 400 && foreignReasoning.Match(hw.errBody()) {
 			// the conversation moved here from another account or vendor,
@@ -7478,6 +7499,9 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 			}
 		}
 	}
+	// the carried reasoning this key or account refused in the
+	// conversation (reasoning_carry.go, #4798)
+	withoutRefusedCarry(r.Context(), p, request)
 	// a glm-5.3-flash* replica's CR stitched into a call's arguments
 	// (tool_args_cr.go, #4256)
 	request.CR = glmServed(wiresOf(r.Context()), p, model)
