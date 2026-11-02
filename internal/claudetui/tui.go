@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
@@ -105,6 +106,10 @@ type shim struct {
 	// listed is the file magpie's tool server writes once Claude Code has
 	// listed its tools (mcpListed), "" for a run without it
 	listed string
+
+	// doing is what Claude Code is being waited on for, as late says it
+	// once its caller stops waiting (DeadlineEnv)
+	doing atomic.Value
 }
 
 // Run runs Claude Code at path, args being the bridge's `claude -p` ones,
@@ -188,6 +193,18 @@ func Run(args []string) error {
 		s.tap.drop()
 		os.Exit(1)
 	}()
+	if by, ok := deadline(os.Getenv(DeadlineEnv)); ok {
+		started := time.Now()
+		t := time.AfterFunc(time.Until(by), func() {
+			fmt.Fprintf(os.Stderr, "claude-tui: %s\n", s.late(time.Since(started)))
+			s.stop()
+			s.dropImages()
+			s.tap.drop()
+			os.Exit(1)
+		})
+		defer t.Stop()
+	}
+	s.doing.Store("showed no prompt")
 	if err := s.ready(); err != nil {
 		signal.Reset()
 		s.stop()
@@ -322,6 +339,26 @@ func lastAt(re *regexp.Regexp, p string) int {
 		return -1
 	}
 	return m[len(m)-1][0]
+}
+
+// deadline reads DeadlineEnv's value: when the caller stops waiting.
+func deadline(v string) (time.Time, bool) {
+	ms, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(ms), true
+}
+
+// late is why the run ends at its caller's deadline (DeadlineEnv), d
+// after it started: what Claude Code hadn't done by then, and what it
+// last drew.
+func (s *shim) late(d time.Duration) string {
+	doing, _ := s.doing.Load().(string)
+	if doing == "" {
+		doing = "showed no prompt"
+	}
+	return fmt.Sprintf("Claude Code %s in the %s its caller waits for it: %s", doing, d.Round(100*time.Millisecond), s.lastScreen())
 }
 
 var errUntrusted = errors.New(Untrusted + ", which only its user answers")
@@ -533,6 +570,7 @@ func (s *shim) input(r io.Reader) error {
 				return err
 			}
 		case "user":
+			s.doing.Store("hadn't answered")
 			pieces, err := s.userPieces(m.Message.Content)
 			if err != nil {
 				s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
@@ -566,6 +604,7 @@ var (
 // allowance read in the interactive mode, where -p's /usage tells no
 // window of it (Claude Code 2.1.316).
 func (s *shim) command(name string) error {
+	s.doing.Store("hadn't drawn " + name + "'s panel")
 	if name != "/usage" {
 		s.emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "session_id": s.sid,
 			"result": "the helper types no " + name + " in Claude Code's interactive mode"})

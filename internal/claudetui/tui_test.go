@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,12 @@ func fakeClaude(args []string) {
 	if os.Getenv("FAKE_FAIL") == "1" {
 		fmt.Print("something went wrong\n")
 		os.Exit(3)
+	}
+	if os.Getenv("FAKE_STALL") == "1" {
+		// drawn, but no prompt ever comes
+		fmt.Print("\r\nStarting up…\r\n")
+		time.Sleep(time.Minute)
+		os.Exit(0)
 	}
 	if os.Getenv("FAKE_LOGIN") == "1" {
 		// signed in for -p alone: the interactive mode asks how to sign in
@@ -477,6 +484,13 @@ func TestDropLeft(t *testing.T) {
 // exits or answers: what it wrote, its stderr, and how it ended.
 func runEnds(t *testing.T, home string, env []string) (out, stderr string, err error) {
 	t.Helper()
+	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hello"}})
+	return runEndsTold(t, home, env, string(b))
+}
+
+// runEndsTold is runEnds told line, a stream-json line, for "hello".
+func runEndsTold(t *testing.T, home string, env []string, line string) (out, stderr string, err error) {
+	t.Helper()
 	exe, _ := os.Executable()
 	cfg := filepath.Join(home, "claude")
 	tmp := filepath.Join(home, "tmp")
@@ -496,8 +510,7 @@ func runEnds(t *testing.T, home string, env []string) (out, stderr string, err e
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hello"}})
-	_, _ = stdin.Write(append(b, '\n'))
+	_, _ = io.WriteString(stdin, line+"\n")
 	done := make(chan string, 1)
 	go func() {
 		var all strings.Builder
@@ -597,6 +610,40 @@ func TestShimGoesThroughOnboarding(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(cfg, "terminal-set-up")); err == nil {
 				t.Fatal("the user's terminal was set up")
+			}
+		})
+	}
+}
+
+// A one-off run's caller (a /usage read, a test's "hi") tells the helper
+// when it stops waiting (DeadlineEnv), and the helper ends then on its
+// own, saying what Claude Code hadn't done and what it last drew. Killed
+// at the caller's deadline instead, it said nothing, and the reading's
+// error was "exit status 1" (#4830, mydosu, Windows).
+func TestShimEndsAtItsCallersDeadline(t *testing.T) {
+	for _, c := range []struct {
+		name, line, why, screen string
+		env                     []string
+	}{
+		{"no prompt", `{"type":"user","message":{"role":"user","content":"hello"}}`, "showed no prompt in the", "Starting up", []string{"FAKE_STALL=1"}},
+		// FAKE_USAGE names no panel: nothing is drawn for /usage
+		{"no /usage panel", `{"type":"command","command":"/usage"}`, "hadn't drawn /usage's panel in the", "", []string{"FAKE_USAGE=" + filepath.Join(t.TempDir(), "none")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			start := time.Now()
+			by := start.Add(3 * time.Second).UnixMilli()
+			out, stderr, err := runEndsTold(t, t.TempDir(), append(c.env, DeadlineEnv+"="+strconv.FormatInt(by, 10)), c.line)
+			d := time.Since(start)
+			if err == nil || strings.Contains(out, `"type":"result"`) {
+				t.Fatalf("ended %v, wrote %q", err, out)
+			}
+			if !strings.Contains(stderr, "claude-tui: Claude Code "+c.why) || !strings.Contains(stderr, c.screen) {
+				t.Fatalf("stderr %q", stderr)
+			}
+			// at the deadline, with room for a slow machine to start it,
+			// and well before the helper's own waits (20s, 45s)
+			if d < 2500*time.Millisecond || d > 15*time.Second {
+				t.Fatalf("ended after %s, the deadline 3s", d)
 			}
 		})
 	}

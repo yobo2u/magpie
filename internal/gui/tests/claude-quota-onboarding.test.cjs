@@ -101,6 +101,22 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       for (const text of Object.values(siblings)) assert.ok(text.includes(want), text);
       assert.equal(await page.evaluate(() => quotaError("network is unreachable")), await page.evaluate(() => t("Allowance unavailable")), "unrelated errors keep their classification");
       assert.equal(await page.evaluate(e => quotaError(e), olderError), want, "an older magpie's words are read too");
+      // any other reason the helper gave, and a run that said none before
+      // magpie stopped waiting, are said on the card, not "unavailable"
+      // alone (#4830); the last screen after the reason stays for the
+      // tooltip
+      for (const [err, why] of [
+        ["Claude Code: claude-tui: Claude Code showed no prompt in the 16.9s its caller waits for it: Do you trust this folder? ❯ No, exit",
+          "Claude Code showed no prompt in the 16.9s its caller waits for it"],
+        ["Claude Code: claude-tui: Claude Code asks whether to trust the folder, which only its user answers\nmagpie: Claude Code's interactive mode didn't run: Claude Code asks whether to trust the folder, which only its user answers",
+          "Claude Code asks whether to trust the folder, which only its user answers"],
+        ["Claude Code's interactive mode said nothing before magpie stopped waiting for it (context deadline exceeded)",
+          "Claude Code's interactive mode said nothing before magpie stopped waiting for it"],
+      ]) {
+        const said = await page.evaluate(([e, w]) => [quotaError(e), t("Allowance unavailable: {why}", { why: w })], [err, why]);
+        assert.equal(said[0], said[1], err);
+        if (lang !== "en") assert.ok(!said[0].startsWith("Allowance unavailable"), said[0]);
+      }
 
       await page.waitForFunction(() => !quotaRefreshing.size);
       // Simulate the next read after the user completes setup. Another

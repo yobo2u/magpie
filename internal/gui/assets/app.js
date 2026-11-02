@@ -13548,10 +13548,12 @@ const SIGN_IN_GONE = /sign-in has (expired|lapsed)|sign in again/i;
 function quotaError(err, q) {
   // first-run screens the helper can't pass (#4817)
   if (/^Claude Code: claude-tui: .{0,40}(stays on its first-run screens|shows its first-run notes)/.test(err)) return t("Finish Claude Code's first-run setup, then refresh. Run magpie claude-code to find its executable.");
+  // the /usage helper's other reasons, on the card (#4830)
+  const tui = /^Claude Code: claude-tui: (.+?)(?:: |$)/m.exec(err) || /^(Claude Code's interactive mode said nothing[^(]*?) \(/.exec(err);
+  if (tui) return t("Allowance unavailable: {why}", { why: tui[1].slice(0, 160) });
   // signed in again in place from the row's Sign in again (blue12345655)
   if (/sign-in has expired/.test(err)) return t("Signed out — choose Sign in again on this account under Providers");
-  // a Copilot account GitHub refused the token of (copilot_lapsed.go), as
-  // its row says it, in English or already in the user's language
+  // Copilot's refused token (copilot_lapsed.go), in either language
   const copilotLapsed = "GitHub refused this Copilot sign-in; sign in again";
   if (err === copilotLapsed || err === t(copilotLapsed)) return t(copilotLapsed);
   // an account whose sign-in its vendor revoked (signin_revoked.go, #1793)
@@ -13562,12 +13564,10 @@ function quotaError(err, q) {
   if (/violation of Terms of Service/i.test(err)) return t("Google has suspended this account — hover for details");
   if (/access token is invalid or expired|didn't take the access token/.test(err)) return t("AiHubMix didn't take the access token — paste a new one in the provider's settings");
   if (/this key has no limit/.test(err)) return t("This key has no limit — add the account's access token in the provider's settings to see its balance");
-  // a Volcengine or Tencent plan whose provider has no access key to read
-  // it with (accessKeyCard, #1821): the card used to be left out unsaid
+  // a Volcengine or Tencent plan with no access key (#1821)
   if (/^this plan's usage is read with the account's access key: give its SecretId/.test(err)) return t("This plan's usage needs the account's SecretId and SecretKey — give them in the provider's settings");
   if (/^this plan's usage is read with the account's access key/.test(err)) return t("This plan's usage needs the account's AccessKey ID and Secret — give them in the provider's settings");
-  // ZCode with no plan left: nothing to spend, not a failed read (#1001);
-  // the plugin's card names no way out. Whole sentence, so others pass.
+  // ZCode with no plan left, not a failed read (#1001)
   if (/^this account has no GLM Coding Plan, and ZCode's Start Plan has ended or was never started$/.test(err)) return t("ZCode: no GLM Coding Plan, and no free Start Plan — subscribe to a GLM Coding Plan to use this account");
   // an OpenCode Go key's windows (planquota.go): only the subscribing
   // member's key reads them; said with the way out
