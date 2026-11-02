@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/netproxy"
@@ -87,22 +90,23 @@ func askClaudeTUI(ctx context.Context, binary claudeCLI, configDir, model string
 	if _, why := claudeMachineWhy(binary); why != "" {
 		return claudeTUIErr(why)
 	}
-	tmp, err := os.MkdirTemp("", "magpie-claude-")
+	work, done, err := oneOffDir()
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
+	defer done()
 	cmd, err := binary.tuiCommand(ctx, claudeTUIWarmArgs(model)...)
 	if err != nil {
 		return err
 	}
-	cmd.Dir = tmp
+	cmd.Dir = work
 	env, err := binary.proxied(ctx, cleanClaudeEnv(os.Environ()))
 	if err != nil {
 		return err
 	}
 	// the folder is magpie's own: asked whether to trust it, say yes
 	env = append(env, claudetui.TrustEnv+"=1")
+	env = append(env, helperDeadline(ctx)...)
 	cmd.Env = binary.tuiEnv(binary.env(binary.asRoot(env), configDir), configDir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -115,19 +119,14 @@ func askClaudeTUI(ctx context.Context, binary claudeCLI, configDir, model string
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = out, &stderr
 	runErr := runClaudeTree(ctx, cmd, "a Claude Code test on "+model)
+	dropOneOff(binary, configDir, work, out.sid)
 	if out.res != nil {
 		if out.res.IsError {
 			return errors.New("Claude Code: " + clip(out.res.Result))
 		}
 		return nil
 	}
-	if msg := strings.TrimSpace(stderr.String()); msg != "" {
-		return errors.New("Claude Code: " + clip(msg))
-	}
-	if runErr != nil {
-		return runErr
-	}
-	return errors.New("Claude Code ended with no answer")
+	return oneOffErr(ctx, stderr.String(), runErr)
 }
 
 // resultLines reads the helper's stream-json for its first result, and
@@ -136,6 +135,8 @@ type resultLines struct {
 	buf  []byte
 	res  *claudeRun
 	done func()
+	// sid is the session the helper said it runs (its init's session_id)
+	sid string
 }
 
 func (w *resultLines) Write(p []byte) (int, error) {
@@ -149,9 +150,14 @@ func (w *resultLines) Write(p []byte) (int, error) {
 			break
 		}
 		var r claudeRun
-		if json.Unmarshal(w.buf[:i], &r) == nil && r.Type == "result" {
-			w.res = &r
-			w.done()
+		if json.Unmarshal(w.buf[:i], &r) == nil {
+			if r.SessionID != "" {
+				w.sid = r.SessionID
+			}
+			if r.Type == "result" {
+				w.res = &r
+				w.done()
+			}
 		}
 		w.buf = w.buf[i+1:]
 	}
@@ -235,22 +241,23 @@ func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (st
 	if _, why := claudeMachineWhy(binary); why != "" {
 		return "", claudeTUIErr(why)
 	}
-	tmp, err := os.MkdirTemp("", "magpie-claude-")
+	work, done, err := oneOffDir()
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tmp)
+	defer done()
 	cmd, err := binary.tuiCommand(ctx, claudeTUIUsageArgs()...)
 	if err != nil {
 		return "", err
 	}
-	cmd.Dir = tmp
+	cmd.Dir = work
 	env, err := binary.proxied(ctx, claudeUsageEnv())
 	if err != nil {
 		return "", err
 	}
 	// the folder is magpie's own: asked whether to trust it, say yes
 	env = append(env, claudetui.TrustEnv+"=1")
+	env = append(env, helperDeadline(ctx)...)
 	cmd.Env = binary.tuiEnv(binary.env(binary.asRoot(env), configDir), configDir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -261,6 +268,7 @@ func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (st
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = out, &stderr
 	runErr := runClaudeTree(ctx, cmd, "a Claude Code /usage read")
+	dropOneOff(binary, configDir, work, out.sid)
 	var full *claudeFull
 	if errors.As(runErr, &full) {
 		return "", runErr
@@ -271,13 +279,68 @@ func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (st
 		}
 		return out.res.Result, nil
 	}
-	if msg := strings.TrimSpace(stderr.String()); msg != "" {
-		return "", errors.New("Claude Code: " + clip(msg))
+	return "", oneOffErr(ctx, stderr.String(), runErr)
+}
+
+// oneOffDir is the folder a one-off interactive run (a test, a /usage)
+// works in: magpie's own, the one the bridge's runs work in
+// (claudeWorkDir). Claude Code asks whether to trust a folder once for
+// each of its state files, and keeps the answer there: a folder of each
+// run's own was asked again every time, and left one more trusted
+// project in the state file each time (#4830, mydosu: 67 of them). done
+// removes a folder of the run's own, made only when magpie's can't be
+// used.
+func oneOffDir() (dir string, done func(), err error) {
+	if dir, err := claudeWorkDir(); err == nil {
+		return dir, func() {}, nil
+	}
+	tmp, err := os.MkdirTemp("", "magpie-claude-")
+	if err != nil {
+		return "", nil, err
+	}
+	return tmp, func() { _ = os.RemoveAll(tmp) }, nil
+}
+
+// dropOneOff removes the session a one-off interactive run left in
+// magpie's folder, by its id (sid, "" when it told none): a test's "hi"
+// keeps its transcript there. A folder of the run's own goes whole.
+func dropOneOff(binary claudeCLI, configDir, work, sid string) {
+	if binary.wsl != nil || sid == "" {
+		return
+	}
+	removeSession(claudeSessions(configDir, work), sid)
+}
+
+// oneOffMargin is how long before its caller's deadline a one-off
+// interactive run's helper ends on its own (claudetui.DeadlineEnv), for
+// what it says to be read before the run is killed.
+const oneOffMargin = 3 * time.Second
+
+// helperDeadline tells the helper when ctx ends, oneOffMargin early (a
+// quarter of what is left, when that is less), nothing when it doesn't.
+func helperDeadline(ctx context.Context) []string {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return nil
+	}
+	margin := min(oneOffMargin, time.Until(dl)/4)
+	return []string{claudetui.DeadlineEnv + "=" + strconv.FormatInt(dl.Add(-margin).UnixMilli(), 10)}
+}
+
+// oneOffErr is why a one-off interactive run ended with no result: what
+// its helper said, else that its caller stopped waiting, never only the
+// exit status its kill left (on Windows "exit status 1", #4830).
+func oneOffErr(ctx context.Context, stderr string, runErr error) error {
+	if msg := strings.TrimSpace(stderr); msg != "" {
+		return errors.New("Claude Code: " + clip(msg))
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("Claude Code's interactive mode said nothing before magpie stopped waiting for it (%v)", ctx.Err())
 	}
 	if runErr != nil {
-		return "", runErr
+		return runErr
 	}
-	return "", errors.New("Claude Code ended with no answer")
+	return errors.New("Claude Code ended with no answer")
 }
 
 // runClaudeTree runs a one-off Claude Code (a test, a /usage) and ends,
@@ -306,6 +369,8 @@ type claudeRun struct {
 	Type    string `json:"type"`
 	IsError bool   `json:"is_error"`
 	Result  string `json:"result"`
+	// SessionID is the session the run said it is (stream-json's lines)
+	SessionID string `json:"session_id"`
 }
 
 // claudeResult reads the result from what claude -p --output-format json

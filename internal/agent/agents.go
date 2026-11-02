@@ -274,6 +274,7 @@ func onMachine(home, cfg string) []*Agent {
 		codebuddy(home),
 		pencil(home),
 		openPencil(home, cfg),
+		openBot(home, cfg),
 		newMax(home),
 		raycast(home),
 		kiroCrew(home),

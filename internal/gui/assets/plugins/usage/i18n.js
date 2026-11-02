@@ -2,6 +2,8 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Show in Overview": "在概览中显示",
+    "Show {n} Hidden": "显示已隐藏的 {n} 个",
     "Hide from Overview": "从概览中隐藏",
     "Hide this account from Overview": "从概览中隐藏这个账号",
     "Hide its balance from Overview": "从概览中隐藏它的余额",
@@ -240,6 +242,8 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 协议发往上游，与 agent 所用协议相同",
   },
   "zh-TW": {
+    "Show in Overview": "在概覽中顯示",
+    "Show {n} Hidden": "顯示已隱藏的 {n} 個",
     "Hide from Overview": "從概覽中隱藏",
     "Hide this account from Overview": "從概覽中隱藏這個帳號",
     "Hide its balance from Overview": "從概覽中隱藏它的餘額",
@@ -478,6 +482,8 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 協議發往上游，與 agent 所用協議相同",
   },
   ja: {
+    "Show in Overview": "概要に表示",
+    "Show {n} Hidden": "非表示の {n} 件を表示",
     "Hide from Overview": "概要から隠す",
     "Hide this account from Overview": "このアカウントを概要から隠す",
     "Hide its balance from Overview": "残高を概要から隠す",
@@ -716,6 +722,8 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "エージェントと同じ {to} で上流へ送信",
   },
   de: {
+    "Show in Overview": "In der Übersicht einblenden",
+    "Show {n} Hidden": "{n} ausgeblendete anzeigen",
     "Hide from Overview": "In der Übersicht ausblenden",
     "Hide this account from Overview": "Dieses Konto in der Übersicht ausblenden",
     "Hide its balance from Overview": "Sein Guthaben in der Übersicht ausblenden",

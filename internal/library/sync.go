@@ -119,6 +119,7 @@ func syncSteps(all, gone []*Target, b *backups, res *Result) []func(*Library) {
 	// ~/.agents/skills first: an agent that reads it too gets no second
 	// link to what is there already
 	shared := realDir(sharedSkillsDir())
+	steps = append(steps, func(l *Library) { l.sweepShared(append(slices.Clone(all), gone...), res) })
 	for _, first := range []bool{true, false} {
 		for _, t := range all {
 			switch {
@@ -684,6 +685,10 @@ func readView(problems []Problem, glance bool) (*View, error) {
 		}
 		if o, ok := ccSwitchOrigin(s); ok {
 			o.Path = ""
+			sv.Origin = o.String()
+		} else if o, ok := lockOrigin(s); ok {
+			// one the skills CLI installed: the row says where its lock
+			// says it came from (#4645)
 			sv.Origin = o.String()
 		}
 		if m, ok := readMeta(skillDir(s.Name)); ok {

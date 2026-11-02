@@ -751,6 +751,7 @@ function renderUsage() {
         ...(countable(g.id) ? [{ name: "Count as an agent…", icon: COUNT_AS, run: () => pickCountAs(b, g) }] : []),
         ...counted.map((c) => ({ name: t("Count {client} on its own", { client: c }), icon: OUT, run: () => countClientAs(c, "") })),
         { name: "Hide from this list", icon: EYE_OFF, sep: countable(g.id) || counted.length > 0, run: () => hideUsageAgent(g.id, true) },
+        ...(hidden.length ? [{ name: t("Show {n} Hidden", { n: hidden.length }), literal: true, icon: EYE, sep: true, run: (e) => openHidden(e, "usageAgentsHid", () => { usageHidOpen = true; renderUsage(); }) }] : []),
       ]);
     };
     if (counted.length) {
@@ -862,6 +863,18 @@ async function countClientAs(client, as) {
   }
 }
 
+// openHidden opens a list's hidden ones from a row's menu (yuu003348 on
+// Discord: 从概览中隐藏 后 无法取消隐藏): the line under the list, opened, with
+// the keyboard on it, brought into sight when the menu's click asks
+function openHidden(e, id, open) {
+  open();
+  const line = $("#" + id + " .us-hidline");
+  if (!line || line.closest("[hidden]")) return;
+  line.focus({ preventScroll: true });
+  const box = $("#" + id), v = $("#view-usage"), r = box.getBoundingClientRect(), b = v.getBoundingClientRect();
+  if ((r.top < b.top || r.bottom > b.bottom) && scrollOnPurpose(e, 400)) box.scrollIntoView({ block: "nearest" });
+}
+
 // hideUsageAgent takes a client out of the Usage page's Agents list, or
 // puts it back: drawn at once, put back if the save fails. Its calls stay
 // in the ledger and in every total.
@@ -954,18 +967,29 @@ function quotaCardMenu(target, card, subs) {
   closeAgentMenu();
   if (again) return;
   const one = of.length === 1 && of[0];
+  // a card shown though hidden, a menu bar cell having asked for it
+  // (usagePeek): its way back, not Hide again
+  const hid = hiddenCards(), peeked = of.flatMap(cardHideKeys).filter((k) => hid.has(k));
+  const others = hiddenQuotas().length;
   openRowMenu(anchor, [
-    { name: who && subs.length > 1 ? "Hide this account from Overview" : "Hide from Overview", icon: EYE_OFF, run: () => hideQuotaCards(of.flatMap(cardHideKeys), true) },
+    ...(peeked.length ? [{ name: "Show in Overview", icon: EYE, run: () => hideQuotaCards(peeked, false) }]
+      : [{ name: who && subs.length > 1 ? "Hide this account from Overview" : "Hide from Overview", icon: EYE_OFF, run: () => hideQuotaCards(of.flatMap(cardHideKeys), true) }]),
     // a plan's card showing its key's balance: the balance alone
-    ...(one?.balanceCard ? [{ name: "Hide its balance from Overview", icon: EYE_OFF, run: () => hideQuotaCards([one.balanceCard + "|balance"], true) }] : []),
+    ...(one?.balanceCard && !peeked.length ? [{ name: "Hide its balance from Overview", icon: EYE_OFF, run: () => hideQuotaCards([one.balanceCard + "|balance"], true) }] : []),
+    // the ones hidden already, from the menu that hid them
+    ...(others ? [{ name: t("Show {n} Hidden", { n: others }), literal: true, icon: EYE, sep: true, run: (e) => openHidden(e, "quotaHid", () => { quotaHidOpen = true; renderQuotaHid(); }) }] : []),
   ]);
+}
+// hiddenQuotas: the cards the Overview leaves out, those the line lists
+function hiddenQuotas() {
+  const hid = hiddenCards();
+  return quotas && hid.size ? sharedBalances(quotas).filter((q) => hid.has(cardHideKey(q)) && !cardPeeked(q)) : [];
 }
 // renderQuotaHid: the line under the cards saying how many are hidden,
 // opening them, each with Unhide, and Show all
 function renderQuotaHid() {
   const hb = $("#quotaHid");
-  const hid = hiddenCards();
-  const hidden = quotas && hid.size ? sharedBalances(quotas).filter((q) => hid.has(cardHideKey(q)) && !cardPeeked(q)) : [];
+  const hidden = hiddenQuotas();
   hb.hidden = !hidden.length;
   if (!hidden.length) { quotaHidOpen = false; return; }
   const line = hb.querySelector(".us-hidline"), hl = hb.querySelector(".list");

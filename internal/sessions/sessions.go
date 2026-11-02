@@ -1353,7 +1353,7 @@ func refresh(want, all []file) {
 				j := &jobs[i]
 				// its file's calls lock is taken before a read slot, as
 				// readCalls takes them
-				calls := callsAlong(j.f)
+				calls := callsAlong(j.f, j.old)
 				release := readSlot()
 				end := readBegin()
 				if parseHook != nil {
@@ -1929,8 +1929,8 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 		parser.line(s, b, f.main)
 		return true
 	}
-	if calls != nil && s.Off != 0 {
-		calls.release() // the summary reads on from where it was
+	if calls != nil && (s.Off != 0 || calls.st.Off != 0) {
+		calls.release() // a read goes on from where it was
 		calls = nil
 	}
 	if calls != nil {

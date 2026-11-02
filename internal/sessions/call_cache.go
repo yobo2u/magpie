@@ -201,6 +201,15 @@ func pruneCalls(files []file) {
 
 func keepCalls(path string, st *callFile) {
 	defer trimCallRevisions(time.Now())
+	if callRoot == "" {
+		// what is kept is of this root: a Sessions parse that read a
+		// rollout's calls along (callsRide) keeps them before any Requests
+		// read named the root, and pruneCalls then took the root for a
+		// moved one and dropped them, Codex window and all. The shard on
+		// disk has no window, so the next line read the rollout whole
+		// again (#4369: 10.8 MB for one line after a start).
+		callRoot = callCacheDir()
+	}
 	callCounts[path] = len(st.Calls)
 	delete(callCache, path)
 	order := callOrder[:0]
@@ -422,14 +431,19 @@ type callsRide struct {
 	claude     bool
 }
 
-// callsAlong is a ride for f's calls when f is a packed Codex rollout whose
-// calls are to be read again, or a Claude session whose calls were never
-// read, and nil otherwise. It holds the file's calls lock until release, so
-// a readCalls of the file meanwhile waits for what the ride reads rather
-// than read it again.
-func callsAlong(f file) *callsRide {
+// callsAlong is a ride for f's calls when f is a Codex rollout whose calls
+// are to be read again, or a Claude session whose calls were never read,
+// and nil otherwise. A plain rollout rides only when both reads start at
+// its first line (parseWith lets the ride go otherwise): read alone, a
+// cold start read every rollout twice, 3.5 GB for 1.7 GB of them (#4369).
+// sum is the summary the parse goes on from: a plain rollout's with its
+// Codex window is read on, so its calls are left to readCalls unlooked.
+// It holds the file's calls lock until release, so a readCalls of the
+// file meanwhile waits for what the ride reads rather than read it again.
+func callsAlong(f file, sum *state) *callsRide {
 	claude := f.agent == "claude" || f.agent == "claude-desktop"
-	if !(f.agent == "codex" && packed(f.path)) && !claude || f.cold || wslCold(f.path) {
+	onward := !packed(f.path) && sum != nil && sum.Codex != nil
+	if f.agent != "codex" && !claude || f.agent == "codex" && onward || f.cold || wslCold(f.path) {
 		return nil
 	}
 	lock := callLock(f.path)
