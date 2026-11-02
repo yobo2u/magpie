@@ -3,8 +3,9 @@
 // (yuu003348 on Discord: 观测/用量/概览 从概览中隐藏 后 无法取消隐藏). The
 // menu that hid a card, or an agent, offers "Show {n} Hidden" while some
 // are, which opens the line under the list with the keyboard on it, each
-// with Unhide; and the line itself is legible, not the page's faintest
-// grey. Every language, both engines, a
+// with Unhide; the line itself is legible, not the page's faintest grey;
+// and a hidden card a menu bar cell showed (usagePeek) offers "Show in
+// Overview" in its menu, not Hide again. Every language, both engines, a
 // wide window, a narrow one and magpie web on a phone; no backend, the API
 // is faked.
 const assert = require("node:assert/strict");
@@ -90,13 +91,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           const errors = [];
           const saved = { cards: ["stepfun-2|balance"], agents: ["curl"] };
           const ctx = await browser.newContext({ viewport: { width, height: 700 }, reducedMotion: "reduce", hasTouch: web, isMobile: web && engine === "chromium" });
-          const open = async () => {
+          const open = async (query = "") => {
             const p = await ctx.newPage();
             p.setDefaultTimeout(5000);
             p.setDefaultNavigationTimeout(60000);
             p.on("pageerror", (e) => errors.push(e.message));
             await p.route("**/*", server(lang, web, saved));
-            await p.goto("http://magpie.test/?view=usage");
+            await p.goto("http://magpie.test/?view=usage" + query);
             // the first load of the whole app, on a busy machine
             await p.locator("#subscriptionUsage .subscription-card").first().waitFor({ timeout: 20000 });
             await p.locator("#usageAgents .row.stat").first().waitFor({ timeout: 20000 });
@@ -126,7 +127,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
             return r.top >= v.top - 1 && r.bottom <= v.bottom + 1;
           });
 
-          const p = await open();
+          let p = await open();
           assert.deepEqual(await cards(p), ["claude", "stepfun"]);
 
           // the line is legible: not the page's faintest grey
@@ -169,6 +170,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(await inSight(p, "#usageAgentsHid"), true);
           await reader.click(p, p.locator("#usageAgentsHid .us-unhide"));
           await until(() => saved.agents, []);
+          await p.close();
+
+          // a hidden card a menu bar cell asked for: shown, and its menu has it back
+          saved.cards = ["stepfun-2|balance"];
+          p = await open("&tab=usage&card=stepfun-2");
+          await card(p, "stepfun-2").waitFor();
+          assert.equal(await p.locator("#quotaHid").isHidden(), true, "the one hidden is the one shown");
+          await cardMenu(p, "stepfun-2");
+          assert.deepEqual(await items(p), [w.show]);
+          await p.locator(".row-menu .rm-item").click();
+          await until(() => saved.cards, []);
+          assert.deepEqual(await cards(p), ["claude", "stepfun", "stepfun-2"]);
 
           const wide = await p.evaluate(() => { const v = document.querySelector("#view-usage"); return [v.scrollWidth, v.clientWidth, document.documentElement.scrollWidth, window.innerWidth]; });
           assert(wide[0] <= wide[1] + 1 && wide[2] <= wide[3] + 1, "no sideways scroll: " + wide);
