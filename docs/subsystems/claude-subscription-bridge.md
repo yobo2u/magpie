@@ -362,7 +362,19 @@ folder only when it can't be made), where the helper may answer the trust
 question, so a config directory holds one trusted entry for it instead of
 a new `magpie-claude-<n>` entry each read (#4830, mydosu): 67 had piled up
 in one `~/.claude.json`. Entries left by older magpies stay; magpie
-doesn't write that file. The run's own session file in that folder is
+doesn't write that file. In a saved account's config directory, magpie
+writes the folder's entry itself before each run there (`trustWork`,
+`provider.ClaudeTrustFolder`), and so before a bridge run of that
+account in magpie's folder: on mydosu's Windows (#4830) the helper's
+answer was never recorded there, and every read of the account waited
+out its time on the question. The entry is keyed as Claude Code 2.1.316
+looks a folder up (`claudeTrustKeys`): the path in NFC, with forward
+slashes on Windows (`C:/Users/<me>/AppData/Local/Temp/magpie-claude-work`),
+also with its links resolved (`/private/var/…` on a Mac), and the WSL
+mount path for a Claude Code in WSL. Only a direct child of
+`claude-accounts` is written, never `~/.claude.json`; every other key
+is kept, a file that can't be parsed is left alone, and a run's own
+fallback folder isn't recorded. The run's own session file in that folder is
 removed by the `session_id` the helper's init line names (`dropOneOff`),
 so the folder's project doesn't fill with "hi"s. The helper is told when
 its caller stops waiting (`claudetui.DeadlineEnv`, the context's deadline
@@ -374,8 +386,16 @@ reading's error was "exit status 1" alone. A run that still says nothing
 is "Claude Code's interactive mode said nothing before magpie stopped
 waiting for it" (`oneOffErr`), and the card says the reason
 (`quotaError`'s "Allowance unavailable: {why}"), its full text kept for the
-tooltip. The `-p` asks keep a temp folder each, which they remove: `-p`
-asks nothing about trust.
+tooltip. A question about trust left unanswered at the deadline is named
+with its folder ("Claude Code asked whether to trust <folder>, not answered
+in the 16.8s …"), where it said "showed no prompt" before (#4830). A failed
+run also goes to app.log (`logOneOff`: "claude: a /usage read of saved
+account <dir> failed: …"), with the helper's whole reason, which the card
+clips to 300 bytes, on one line: the home folder and any
+`/Users/<name>` or `C:\Users\<name>` become `~`, secrets go through
+`redact.Scrub`, and past 800 bytes it keeps the first 300 and the last 500,
+so the end of the last screen stays. The `-p` asks keep a temp folder
+each, which they remove: `-p` asks nothing about trust.
 
 The Claude Code provider editor's "Claude Code runs as" row
 (`claudeModeRow` in app.js, drawn by claudemode.js, which it loads with

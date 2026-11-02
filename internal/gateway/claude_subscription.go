@@ -1059,6 +1059,10 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		// (startTrusted)
 		env = append(env, claudetui.TrustEnv+"=1")
 	}
+	if tui && !client {
+		// a saved account's run in magpie's folder is never asked (#4830)
+		trustWork(binary, configDir, work)
+	}
 	cmd.Env = binary.env(binary.asRoot(env), configDir)
 	if tui {
 		cmd.Env = binary.tuiEnv(cmd.Env, configDir)
@@ -4264,7 +4268,8 @@ func imageBlocks(blocks []map[string]any, text *strings.Builder, p Part) []map[s
 	}
 	switch {
 	case p.Data != "":
-		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": p.MediaType, "data": p.Data}})
+		mediaType, data := claudeImage(p.MediaType, p.Data)
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": mediaType, "data": data}})
 	case p.URL != "":
 		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": p.URL}})
 	}
@@ -4809,7 +4814,8 @@ func mcpResult(p Part) mcpToolResult {
 	for _, im := range p.Images {
 		switch {
 		case im.Data != "":
-			content = append(content, map[string]any{"type": "image", "data": im.Data, "mimeType": imageMediaType(im)})
+			mimeType, data := claudeImage(imageMediaType(im), im.Data)
+			content = append(content, map[string]any{"type": "image", "data": data, "mimeType": mimeType})
 		case im.URL != "":
 			content = append(content, map[string]any{"type": "text", "text": "[image: " + im.URL + "]"})
 		}

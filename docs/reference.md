@@ -54,7 +54,7 @@ line; agents connected to magpie lose it when it quits.
   use its models through the gateway, with nothing copied and no key to
   paste.
 - **Providers with one field.** Pick a preset (Anthropic, OpenAI, Gemini,
-  Amazon Bedrock and its Mantle endpoint, DeepSeek, Kimi, GLM, MiniMax, StepFun, Qwen, Baidu Qianfan, Tencent Cloud Token Plan,
+  Amazon Bedrock and its Mantle endpoint, DeepSeek, Kimi, GLM, MiniMax, StepFun, LongCat, Qwen, Baidu Qianfan, Tencent Cloud Token Plan,
   Huawei Cloud MaaS, Volcengine Ark, Mistral, Groq, Nous Portal, xAI, OpenRouter, Together,
   Fireworks, SiliconFlow, NVIDIA NIM, ModelScope, AiHubMix, PipeLLM, 302.AI, Ollama, LM Studio…),
   paste a key, done. Custom vendors need a name and a base URL. magpie never
@@ -113,6 +113,7 @@ line; agents connected to magpie lose it when it quits.
 | Zoo Code (VS Code) | VS Code's `Code/User/settings.json` (and each profile's): `zoo-code.autoImportSettingsPath` names `globalStorage/zoocodeorganization.zoo-code/settings/magpie-import.json` beside it | model (one provider profile `magpie`, OpenAI Compatible, imported by Zoo Code at start-up) |
 | Copilot (JetBrains) | `byok.json` in `~/.config/github-copilot` (`$XDG_CONFIG_HOME/github-copilot` when set, `%USERPROFILE%\AppData\Local\github-copilot` on Windows), the Copilot language server's own file, which Xcode's and Eclipse's Copilot read too | provider (a `magpie` custom endpoint provider beside the user's: every magpie model at the gateway's `/v1/chat/completions`, sent with `magpie-copilot-jetbrains`; a model hidden in Manage Models stays hidden through a sync; off removes magpie's three keys alone). Found by the `github-copilot-intellij` plugin in a JetBrains IDE or Android Studio. Listed after the IDE restarts, and only while Copilot is signed in to GitHub on a plan with Bring Your Own Key (Free, Pro, Pro+; Business and Enterprise when the organisation allows it); the model is picked in Copilot Chat |
 | JetBrains Air | `acp.json` in `~/Library/Application Support/JetBrains/Air` (`~/.config/JetBrains/Air` on Linux, `%APPDATA%\JetBrains\Air` on Windows) + `magpie-opencode.json` beside it | model (a `Magpie` ACP agent: OpenCode's `opencode acp` on magpie's provider alone, its models and routing groups in Air's model menu; needs OpenCode installed) |
+| Air (JetBrains IDEs) | `~/.jetbrains/acp.json` (`%USERPROFILE%\.jetbrains\acp.json` on Windows; the Air plugin in 2026.2+ IDEs, shared with AI Assistant's custom agents) + `magpie-opencode.json` beside it | model (the same `Magpie` ACP agent as the Air app's, in Air's agent menu in the IDE; needs OpenCode installed) |
 | Copilot CLI  | `~/.copilot/settings.json`        | model           |
 | Crush        | `~/.config/crush/crush.json`      | large, small    |
 | DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie, its key `MAGPIE_GATEWAY_KEY` in `~/.dsh/.env` and dsh's own key store `~/.dsh/.credentials.yaml`, which the desktop app reads; on one of magpie's models its `web-search-deepseek` row also goes to the gateway, which searches with the model or Settings › Web search, unless dsh has a `DEEPSEEK_API_KEY` or a row of your own), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
@@ -707,10 +708,25 @@ serves the call, so a bare model name is resolved first, or a routing group,
 `group/<id>` (`group/*` for every group). A key that names a group may use
 the group with every member in it, though not those members asked for by
 name. Such a key sees only its models in `/v1/models`, `/v1/codex/models`
-and the Anthropic and Gemini lists, a routing group it doesn't name only when it may use every
-member, and is refused any other model with a 403 in the API's error shape
-before a provider is asked; a fallback it may not use is skipped. A key with
-no models listed may use every model.
+and the Anthropic and Gemini lists, and is refused any other model with a
+403 in the API's error shape before a provider is asked; a fallback it may
+not use is skipped. A routing group of your own is the key's only when it
+names it, even when every model in the group is one the key may use (a key
+given `google/gemini-3.8` neither sees nor may ask a group you made of that
+model alone; kautism on Discord); a group magpie found (`auto/<model>`,
+one model several providers serve) is the key's when it may use every
+provider's model in it. A key that names accounts and no model may use a
+group of yours made only of those accounts' providers' models, as it may
+every such model. A bare name that is both a group of yours and a model
+the key may use is that model for the key. A key with no models
+listed may use every model.
+
+A decision model (Jev, Clef and the like) is a model too: a routing group
+the key names asks its own decision model for every turn, whatever the key
+lists, but the key may ask one itself, at `/v1/systemone` or in another
+magpie's list of decision models, only when it names it (or its
+`<provider>/*`). The menu lists the decision models after their provider's
+chat models, each marked as one (Kautism on Discord).
 
 A gateway key can also be held to some **accounts** (#905): the accounts
 and keys its requests may use, picked in the same menu right after their
@@ -1701,7 +1717,7 @@ result for every request: who went first, and why.
    the conversation stays on its account, resting, spent or past its cap,
    and its errors go to the agent.
    With *Stays: Session* or *Strict* under Smart, Least used first or
-   Weekly pace, a new conversation goes to the account the fewest other
+   Use before expiry, a new conversation goes to the account the fewest other
    conversations of the last 30 minutes are on (of those not resting and
    under 90%), so sessions side by side each keep an account of their own;
    a Claude Code subagent goes with its session's account.
@@ -1710,9 +1726,9 @@ So routing decides who goes first only for a conversation nobody has
 answered yet. An account that has used 90% goes behind the others for new
 conversations, but a conversation already on it stays there until 98%.
 
-**The routings.** Smart, Least used first and Weekly pace go by the share
+**The routings.** Smart, Least used first and Use before expiry go by the share
 used of the fullest window that counts the model, the 5-hour window
-included. Smart and Weekly pace put an account behind the others once a
+included. Smart and Use before expiry put an account behind the others once a
 window is at 90% or more, and behind those once one is at 98% or more,
 each of these groups ordered by the share used.
 
@@ -1755,11 +1771,17 @@ each of these groups ordered by the share used.
 - **Least used first**: the lowest share used first; then the account
   magpie sent the fewest tokens lately (half of them stop counting after an
   hour). An account not known counts as unused.
-- **Weekly pace**: the account with the highest pace first. Pace is the
+- **Use before expiry**: the account with the highest pace first. Pace is the
   share of the week left divided by the hours until the week renews (at
   least 1): 60% left with 20 hours to go is 3 per hour. With two weekly
   windows that count the model (Opus's own and the general one), the lower
-  pace counts. An account with no week goes by its 5 hours. Accounts whose
+  pace counts. An account with no week goes by its 5 hours. Credits in a
+  window that expire before it renews (WorkBuddy's check-in credits) count
+  as lost then: their share of the window, divided by the hours until they
+  expire (at least 1), is the window's pace when it is the higher, so 70 of
+  500 credits expiring in 14 hours (1 per hour) beat a month's 100% over
+  28 days. When the vendor doesn't say how much expires, all that is left
+  counts. Accounts whose
   pace is within a tenth of the highest in their band count as alike, and
   among them the one magpie sent the fewest tokens lately goes first. A
   Claude account not known goes first once, as in Smart; another unknown
@@ -1813,7 +1835,7 @@ depends on the routing:
 | In turn | Where the rotation goes next. |
 | Smart | Only between accounts whose windows all renew in the same hours, or whose shares used are equal. |
 | Least used first | Only between accounts with the same share used and the same tokens sent lately. |
-| Weekly pace | Only between accounts in the same pace band that magpie sent the same tokens lately, in practice none since magpie started. |
+| Use before expiry | Only between accounts in the same pace band that magpie sent the same tokens lately, in practice none since magpie started. |
 | Speed first | Only between those within a tenth of each other's speed, and among those not measured lately. |
 | Cheapest first | Only between those that cost the same now, and among those with no known price. |
 

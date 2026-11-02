@@ -1280,9 +1280,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		writeJSON(rw, s)
 	})
 	mux.HandleFunc("POST /api/profile/{action}", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ Name string }
+		var in struct{ Name, To string }
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		in.Name = strings.TrimSpace(in.Name)
+		in.To = strings.TrimSpace(in.To)
 		var err error
 		var applied profile.Applied
 		switch r.PathValue("action") {
@@ -1303,6 +1304,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			}
 		case "delete":
 			err = profile.Delete(in.Name)
+		case "rename":
+			err = profile.Rename(in.Name, in.To)
 		default:
 			http.NotFound(rw, r)
 			return
@@ -1326,13 +1329,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		for _, p := range provider.All() {
-			if p.Ready() {
-				c, cancel := context.WithTimeout(ctx, 8*time.Second)
-				p.Fetch(c)
-				cancel()
-			}
-		}
+		provider.RefreshLists(ctx)
 		writeJSON(rw, state())
 	})
 	providerRoutes(mux, w)
@@ -2531,6 +2528,15 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		case "main":
 			w.ShowMain(mainView(r.URL.Query()))
 		case "quit":
+			// the question's "Don't ask again" (noAsk=1, zhujiu on
+			// Discord) is saved before the quit; a save that fails keeps
+			// magpie open, saying why
+			if r.URL.Query().Get("noAsk") == "1" {
+				if err := settings.SetQuitNoAsk(true); err != nil {
+					fail(rw, err)
+					return
+				}
+			}
 			// the user's Quit asks first while agents are connected
 			// (quitask.go); the question's own Quit is now=1
 			if a, ok := w.(quitAsker); ok && r.URL.Query().Get("now") == "" {

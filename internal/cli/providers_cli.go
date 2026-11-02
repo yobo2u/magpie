@@ -1078,7 +1078,8 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			for _, r := range pr.Regions {
 				ids = append(ids, r.ID)
 			}
-			i := slices.IndexFunc(pr.Regions, func(r provider.Region) bool { return strings.EqualFold(r.ID, v) })
+			id := provider.RegionID(p.Preset, v)
+			i := slices.IndexFunc(pr.Regions, func(r provider.Region) bool { return strings.EqualFold(r.ID, id) })
 			if i < 0 {
 				return fmt.Errorf("%s=%s: %s's are %s", k, v, pr.Name, strings.Join(ids, ", "))
 			}
@@ -1338,20 +1339,12 @@ func ago(t time.Time) string {
 	}
 }
 
-// refreshLive re-fetches the model list of every ready provider; `magpie sync`
-// calls it after the catalog download.
+// refreshLive re-fetches the model list of every ready provider not
+// switched off; `magpie sync` calls it after the catalog download.
 func refreshLive(ctx context.Context) {
 	var names []string
-	for _, p := range provider.All() {
-		if !p.Ready() {
-			continue
-		}
-		c, cancel := context.WithTimeout(ctx, 8*time.Second)
-		ms, err := p.Fetch(c)
-		cancel()
-		if err == nil {
-			names = append(names, fmt.Sprintf("%s (%d)", p.ID, len(ms)))
-		}
+	for _, l := range provider.RefreshLists(ctx) {
+		names = append(names, fmt.Sprintf("%s (%d)", l.ID, l.Models))
 	}
 	if len(names) > 0 {
 		fmt.Println(green.Render("✓"), "model lists:", strings.Join(names, ", "))

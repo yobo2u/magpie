@@ -2158,7 +2158,7 @@ body.panel .foot { min-height: 0; padding: 5px 8px 7px 14px; border-top: 1px sol
 }
 .chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .chip .cur-tick { margin: 0 4px 0 -2px; font-size: 11px; font-weight: 600; color: var(--accent); flex: none; }
-.pd-cur { flex: none; font-size: 11.5px; color: var(--accent); }
+.pd-cur { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--accent); }
 .chip .lib { width: 5px; height: 5px; margin: 0 2px 0 4px; border-radius: 50%; background: var(--accent); opacity: .7; flex: none; }
 .chip .x { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; opacity: 0; transition: opacity .12s; }
 .chip:hover .x { opacity: .6; }
@@ -2176,7 +2176,9 @@ body.panel .foot { min-height: 0; padding: 5px 8px 7px 14px; border-top: 1px sol
 body.window .profiles.detailed { align-items: flex-start; }
 body.window .profiles.detailed > .label { line-height: 30px; }
 body.window .profiles.detailed > #save { margin-top: 4px; }
-.pd-name { flex: 1 1 auto; min-width: 0; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the name, or the field renaming it (#2721), keeps room beside its buttons */
+.pd-head > .chip-input { flex: 1 1 auto; min-width: 6em; width: auto; }
+.pd-name { flex: 1 1 auto; min-width: 3em; font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pd-apply { flex: none; height: 24px; padding: 0 12px; }
 .pd-close { flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; }
 .pd-close:hover { color: var(--fg); background: rgba(127, 127, 127, .15); }
@@ -2688,7 +2690,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acct .n { font-weight: 500; }
 .acct .plan { color: var(--muted); font-size: 11.5px; padding: 1px 6px; border-radius: 5px; background: var(--pill-hover); }
 /* a subscription's accounts: the one in use first, a way to add another */
-.accts { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+/* a column, not a grid: WebKit kept a grid row at its height from before its readings wrapped, so they ran under the next account (the owner, after a refresh) */
+.accts { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
 .acc { display: flex; align-items: center; gap: 9px; min-height: 38px; padding: 5px 8px 5px 11px; font-size: 12.5px; text-align: left; }
 .acc + .acc, .accts .signing { border-top: 1px solid var(--line-2); }
 /* every row of the box ruled off from the one above it, a setting's too
@@ -2998,6 +3001,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 /* its refresh always shown, after its plan on the line that never wraps: on the readings' line it added a line where the meters filled it (the owner asked for a button here) */
 .acc-line > .quota-refresh { width: 14px; margin: 0 0 0 -5px; opacity: 1; }
 .acc .aq-w { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.acc .aq-until { white-space: nowrap; }
 .acc .aq-track { width: 54px; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; }
 .acc .aq-track i { display: block; height: 100%; border-radius: inherit; background: var(--fg-2); }
 /* the account's usage cap: a tick across the meter where it stands */
@@ -3974,6 +3978,10 @@ html.theming, html.theming *, html.theming *::before, html.theming *::after {
   border-radius: 14px; background: var(--card);
   box-shadow: 0 0 0 1px var(--line), 0 24px 60px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .12);
 }
+/* a provider's editor (accounts, meters, many rows) grows with a large
+   window, as a Mac sheet takes the room its content needs: 600 up to a
+   1071px window, then 56% of it, at most 880 */
+.modal .dialog.roomy { width: min(max(600px, 56vw), 880px, 100%); }
 .modal .dialog.swap { animation: content-in .22s var(--ease); }
 /* In a dialog the editor's head and buttons stay put and only the fields
    between them scroll; both bars are the same height, their contents
@@ -4225,6 +4233,12 @@ body.panel .modal { padding: 16px 12px; }
 .editor .fname { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor.sync-form .done { grid-column: 1 / -1; font-size: 12.5px; color: var(--fg-2); user-select: text; -webkit-user-select: text; }
 .editor.sync-form .bar { grid-column: 1 / -1; }
+/* Back up by itself (autobackup.js): a control too wide for the row goes
+   under its name, at the right, as Agents' rows do */
+.prefs .row.pref.auto-backup { flex-wrap: wrap; row-gap: 8px; }
+.prefs .row.pref.auto-backup .who { flex: 1 1 200px; }
+.prefs .row.pref.auto-backup .sub { white-space: normal; }
+.prefs .row.pref.auto-backup .val { margin-left: auto; max-width: 100%; }
 
 /* the usual context windows under the field, one click each (#120) */
 .cxpicks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
@@ -4661,6 +4675,7 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .quit-ask .quit-agents li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
 .quit-ask .quit-agents li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quit-ask .ag-note { grid-column: 1 / -1; margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.quit-ask .quit-never { grid-column: 1 / -1; margin: 0 0 10px; font-size: 12px; }
 @media (max-width: 600px) {
   body.window .row.agent.conn { display: flex; }
   /* the name beside its logo; the link and the switch wrap under it when short of room */

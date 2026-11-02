@@ -7,17 +7,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/redact"
+	"golang.org/x/text/unicode/norm"
 )
 
 // claudeProxy is the proxy a Claude Code run on an account's behalf goes
@@ -95,6 +102,7 @@ func askClaudeTUI(ctx context.Context, binary claudeCLI, configDir, model string
 		return err
 	}
 	defer done()
+	trustWork(binary, configDir, work)
 	cmd, err := binary.tuiCommand(ctx, claudeTUIWarmArgs(model)...)
 	if err != nil {
 		return err
@@ -126,7 +134,9 @@ func askClaudeTUI(ctx context.Context, binary claudeCLI, configDir, model string
 		}
 		return nil
 	}
-	return oneOffErr(ctx, stderr.String(), runErr)
+	err = oneOffErr(ctx, stderr.String(), runErr)
+	logOneOff("a test on "+model, configDir, stderr.String(), err)
+	return err
 }
 
 // resultLines reads the helper's stream-json for its first result, and
@@ -246,6 +256,7 @@ func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (st
 		return "", err
 	}
 	defer done()
+	trustWork(binary, configDir, work)
 	cmd, err := binary.tuiCommand(ctx, claudeTUIUsageArgs()...)
 	if err != nil {
 		return "", err
@@ -279,7 +290,9 @@ func claudeUsageTUI(ctx context.Context, binary claudeCLI, configDir string) (st
 		}
 		return out.res.Result, nil
 	}
-	return "", oneOffErr(ctx, stderr.String(), runErr)
+	err = oneOffErr(ctx, stderr.String(), runErr)
+	logOneOff("a /usage read", configDir, stderr.String(), err)
+	return "", err
 }
 
 // oneOffDir is the folder a one-off interactive run (a test, a /usage)
@@ -299,6 +312,51 @@ func oneOffDir() (dir string, done func(), err error) {
 		return "", nil, err
 	}
 	return tmp, func() { _ = os.RemoveAll(tmp) }, nil
+}
+
+// trustWork records, in a saved account's config directory (configDir,
+// "" for the account Claude Code is signed in to, whose ~/.claude.json
+// magpie never writes), that Claude Code may work in magpie's own folder
+// work, before a run there: asked whether to trust it, a run of that
+// account waited out its caller's time on the question (#4830, mydosu).
+// A folder of the run's own (oneOffDir's fallback) is not recorded, so
+// entries don't pile up.
+func trustWork(binary claudeCLI, configDir, work string) {
+	if configDir == "" {
+		return
+	}
+	if filepath.Clean(work) != filepath.Join(os.TempDir(), claudeWorkName()) {
+		return
+	}
+	if err := provider.ClaudeTrustFolder(configDir, claudeTrustKeys(binary, work)...); err != nil {
+		log.Printf("claude: magpie's work folder not recorded as trusted for %s: %v", configDir, err)
+	}
+}
+
+// trustGOOS is the system claudeTrustKeys keys for; a var for tests.
+var trustGOOS = runtime.GOOS
+
+// claudeTrustKeys are the projects keys Claude Code looks a trusted folder
+// up by when it runs in work (2.1.316, its trust check): the folder's path
+// in NFC, on Windows with forward slashes ("C:/Users/<me>/AppData/Local/
+// Temp/magpie-claude-work"), and the path its links lead to, which is the
+// one a Mac's getcwd says (/private/var/… for /var/…). One in WSL runs in
+// the distro's mount of it.
+func claudeTrustKeys(binary claudeCLI, work string) []string {
+	if binary.wsl != nil {
+		return []string{binary.file(work)}
+	}
+	var keys []string
+	for _, w := range []string{work, evalSymlinks(work)} {
+		k := norm.NFC.String(filepath.Clean(w))
+		if trustGOOS == "windows" {
+			k = strings.ReplaceAll(k, `\`, "/")
+		}
+		if !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // dropOneOff removes the session a one-off interactive run left in
@@ -341,6 +399,54 @@ func oneOffErr(ctx context.Context, stderr string, runErr error) error {
 		return runErr
 	}
 	return errors.New("Claude Code ended with no answer")
+}
+
+// logOneOff writes to app.log why a one-off interactive run (what) of
+// the account in configDir failed (err): the reason the helper gave on
+// stderr and the end of Claude Code's last screen, which err, the card's
+// text, clips to its first 300 bytes. mydosu (#4830) found nothing in
+// app.log to say why every read of a saved account failed. Secrets and
+// the user's folders are taken out (logSafe).
+func logOneOff(what, configDir, stderr string, err error) {
+	if err == nil {
+		return
+	}
+	why := strings.TrimSpace(stderr)
+	if why == "" {
+		why = err.Error()
+	}
+	who := "the account Claude Code is signed in to"
+	if configDir != "" {
+		who = "saved account " + filepath.Base(configDir)
+	}
+	log.Printf("claude: %s of %s failed: %s", what, who, logSafe(why))
+}
+
+// homePath is a user's home folder in a path, on Windows, a Mac or
+// Linux, with either slash: what follows it is kept, the user's name not.
+var homePath = regexp.MustCompile(`(?i)(?:\b[a-z]:)?[\\/]+(?:users|home)[\\/]+[^\\/\s"'│:]+`)
+
+// logSafe is s for app.log: secrets out (redact.Scrub), this user's home
+// folder and any other home folder in it written ~, its spaces
+// collapsed, and only its start and end kept when it is long.
+func logSafe(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if home, err := os.UserHomeDir(); err == nil && len(home) > 1 {
+		for _, h := range []string{home, filepath.ToSlash(home), strings.ReplaceAll(home, "/", `\`)} {
+			s = strings.ReplaceAll(s, h, "~")
+		}
+	}
+	s = homePath.ReplaceAllString(s, "~")
+	s = redact.Scrub(s)
+	const head, tail = 300, 500
+	if len(s) > head+tail {
+		i := head
+		for i > 0 && !utf8.RuneStart(s[i]) {
+			i--
+		}
+		s = s[:i] + " " + clipTail(s, tail)
+	}
+	return s
 }
 
 // runClaudeTree runs a one-off Claude Code (a test, a /usage) and ends,
