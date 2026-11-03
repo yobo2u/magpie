@@ -424,7 +424,7 @@ function costHead(c, note, title) {
 // a request magpie sent a provider by itself to test it (SourceProbe)
 const probeWhy = () => t("magpie sent this itself to test the provider (Test, Detect APIs or a model list), not for an agent. It is not counted in any total.");
 const unpricedCalls = (n) => t(n === 1 ? "{n} call unpriced" : "{n} calls unpriced", { n: ledNum(n) });
-const unpricedCallsWhy = (n) => n ? t(n === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n }) : t("Estimated using effective model prices, including custom prices");
+const unpricedCallsWhy = (n) => n ? t(n === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n }) : t("Estimated at effective model prices. A model's price at one provider is set in that provider's Names, prices & levels and counts over its list price");
 // renderCosts redraws whatever on the Usage page shows a cost, once the
 // currency changes — the numbers alone, not the page around them, so a
 // click on the setting never moves anything it isn't showing (#212)
@@ -1388,6 +1388,7 @@ function ledDetail(r, cols) {
   if (r.in || r.out || r.cache_read || r.cache_write || !ledFailed_(r)) {
     add("Tokens", t("{i} in · {o} out · {r} cache read · {w} cache creation", { i: ledNum(r.in || 0), o: ledNum(r.out || 0), r: ledNum(r.cache_read || 0), w: ledNum(r.cache_write || 0) }) + cacheTTLs(r, ledNum) + (r.cache_unknown ? " · " + t("The vendor doesn't count the cache") : ""), "led-tokens");
   }
+  if (r.credits != null) add("Credits", ledCredits({ credits: r.credits, credited: 1 }).textContent);
   if (ledRowSpeed(r)) add("Speed", t("{n} tok/s", { n: ledNum(Math.round(ledRowSpeed(r))) }));
   else if (ledFloorSpeed(r)) add("Speed", "≥" + t("{n} tok/s", { n: ledNum(Math.round(ledFloorSpeed(r))) }));
   add("Request ID", r.rid);
@@ -1961,6 +1962,24 @@ function ledHeatShow(cell) {
   tip.style.left = left + "px";
   tip.style.top = top + "px";
 }
+// Each follows the other, and the scroll a follow sets off is its own echo,
+// never a move to pass back: WebKit tells it a frame later, and on a phone
+// the finger has moved the table on by then, so the bar's echo wrote the
+// table back a frame, every other frame of a swipe (Pluviophile on
+// Discord: 左右滑动震颤, 粘滞卡顿)
+const ledEcho = new WeakMap();
+function ledFollow(to, from) {
+  const was = to.scrollLeft;
+  if (was === from.scrollLeft) return;
+  to.scrollLeft = from.scrollLeft;
+  // one held where it was (no room yet) tells no scroll
+  if (to.scrollLeft !== was) ledEcho.set(to, to.scrollLeft);
+}
+function ledFollowed(e, other) {
+  const box = e.currentTarget, echo = ledEcho.get(box);
+  ledEcho.delete(box);
+  if (box.scrollLeft !== echo) ledFollow(other(), box);
+}
 // the table's scrollbar, kept in view at the window's foot (#799): as wide
 // as the table can go sideways, and moving it as the table moves it
 function ledHScroll() {
@@ -1969,7 +1988,7 @@ function ledHScroll() {
   bar.hidden = !over;
   if (!over) return;
   bar.firstElementChild.style.width = wrap.scrollWidth - wrap.clientWidth + bar.clientWidth + "px";
-  bar.scrollLeft = wrap.scrollLeft;
+  ledFollow(bar, wrap);
   // a sticky box keeps clear of its scroller's padding, so at bottom 0 it
   // stood the view's bottom padding above the window's foot, the table
   // showing through the strip under it: it goes down over that padding
@@ -1977,8 +1996,8 @@ function ledHScroll() {
   const pad = view ? parseFloat(getComputedStyle(view).paddingBottom) || 0 : 0;
   bar.style.bottom = -pad + "px";
 }
-$("#ledWrap").addEventListener("scroll", () => { const bar = $("#ledHScroll"); if (bar.scrollLeft !== $("#ledWrap").scrollLeft) bar.scrollLeft = $("#ledWrap").scrollLeft; }, { passive: true });
-$("#ledHScroll").addEventListener("scroll", () => { const wrap = $("#ledWrap"); if (wrap.scrollLeft !== $("#ledHScroll").scrollLeft) wrap.scrollLeft = $("#ledHScroll").scrollLeft; }, { passive: true });
+$("#ledWrap").addEventListener("scroll", (e) => ledFollowed(e, () => $("#ledHScroll")), { passive: true });
+$("#ledHScroll").addEventListener("scroll", (e) => ledFollowed(e, () => $("#ledWrap")), { passive: true });
 // a window that changes size redraws the chart at its new width
 // a new width fits the table again, on the next frame, and so do the
 // details' width (--ledw) and the scrollbar: each changes the table's or the
@@ -2027,13 +2046,19 @@ const LED_COLS = [
   ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cost", "n"], ["TTFT", "n", 2, "Time to first token"], ["Duration", "n"], ["Speed", "n"], ["Status"],
 ];
 
+// a window under a second after a wait over four times longer: the reply came
+// whole in a moment after a long silence, and what it was written over isn't
+// seen (pluviophile714 on Discord: gpt-6.1-sol, 392 tokens 0.25 s after an
+// 8.2 s first token, read 1,539 tok/s; usage.HeldWindowMs)
+const ledHeldShort_ = (w, from) => w < 1000 && from > 4 * w;
 // the tokens a reply was seen to write and the ms it took, as
 // usage.DecodeOf and routing/client.js's decodeOf tell them: one that reasoned
 // counts its answer from its first text, its reasoning written before
 // the stream showed any (tony on Discord); null when it tells no speed.
 // A reply held back and let go in a burst at its end tells none (John on
 // Discord): its content came in under a quarter of its window (flow_ms),
-// or its answer at over 20 times the pace its reasoning came before it
+// or its answer at over 20 times the pace its reasoning came before it,
+// or it came in under a second after a wait four times longer (ledHeldShort_)
 const ledDecode = (r) => {
   if (ledFailed_(r) || r.reasoning_hidden && !(r.first_text_ms > 0) || !(r.ttft_ms > 0)) return null;
   const think = r.reasoning > 0, visible = think && !(r.first_text_ms > 0) && r.first_reasoning_ms >= r.ttft_ms && r.flow_ms > 0 && r.reasoning <= r.out;
@@ -2041,6 +2066,7 @@ const ledDecode = (r) => {
   const w = r.ms - from;
   if (!(n > 0 && from > 0 && w >= 100 && n * 1000 <= 10000 * w)) return null;
   if (r.flow_ms > 0 && r.flow_ms * 4 < w) return null;
+  if (ledHeldShort_(w, from)) return null;
   if (think && r.first_text_ms > 0 && n * (r.first_text_ms - r.ttft_ms) > 20 * r.reasoning * w) return null;
   if (ledCodexTurn(r) && (w < LED_CODEX_WINDOW_MS || n < LED_CODEX_BODY)) return null;
   return { n, w };
@@ -2113,6 +2139,7 @@ const ledNoSpeed_ = (r) => {
   const from = visible ? r.first_reasoning_ms : think && r.first_text_ms > 0 ? r.first_text_ms : r.ttft_ms, w = r.ms - from;
   const little = t("Too little came after the first token to time a speed by: {n} tokens in {ms}", { n: ledNum(n), ms: ledTook(Math.max(0, w)) });
   if (w < 100) return little;
+  if (ledHeldShort_(w, from) && !(n * 1000 > 10000 * w || r.flow_ms > 0 && r.flow_ms * 4 < w)) return t("It came in under a second after a wait of {wait}: it may have been written during the wait and let go at once, so how fast it was written isn't seen", { wait: ledTook(from) });
   if (n * 1000 > 10000 * w || r.flow_ms > 0 && r.flow_ms * 4 < w || think && r.first_text_ms > 0 && n * (r.first_text_ms - r.ttft_ms) > 20 * r.reasoning * w) return t("It came in one burst at its end, not as it was written, so how fast it was written isn't seen");
   return little;
 };
@@ -2516,11 +2543,21 @@ function renderLedger() {
       td(ledNum(r.cache_write), "n" + (r.cache_write ? "" : " faint"), cacheTTLs(r, ledNum).replace(/^ · /, ""));
       td(ledNum(r.cache_read), "n" + (r.cache_read ? "" : " faint"));
     }
-    const cost = td(r.priced ? "≈" + fmtCost({ cost: r.cost, unpriced: 0 }) : "—", "n cost" + (r.priced ? "" : " faint"), r.priced ? (r.pricing_model ? t("API price reference") + ": " + r.pricing_model : "") : t("No known price for this model"));
+    // what the reply said it cost in its plan's credits (WorkBuddy's
+    // usage.credit, #2512), on its own row as on the ranking's line
+    // (jiabubu on Discord): in place of the dash a plan's model has for a
+    // price, or under the price; a reply that said none says nothing
+    const credits = r.credits != null ? ledCredits({ credits: r.credits, credited: 1 }).textContent : "";
+    const cost = td(r.priced ? "≈" + fmtCost({ cost: r.cost, unpriced: 0 }) : credits || "—", "n cost" + (r.priced || credits ? "" : " faint"), r.priced ? (r.pricing_model ? t("API price reference") + ": " + r.pricing_model : "") : credits ? t("What it cost in its plan's credits, as the reply said") : t("No known price for this model"));
     if (r.priced && r.pricing_model) {
       const reference = el("div", "price-reference", t("Price reference: {model}", { model: r.pricing_model }));
       reference.title = t("Model used for the API price estimate; this is not an observed model forwarding event.");
       cost.append(reference);
+    }
+    if (r.priced && credits) {
+      const said = el("div", "row-credits", credits);
+      said.title = t("What it cost in its plan's credits, as the reply said");
+      cost.append(said);
     }
     // a session file has the times of its lines: a call took about from the line that
     // asked for it to its last; some have none, and are dashes, not 0 ms
@@ -3190,7 +3227,7 @@ function renderSessions() {
   const active = sessModel ? null : acts.filter((a) => byAgent(a) && byFolder(a)).reduce((n, a) => n + a.seconds, 0);
 
   const c = tot.cost ? fmtCost(tot) : "";
-  const unpricedNote = tot.unpriced ? t("Not counted: {models}, with no known price", { models: sessModelNames([...unpriced]) }) : t("Estimated using effective model prices, including custom prices");
+  const unpricedNote = tot.unpriced ? t("Not counted: {models}, with no known price", { models: sessModelNames([...unpriced]) }) : t("Estimated at effective model prices. A model's price at one provider is set in that provider's Names, prices & levels and counts over its list price");
   // a session's models are counted, not its calls: the agents' files price by model
   const unpricedModels = tot.unpriced ? t(tot.unpriced === 1 ? "{n} model unpriced" : "{n} models unpriced", { n: tot.unpriced }) : "";
   costHead(c, unpricedModels, unpricedNote);

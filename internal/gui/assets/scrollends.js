@@ -24,6 +24,7 @@
       for (const [b, s] of [[up, "Scroll to top"], [down, "Scroll to bottom"]]) b.title = t(s), b.setAttribute("aria-label", t(s));
     }
     const v = open(), modal = document.getElementById("modal");
+    if (v) watch(v);
     const held = box.contains(document.activeElement) || box.matches(":hover");
     let on = !!v && (!modal || modal.hidden) && v.scrollTop > v.clientHeight;
     if (!v || !on && !held) { box.classList.remove("on"); return; }
@@ -36,9 +37,12 @@
     if (!gutter && v.scrollHeight - v.clientHeight - v.scrollTop < box.offsetHeight + 24) on = false;
     box.classList.toggle("on", on || held);
     let bottom = innerHeight - r.bottom + 16;
-    // above a page's own sticky foot (Providers' Add buttons)
-    const foot = v.querySelector(":scope > .after-list:not(.away)");
-    if (foot && getComputedStyle(foot).position === "sticky") bottom = Math.max(bottom, innerHeight - foot.getBoundingClientRect().top + 8);
+    // above a page's own sticky foot under it (Providers' Add buttons, a
+    // Routing group editor's Cancel and Add: Jiabubu on Discord)
+    for (const foot of v.querySelectorAll(":scope > .after-list:not(.away), .view-foot")) {
+      const f = foot.getBoundingClientRect();
+      if (getComputedStyle(foot).position === "sticky" && f.bottom > innerHeight - bottom - box.offsetHeight && f.top < innerHeight - bottom) bottom = Math.max(bottom, innerHeight - f.top + 8);
+    }
     box.style.right = Math.max(8, innerWidth - r.right + bar + (gutter ? (pad - box.offsetWidth) / 2 : 10)) + "px";
     box.style.bottom = bottom + "px";
     up.setAttribute("aria-disabled", v.scrollTop < 1);
@@ -51,6 +55,19 @@
   box.addEventListener("focusout", later);
   box.addEventListener("pointerleave", later);
   new MutationObserver(later).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden"] });
+  // the page under it changing size with no scroll: a Routing group opened
+  // or closed, a row added or taken out (Jiabubu on Discord: it moved off
+  // a group editor's Remove only on the next scroll). The open page and
+  // each of its own children are measured, so any growth inside shows
+  const sizes = new ResizeObserver(later), seen = new WeakSet();
+  const kids = new MutationObserver((ms) => {
+    for (const m of ms) for (const n of m.removedNodes) if (n instanceof Element) sizes.unobserve(n), seen.delete(n);
+    later();
+  });
+  function watch(v) {
+    if (!seen.has(v)) seen.add(v), sizes.observe(v), kids.observe(v, { childList: true });
+    for (const c of v.children) if (!seen.has(c)) seen.add(c), sizes.observe(c);
+  }
   function go(e, top) {
     const v = open();
     if (!v || e.currentTarget.getAttribute("aria-disabled") === "true") return;

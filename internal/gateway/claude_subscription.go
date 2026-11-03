@@ -213,7 +213,7 @@ type subscriptionRun struct {
 	lean          bool // started with leanSystem as its system prompt
 	// appended: started with the caller's instructions after Claude
 	// Code's own system prompt (req.appendPrompt), not in its first
-	// message; its session, resumed, would have none
+	// message; its session, resumed, is given them so again
 	appended    bool
 	tui         bool // Claude Code's interactive mode (claudeTUI)
 	cacheTail   string
@@ -986,7 +986,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		args = append(args, "--system-prompt-file", binary.file(systemPath))
 	}
 	// set below for a run that appends them: a request asked again
-	// starts anew, and a transcript replayed has them (replaySession)
+	// starts anew
 	req.appendPrompt = false
 	var sessions []string
 	switch {
@@ -1038,6 +1038,16 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 			from.mu.Unlock()
 		}
 	}
+	// The interactive mode's caller instructions go after Claude Code's own
+	// system prompt (appendsPrompt), in the block Claude Code marks for the
+	// cache itself, for every run of a conversation: a session resumed
+	// (saved, branched or a replayed transcript) has them as its run did,
+	// the file given again, since a session keeps no system prompt.
+	if from != nil {
+		req.appendPrompt = from.appended && !req.leanPrompt && req.clientCache == nil
+	} else {
+		req.appendPrompt = appendsPrompt(req, binary)
+	}
 	req.replayed = false
 	if from == nil && !req.told && sessions != nil && claudePrintWhy(req, binary) == "" {
 		// the interactive mode is given the conversation as Claude Code's
@@ -1054,15 +1064,16 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		// message, its earlier turns marked as such (renderClaudePrompt)
 		log.Printf("claude: a new Claude Code is told the whole conversation: %d messages, %d images, the last turn marked as the one to answer", len(req.Messages), countImages(req.Messages))
 	}
-	if from == nil && appendsPrompt(req, binary) {
-		// a one-off ask in the interactive mode, Claude Code's auto mode
-		// classifier above all: pasted, the caller's instructions lose
-		// their cache mark (the paste is one text), and every ask wrote
-		// them to the cache anew, 80k tokens an ask with 1,197 read
-		// (#2432). After Claude Code's own system prompt they are in the
-		// block it marks itself, and the next ask under the same
-		// instructions reads them; a file of the run's own, as a lean
-		// run's
+	if req.appendPrompt {
+		// pasted, the caller's instructions lose their cache mark (the
+		// paste is one text), and every new run wrote them to the cache
+		// anew: Claude Code's auto mode classifier, 80k tokens an ask with
+		// 1,197 read (#2432), and a conversation's turn after a one-off
+		// first one, or after a client changed a reply, 7,290 written and
+		// 1,273 read of 8,565 (m4rs0n on Discord). After Claude Code's
+		// own system prompt they are in the block it marks itself, which
+		// every run under the same instructions sends the same; a file of
+		// the run's own, as a lean run's
 		appendPath := filepath.Join(tmp, "append.md")
 		req.appendPrompt = true
 		if err := os.WriteFile(appendPath, []byte(leanSystem(req)), 0o600); err != nil {
@@ -1434,6 +1445,51 @@ func claudeExtraBody(raw json.RawMessage, tail string) string {
 	return string(b)
 }
 
+// safeguardVaries is what Claude Code's classifier context carries that
+// changes from one request to the next, the parts 2.1.316 itself names as
+// variable and leaves out over its 256KB budget (its "shed" list): the
+// turns before (prior_turn_context), system-reminder ids, artifacts,
+// Chrome's tabs, where its text came from, and git's status and remotes.
+var safeguardVaries = []string{"prior_turn_context", "system_reminders", "artifacts", "text_provenance", "shed"}
+
+// safeguardsKept is a safety field without the parts that vary
+// (safeguardVaries), for telling whether what it says the user allows
+// changed: the rules, the permission and auto mode, the folders, the
+// repository and branch. A field it can't read is kept whole, so any
+// change to it counts.
+func safeguardsKept(raw json.RawMessage) []byte {
+	var guards []map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &guards) != nil {
+		return raw
+	}
+	for _, g := range guards {
+		ctx, ok := g["classifier_context"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, k := range safeguardVaries {
+			delete(ctx, k)
+		}
+		if nav, ok := ctx["chrome_navigation"].(map[string]any); ok {
+			delete(nav, "tabs")
+		}
+		if git, ok := ctx["git_state"].(map[string]any); ok {
+			kept := map[string]any{}
+			for _, k := range []string{"cwd", "root", "branch", "default_branch"} {
+				if v, ok := git[k]; ok {
+					kept[k] = v
+				}
+			}
+			ctx["git_state"] = kept
+		}
+	}
+	b, err := json.Marshal(guards)
+	if err != nil {
+		return raw
+	}
+	return b
+}
+
 // setSafeguards updates the caller's safety context and opted-in cache tail.
 // It does not change the VPS's permission state.
 // A CLI unable to acknowledge the update is discarded by the caller; its old
@@ -1456,7 +1512,18 @@ func (r *subscriptionRun) setSafeguards(req *Request) error {
 		return errors.New("safety beta changed; restart Claude Code")
 	}
 	if r.tui {
-		// it read them as it started (startRun), and reads them no more
+		// It read them as it started (startRun), and reads them no more.
+		// Claude Code's classifier context changes on nearly every
+		// request in parts of its own (the tool ids of the turns before,
+		// git status, system-reminder ids): restarting for those started
+		// a new run for every tool round and every turn, each one
+		// writing the whole conversation to the cache again, and one
+		// message of xybio's spent a Pro account's 5-hour window. The run
+		// goes on with what it started with unless a part that says what
+		// the user allows changed.
+		if bytes.Equal(safeguardsKept(r.safeguards), safeguardsKept(req.Safeguards)) {
+			return nil
+		}
 		return errors.New("safeguards changed; restart Claude Code's interactive mode")
 	}
 	err := r.cliControl(map[string]any{"subtype": "apply_flag_settings", "settings": map[string]any{
@@ -2190,6 +2257,10 @@ type savedSession struct {
 	// tui: the session was made by Claude Code's interactive mode; a
 	// branch of it is too, where it can be (claudePrint)
 	tui bool
+	// appended: its run had the caller's instructions after Claude Code's
+	// system prompt (appendsPrompt), which the session doesn't keep: the
+	// run that resumes it is given them so again
+	appended bool
 
 	cachePrefix cachePrefix
 
@@ -2204,11 +2275,11 @@ func (b *subscriptionBridge) shelve(run *subscriptionRun) {
 	run.mu.Lock()
 	sid, sessions, rewound, replied, tools := run.sessionID, run.sessions, run.rewound, run.replied, maps.Clone(run.tools)
 	run.mu.Unlock()
-	if sid == "" || len(sessions) == 0 || rewound && !replied || run.idleKey == "" || run.appended {
+	if sid == "" || len(sessions) == 0 || rewound && !replied || run.idleKey == "" {
 		return
 	}
 	key := run.idleKey
-	s := &savedSession{session: sid, sessions: sessions, owner: run.owned(), conv: run.convKey, key: key, behind: run.behindKey, loose: run.loose, tools: tools, at: run.idleAt, cachePrefix: run.cachePrefix}
+	s := &savedSession{session: sid, sessions: sessions, owner: run.owned(), conv: run.convKey, key: key, behind: run.behindKey, loose: run.loose, tools: tools, at: run.idleAt, cachePrefix: run.cachePrefix, appended: run.appended}
 	if run.tui {
 		s.behindLine = run.behindLine
 	} else {
@@ -2413,7 +2484,7 @@ func (b *subscriptionBridge) branch(req *Request, owner string) *savedSession {
 			}
 		}
 		sid, sessions := run.sessionID, slices.Clone(run.sessions)
-		usable := !run.closed && !run.rewound && run.lean == req.leanPrompt && !run.appended && !run.clientMarks && (run.tui || !claudeTUIOn())
+		usable := !run.closed && !run.rewound && run.lean == req.leanPrompt && !run.clientMarks && (run.tui || !claudeTUIOn())
 		run.mu.Unlock()
 		if at == "" {
 			continue
@@ -2424,7 +2495,7 @@ func (b *subscriptionBridge) branch(req *Request, owner string) *savedSession {
 		if !usable || sid == "" || len(sessions) == 0 || said != told {
 			return nil
 		}
-		return &savedSession{session: sid, sessions: sessions, owner: owner, at: time.Now(), since: msgs[i:], cut: at, tui: run.tui, gone: true}
+		return &savedSession{session: sid, sessions: sessions, owner: owner, at: time.Now(), since: msgs[i:], cut: at, tui: run.tui, appended: run.appended, gone: true}
 	}
 	return nil
 }
@@ -2446,7 +2517,7 @@ func (r *subscriptionRun) branchAt(at, owner string, since []Message) *savedSess
 		return nil
 	}
 	log.Printf("claude: the conversation's next turn goes on in a branch of its interactive run's session, cut before the side question it answered since")
-	return &savedSession{session: cut, sessions: sessions, owner: owner, at: time.Now(), since: since, tui: true}
+	return &savedSession{session: cut, sessions: sessions, owner: owner, at: time.Now(), since: since, tui: true, appended: r.appended}
 }
 
 // cutWait is how long cutSession waits for the line it cuts after to be
@@ -4126,13 +4197,17 @@ func toolChoiceAsk(req *Request) string {
 
 // appendsPrompt: a new run for req gives the caller's instructions after
 // Claude Code's own system prompt (--append-system-prompt-file), not in
-// its first message. Only a one-off ask in the interactive mode, which
-// pastes its first message without the marks renderClaudePrompt puts on
-// it: such a run is let go after its reply (ended), never resumed, so no
-// later turn needs the instructions in its session. A lean run has them
-// as its system prompt already, and a client's own marks keep theirs.
+// its first message. Every run in the interactive mode, which pastes its
+// first message as one text, without the mark renderClaudePrompt puts on
+// the instructions' block: there, a run started anew for the same
+// instructions (the next one-off ask, a conversation's turn after a
+// one-off first one, a turn whose run was lost) read nothing past Claude
+// Code's own prompt. A run resuming a session is given them as the
+// session's run was (savedSession.appended). A lean run has them as its
+// system prompt already, a client's own marks keep theirs, and -p keeps
+// the mark.
 func appendsPrompt(req *Request, binary claudeCLI) bool {
-	return !req.leanPrompt && req.clientCache == nil && len(req.Tools) == 0 && !hasReply(req.Messages) &&
+	return !req.leanPrompt && req.clientCache == nil &&
 		withoutBillingHeader(req.System)+envNote(req)+toolChoiceAsk(req) != "" && claudePrintWhy(req, binary) == ""
 }
 
@@ -6086,6 +6161,11 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	run.mu.Lock()
 	req.interactive = run.tui
 	run.mu.Unlock()
+	if req.Stream {
+		quit := make(chan struct{})
+		defer close(quit)
+		events = keepBridgeHeard(events, quit)
+	}
 	return relay(w, r, from, name, req, events, usage, abort, begin, func(said, stop string, ok bool) {
 		if !gone() {
 			return // the client went first: letGo has the run
@@ -6156,6 +6236,89 @@ func thirdPartyRefused(name string, req *Request, code int, msg string) string {
 		"Asking again the same way may draw from the Claude account's extra usage, so magpie doesn't ask again on its own. " +
 		"Claude Code as claude -p is served such prompts: turn off Claude Code's interactive mode in Settings › Models › Replies " +
 		"or in this provider's editor; the plan counts a -p request at about twice the interactive mode's.)"
+}
+
+// bridgeHeardAfter is how long a Claude Code run may work on its turn
+// with nothing of the reply before its client is told the reply goes on
+// (keepBridgeHeard). Before it, a failure is still a status for the next
+// account; after it, the client's stream begins, held for another account
+// all the same (holdLead), so that its first event reaches the client
+// well within the 600s Claude Code waits for one.
+var bridgeHeardAfter = time.Minute
+
+// keepBridgeHeard hands on a run's events, and a KAlive whenever the run
+// has said nothing for keepaliveEvery, from bridgeHeardAfter on, for up
+// to translatedQuietLongest of silence: a run whose Claude Code is still
+// working is heard from, as a translated provider's keepalives are. The
+// interactive mode tells a message only once it is written whole, and a
+// long conversation's first reply, at effort high on claude-opus-5-5,
+// took 385 to 527s (#5043). Its client heard the held stream's comments
+// for keepaliveLongest (keepQuiet), then nothing, and Claude Code 2.1.316
+// ended the request at 599s ("Streaming idle timeout (byte-level): no
+// bytes for 300000ms"); comments for as long as it waited would not do
+// either, since it ends a stream with no event for 600s from its headers
+// ("no chunks received for 300s"). Every new try then started a Claude
+// Code that wrote the whole conversation to the cache again (#3808).
+// What this buys is bounded: Claude Code 2.1.316 makes a ping of its own
+// of every 10s with bytes and counts 30 pings in a row, so a stream that
+// sends only pings and comments is ended 600s after its last other
+// event. The reply's start goes out when the hold lets it (holdLead,
+// ~4 minutes in), and the run then has until ~14 minutes, where it had
+// 599s.
+// The run's end closes events, and with them what this hands on; quit
+// ends it when relay is done with them.
+func keepBridgeHeard(events <-chan Event, quit <-chan struct{}) <-chan Event {
+	out := make(chan Event)
+	go func() {
+		defer close(out)
+		tick := time.NewTicker(keepaliveEvery)
+		defer tick.Stop()
+		began := time.Now()
+		last := began
+		started := false // the reply has its start, the run's or this one's
+		send := func(ev Event) bool {
+			select {
+			case <-quit:
+				return false
+			case out <- ev:
+				return true
+			}
+		}
+		for {
+			select {
+			case <-quit:
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				last = time.Now()
+				started = started || ev.Kind == KStart
+				if !send(ev) {
+					return
+				}
+			case <-tick.C:
+				quiet := time.Since(last)
+				if time.Since(began) < bridgeHeardAfter || quiet < keepaliveEvery || quiet >= translatedQuietLongest {
+					continue
+				}
+				// the reply begins, with none of it, for the client's
+				// keepalive to be its protocol's own event: an Anthropic
+				// ping before message_start breaks the SDKs (keepalive);
+				// the run's own start that comes later adds its usage
+				if !started {
+					started = true
+					if !send(Event{Kind: KStart}) {
+						return
+					}
+				}
+				if !send(Event{Kind: KAlive}) {
+					return
+				}
+			}
+		}
+	}()
+	return out
 }
 
 // relay answers the client with a reply's events: abort is called when

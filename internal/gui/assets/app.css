@@ -1564,7 +1564,7 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 .led .where-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .led .where-line > .ic { width: 14px; height: 14px; flex: none; }
 .led .source-badges { display: flex; flex-wrap: nowrap; gap: 4px; margin-top: 4px; }
-.led .price-reference { font-size: 10px; color: var(--muted); }
+.led .price-reference, .led .row-credits { font-size: 10px; color: var(--muted); }
 .led .cost { color: var(--green); }
 .led .cost.faint { color: var(--faint); }
 /* a block of its own, centred in the cell as the time and the model are: an
@@ -2379,6 +2379,7 @@ body .foot .status.lift { white-space: normal; overflow-wrap: anywhere; text-ove
    offered, and what to do, below the choices */
 .pop li.kept, .pop.model-picker li.kept { height: auto; align-items: flex-start; padding: 8px; margin-top: 3px; border-top: 1px solid var(--line); border-radius: 0; white-space: normal; cursor: default; }
 .pop li.kept .ic { margin-top: 1px; flex: none; }
+.pop li.menu-foot { height: auto; padding: 8px; margin-top: 3px; border-top: 1px solid var(--line); border-radius: 0; white-space: normal; cursor: default; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
 .pop li.kept .kept-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
 .pop li.kept .kept-words b { color: var(--fg); font-weight: 500; font-size: 12.5px; }
 .pop li.kept .text.action { flex: none; align-self: center; height: 25px; }
@@ -2727,8 +2728,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc + .acc, .accts .signing { border-top: 1px solid var(--line-2); }
 /* every row of the box ruled off from the one above it, a setting's too
    (the owner, 10-29: Add another sat unruled under Only switch) */
-.accts > :is(.keep-login, .switch-only, .pool-ends) + .acc { border-top: 1px solid var(--line-2); }
-.editor .accts .keep-login, .editor .accts .switch-only, .editor .accts .pool-ends { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 34px; padding: 6px 11px; font-size: 12px; border-top: 1px solid var(--line-2); }
+.accts > :is(.keep-login, .switch-only, .restart-app, .pool-ends) + .acc { border-top: 1px solid var(--line-2); }
+.editor .accts .keep-login, .editor .accts .switch-only, .editor .accts .restart-app, .editor .accts .pool-ends { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 34px; padding: 6px 11px; font-size: 12px; border-top: 1px solid var(--line-2); }
 .editor .accts .keep-login .keep-as { max-width: 240px; }
 /* Claude Code's interactive mode or -p, with why (claudeModeRow) */
 .claude-mode { display: contents; }
@@ -2815,6 +2816,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .key-rest-line { flex: 1 0 100%; display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 25px; }
 .acc .key-rest-line .key-rest { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .acc .key-rest-line .key-unrest { flex: none; white-space: nowrap; }
+.acc .key-rest-line .key-rest-said { flex: 1 1 0; min-width: 0; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acc .proto { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 5px 0 7px; font: inherit; font-size: 11px; color: var(--muted); border: 0; border-radius: 5px; background: var(--pill); white-space: nowrap; cursor: default; transition: opacity .15s, background .12s, color .12s; }
 .acc .proto svg { opacity: .7; transition: transform .15s var(--ease); }
 .acc .proto.open svg { transform: rotate(180deg); }
@@ -2850,6 +2852,15 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .alane.queued { color: var(--amber); }
 .acc .alane:hover, .acc .alane.open { color: var(--fg); background: var(--pill-hover); }
 .acc .alane-in { width: 64px; }
+/* a key's spend cap (sparkling_lemur_62868 on Discord): as the limit
+   pill, and marked when the key is held at it */
+.acc .aspend { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; font: inherit; font-size: 11px; color: var(--muted); border: 0; border-radius: 5px; background: none; box-shadow: inset 0 0 0 1px var(--line); white-space: nowrap; cursor: default; opacity: 0; transition: opacity .15s, background .12s, color .12s; font-variant-numeric: tabular-nums; }
+.acc:hover .aspend, .acc.held .aspend, .acc .aspend.open, .acc .aspend.set { opacity: 1; }
+.acc .aspend:focus-visible { opacity: 1; }
+.acc .aspend.set { color: var(--fg); background: var(--pill-hover); box-shadow: none; }
+.acc .aspend.at-cap { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+.acc .aspend:hover, .acc .aspend.open { color: var(--fg); background: var(--pill-hover); }
+.acc .aspend-in { width: 72px; }
 .acc .acap-held { color: var(--fg); }
 /* held for magpie's requests, not the agent signed in to it: a warning */
 .acc .acap-held.acap-direct { color: var(--amber); }
@@ -2910,9 +2921,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .accts.keys .acc[data-account-id] { flex-wrap: wrap; row-gap: 3px; }
 .accts.keys .acc > .n { flex: 1000 1 4.5em; max-width: max-content; min-width: 0; }
 .accts.keys .acc .plan { flex: 1000 1 3em; max-width: max-content; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.accts.keys .acc > :is(.amodels, .proto, .alane), .accts.keys .key-acts > .text.quiet { flex-shrink: 0; white-space: nowrap; }
-.accts.keys .acc > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set)), .accts.keys .key-acts > .text.quiet { overflow: hidden; }
-.accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set)):not(.open):not(:focus-visible),
+.accts.keys .acc > :is(.amodels, .proto, .alane, .aspend), .accts.keys .key-acts > .text.quiet { flex-shrink: 0; white-space: nowrap; }
+.accts.keys .acc > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set)), .accts.keys .key-acts > .text.quiet { overflow: hidden; }
+.accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set)):not(.open):not(:focus-visible),
 .accts.keys .acc:not(:hover):not(.held) .key-acts > .text.quiet:not(:focus-visible) { min-width: 0; max-width: 0; padding-left: 0; padding-right: 0; box-shadow: none; }
 /* and hidden, the gap beside it too */
 .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set)):not(.open):not(:focus-visible) { margin-left: -9px; }
@@ -2920,17 +2931,17 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 /* the limit pill unset on a key's row is quiet text, as the row's other
    hover-only controls: no padding to keep, and hidden it takes back the
    gap before it too (#892) */
-.accts.keys .acc > .alane:not(.set):not(.open):not(:focus-visible) { padding: 0; box-shadow: none; background: none; }
-.accts.keys .acc:not(:hover):not(.held) > .alane:not(.set):not(.open):not(:focus-visible) { margin-left: -9px; }
+.accts.keys .acc > :is(.alane, .aspend):not(.set):not(.open):not(:focus-visible) { padding: 0; box-shadow: none; background: none; }
+.accts.keys .acc:not(:hover):not(.held) > :is(.alane, .aspend):not(.set):not(.open):not(:focus-visible) { margin-left: -9px; }
 /* Safari before 15.4 has no :focus-visible and drops the rules above
    whole: there a focused control stays out on :focus instead */
 @supports not selector(:focus-visible) {
-  .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set)):not(.open):not(:focus),
+  .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set)):not(.open):not(:focus),
   .accts.keys .acc:not(:hover):not(.held) .key-acts > .text.quiet:not(:focus) { min-width: 0; max-width: 0; padding-left: 0; padding-right: 0; box-shadow: none; }
   .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set)):not(.open):not(:focus) { margin-left: -9px; }
   .accts.keys .acc:not(:hover):not(.held) .key-acts > .text.quiet:not(:focus) { margin-right: -9px; }
-  .accts.keys .acc > .alane:not(.set):not(.open):not(:focus) { padding: 0; box-shadow: none; background: none; }
-  .accts.keys .acc:not(:hover):not(.held) > .alane:not(.set):not(.open):not(:focus) { margin-left: -9px; }
+  .accts.keys .acc > :is(.alane, .aspend):not(.set):not(.open):not(:focus) { padding: 0; box-shadow: none; background: none; }
+  .accts.keys .acc:not(:hover):not(.held) > :is(.alane, .aspend):not(.set):not(.open):not(:focus) { margin-left: -9px; }
 }
 .accts.keys .acc > .key-acts { flex: none; display: flex; align-items: center; gap: 9px; margin-left: auto; }
 .accts.keys .acc .using, .accts.keys .key-acts > .text:not(.quiet) { flex: none; white-space: nowrap; }
@@ -3271,6 +3282,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .editor .bal-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }
 .editor .bal-fix:empty { display: none; }
 .editor .bal-fix.warn { color: var(--amber); }
+.editor .bal-fix .bal-uid { display: flex; align-items: center; gap: 8px; max-width: 100%; color: var(--fg); }
+.editor .bal-fix .bal-uid input { width: 12em; max-width: 100%; min-width: 0; }
+.editor .bal-fix .bal-uid input.bad { border-color: var(--amber); }
 .editor .bal-fix .text.action { height: 24px; font-size: 11.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor .pair.wrap { flex-wrap: wrap; }
 .editor .bal-res { flex-basis: 100%; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
@@ -3550,7 +3564,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .msuffix { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 2px 8px 4px; font-size: 12px; }
 .msuffix .hint { font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
 .msuffix .where { font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
-/* a provider's Names & levels: what the lists show, where that is set, and
+/* a provider's Names, prices & levels: what the lists show, where that is set, and
    the way there, a line each: the list is laid out again a scrollbar's width
    narrower after a change, and a shared line wrapped then, which moved the
    list (provider-levels-scroll) */
@@ -3808,6 +3822,33 @@ input.words.compact-num { flex: none; width: 76px; font-variant-numeric: tabular
 .row.pref.redact-kind .sub { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 /* an update that failed says why in full (the version row) */
 .row .sub.wraps { white-space: normal; overflow-wrap: anywhere; }
+/* Settings' lines that explain a setting rest out of sight, so the page is
+   its names and controls (the owner, 11-02): the pointer resting on a row,
+   or a key reaching it, shows them in a card under its name
+   (settingshints.js), and the rows don't move. They stay read by a screen
+   reader and by the search, which shows them in place. What isn't an
+   explanation stays: an error, a state (.say: the Version row's update,
+   a sync's last sync, the local model's, a check-in's result; the proxy
+   in use; a pattern's matches), a warning, a disclosure (what tracing
+   sends, who the allow list lets in), a line with a button or link in
+   it. A touch screen, with no hover, keeps them all. */
+@media (hover: hover) {
+  #view-settings:not(.set-searching) .row.pref > .who > .sub:not(.err, .bad, .say, .proxy-check, .lib-way, .image-gen-hidden, .sync-sign-in, .no-names, .pv-hits, .feat-why, .vision-not-marked, .font-note, .acts, [role="status"], #proxySub):not(#otelSessionsRow *, #allowList *, .disabled-model *) {
+    --hint: 1; position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  /* a row left with its name alone is as tall as any other: its control
+     (a switch, a field, a shortcut) no longer sets it apart */
+  #view-settings .row.pref:not(.feat-set) { box-sizing: content-box; min-height: 27px; } /* 51 with its padding, a line above it outside */
+  /* Check in now's result comes under its name and the row grows down,
+     its button held where it was pressed */
+  #view-settings .ci-now-row { align-items: flex-start; }
+}
+.set-hint { position: fixed; z-index: 60; max-width: min(380px, calc(100vw - 32px)); padding: 8px 11px; border-radius: 9px; background: var(--pop-bg); box-shadow: var(--shadow); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); font-size: 12px; line-height: 1.45; color: var(--fg-2); overflow-wrap: anywhere; pointer-events: none; opacity: 0; transform: translateY(-2px); transition: opacity .14s ease, transform .14s ease; }
+.set-hint.on { opacity: 1; transform: none; }
+.set-hint > p { margin: 0; }
+.set-hint > p + p { margin-top: 4px; }
+@media (prefers-reduced-motion: reduce) { .set-hint { transition: none; transform: none; } }
+:root[data-motion="reduce"] .set-hint { transition: none; transform: none; }
 .prefs .val.rule-add { flex: 1 1 100%; max-width: none; margin-left: 0; gap: 6px; }
 input.words.rule-kind { flex: none; width: 110px; }
 input.words.gateway-port { flex: none; width: 110px; font-variant-numeric: tabular-nums; }input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }
@@ -4203,10 +4244,10 @@ body.panel .modal { padding: 16px 12px; }
   body.web .acc > .grow + * { margin-left: auto; }
   /* nothing hovers on a phone: what a row shows on hover is shown, and a
      key's row gives it back the room it folds away till a hover (#841) */
-  body.web .acc :is(.text.quiet, .proto, .amodels, .alane) { opacity: 1; }
+  body.web .acc :is(.text.quiet, .proto, .amodels, .alane, .aspend) { opacity: 1; }
   body.web .acc .acc-more { opacity: 1; }
-  body.web .accts.keys .acc > :is(.amodels, .proto, .alane), body.web .accts.keys .key-acts > .text.quiet { max-width: none !important; padding: 0 7px !important; flex-shrink: 0 !important; }
-  body.web .accts.keys .acc > :is(.amodels, .proto, .alane):not(.set) { margin-left: 0 !important; }
+  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend), body.web .accts.keys .key-acts > .text.quiet { max-width: none !important; padding: 0 7px !important; flex-shrink: 0 !important; }
+  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend):not(.set) { margin-left: 0 !important; }
   body.web .accts.keys .key-acts > .text.quiet { margin-right: 0 !important; }
   body.web #gatewayKeys .acc > .key-quotas { max-width: none !important; padding: 0 7px !important; margin-left: 0 !important; flex-shrink: 0; }
   body.web #gatewayKeys .acc > .key-quotas:not(.set) { box-shadow: inset 0 0 0 1px var(--line) !important; }

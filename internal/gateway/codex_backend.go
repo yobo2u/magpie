@@ -80,7 +80,9 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 	// newer: the backend serves a model only to a client that knows it
 	provider.SawCodexClient(r.Header)
 	rest := strings.TrimPrefix(r.URL.Path, CodexPath)
-	body, ok := s.readRequestBody(w, r, provider.Responses, 0)
+	// a turn of Codex's own is read to codexBodyLimit, one for a magpie
+	// model held to the limit of every other route once it is named
+	body, ok := s.readRequestBody(w, r, provider.Responses, s.codexLimitOf())
 	if !ok {
 		return
 	}
@@ -180,6 +182,11 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		// The namespace owns the route even if a model is not in the catalog.
 		// Unknown providers/groups must fail locally, never fall through to OpenAI.
 		if strings.Contains(model, "/") {
+			if most := s.bodyLimitOf(); int64(len(body)) > most {
+				writeError(w, provider.Responses, http.StatusRequestEntityTooLarge, overLimit(most).Error()+
+					"; this limit is for a magpie model, and one of Codex's own models takes up to "+sizeWord(s.codexLimitOf()))
+				return
+			}
 			if rest == "/responses/compact" {
 				writeError(w, provider.Responses, 400, "/responses/compact is not supported for Magpie models; use a compaction_trigger on /responses")
 				return
@@ -1040,11 +1047,21 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		captureTitle = link != nil && isTitleKind(kind)
 		turn, scan := agentTurnOf(r, kind)
 		tools = scan
-		tr = s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(provider.Responses, body), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: callerOf(r).agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Tier: bodyTier(provider.Responses, body), Provider: "openai", Subagent: subagentPickOf(r),
+		// the window Codex holds the conversation to, not models.dev's
+		// for the id, which is OpenAI's API's (netube on Discord: 922K
+		// on Routing for a Codex Plus account's 272K), known as the turn
+		// goes out (livePrompt)
+		user := ""
+		if on != nil && on.Account != nil {
+			user = on.Account.User
+		}
+		window := cmp.Or(provider.CodexWindow(user, model), catalog.ContextOf(model))
+		tr = s.trace.beginFor(r, Route{turn: turn, window: window, dirOf: dirOf(provider.Responses, body), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: callerOf(r).agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Tier: bodyTier(provider.Responses, body), Provider: "openai", Subagent: subagentPickOf(r),
 			Order: []Weighed{seat}, Tries: []Try{{ID: seat.ID, Model: model, Effort: effort, Start: start}}})
 		if m := noteMasked(r, "chat", maskedHits, sentOf(maskedHits, body), tr.ID, "openai", model); m != nil {
 			s.trace.update(tr, func(t *Route) { t.Masked = m })
 		}
+		first.onFirst = s.trace.firstContent(tr)
 		promptRead := s.inspectPrompt(tr, provider.Responses, body, body, sentWhole)
 		end = func(status int, msg string, tokens, out int) {
 			ms := time.Since(start).Milliseconds()
@@ -1054,17 +1071,6 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				replyDigest = titleReplyDigest(titleReply.buf.Bytes(), nil)
 			}
 			prompt := promptRead() // outside the trace's lock, which reading it takes
-			// the window Codex holds the conversation to, not models.dev's
-			// for the id, which is OpenAI's API's (netube on Discord: 922K
-			// on Routing for a Codex Plus account's 272K)
-			window := 0
-			if prompt != nil {
-				user := ""
-				if on != nil && on.Account != nil {
-					user = on.Account.User
-				}
-				window = cmp.Or(provider.CodexWindow(user, model), catalog.ContextOf(model))
-			}
 			s.trace.update(tr, func(t *Route) {
 				// what masking took: magpie's own time isn't split here
 				t.Masking = maskingMs(r.Context(), 0)
@@ -1138,6 +1144,12 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		appendUsage(r, rec)
 		tried = append(tried, fmt.Sprintf("openai: %d %s", status, msg))
 	}
+	// handOut is handOn for a try the account was out for (codexAccountOut),
+	// the trace saying why as a routed try's does
+	handOut := func(status int, msg string, body []byte) {
+		handOn(status, msg, 0)
+		s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1].Fail = failure(status, body) })
+	}
 	// askAgain pauses wait, Codex kept alive meanwhile, for the turn to be
 	// asked again; false when Codex went away in it
 	askAgain := func(status int, msg string, wait time.Duration) bool {
@@ -1153,7 +1165,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			again := t.Tries[0]
 			t.Tries = append(t.Tries, Try{ID: again.ID, Model: again.Model, Effort: again.Effort, Start: began})
 		})
-		first, titleReply = firstToken{start: start}, capturedBody{}
+		first, titleReply = firstToken{start: start, onFirst: s.trace.firstContent(tr)}, capturedBody{}
 		return true
 	}
 	var sniff *usageSniffer
@@ -1374,6 +1386,17 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				s.codexFallBack(w0, r, body0, kept)
 				return
 			}
+			if overload && codexAccountOut(res.StatusCode, msg) && s.codexFallsBack(modelOf(body), body) {
+				// the account out of its allowance (its credits and resets
+				// looked at above): the fallbacks answer, as they do for a
+				// turn through magpie's accounts, rather than Codex handed
+				// the refusal (adorable_piglet on Discord)
+				said := provider.APIError(msg, res.Status)
+				handOut(res.StatusCode, said, msg)
+				end(res.StatusCode, said, 0, 0)
+				s.codexFallBack(w0, r, body0, kept)
+				return
+			}
 			if said, ok := codexSaidNothing(rest, modelOf(body), codexWho(base, on), res, msg); ok {
 				// a failure with nothing said of it, which Codex shows as
 				// "Unknown error" alone (#409), or a web page Codex shows
@@ -1482,6 +1505,16 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				return
 			}
 		}
+		if hw.mayAskAgain() && hw.failure != 0 && !hw.refused && codexAccountOut(hw.failure, hw.errBody()) && r.Context().Err() == nil && s.codexFallsBack(modelOf(body), body) {
+			// the account out of its allowance, said on its stream before
+			// any of the reply: the fallbacks answer
+			said := "OpenAI: " + string(hw.errBody())
+			res.Body.Close()
+			handOut(hw.failure, said, hw.errBody())
+			end(hw.failure, said, 0, 0)
+			s.codexFallBack(w0, r, body0, kept)
+			return
+		}
 		hw.release()
 		break
 	}
@@ -1584,6 +1617,25 @@ func codexRouteUnmasked(on *provider.Provider) bool {
 		return false
 	}
 	return unredactedRoute(*p, false, nil)
+}
+
+// codexAccountOut says the ChatGPT backend turned away a turn on Codex's
+// own sign-in for the account, not the request: out of its allowance
+// (usage_limit_reached, a plan without Codex), of its credits, or rate
+// limited — what a turn through magpie's accounts goes on past to the
+// next. A 401 is never one: Codex renews its own sign-in on it.
+func codexAccountOut(status int, body []byte) bool {
+	if status == http.StatusUnauthorized {
+		return false
+	}
+	if status == http.StatusForbidden && bytes.Contains(body, []byte("usage_not_included")) {
+		return true
+	}
+	switch failure(status, body) {
+	case failQuota, failCredit, failRate:
+		return true
+	}
+	return false
 }
 
 // codexFallsBack says Codex's turn on one of its own models has fallbacks
@@ -1700,8 +1752,9 @@ func codexRelayedAccount(base string, h http.Header, on *provider.Provider) (pro
 var unreadableItem = regexp.MustCompile(`(?i)(?:encrypted content for item|item with id|referenced reasoning item) '?([A-Za-z]+_[A-Za-z0-9_-]+)'?`)
 
 // withoutUnreadable is body without what OpenAI's refusal msg says it
-// can't read: the item it names, the reasoning another account sealed, or
-// a member of Codex's passthrough it doesn't know.
+// can't read: the item it names, what another account sealed
+// (withoutSeals: a web search's too, #3887), or a member of Codex's
+// passthrough it doesn't know.
 func withoutUnreadable(body, msg []byte) ([]byte, bool) {
 	if f, ok := refusedPassthrough(msg); ok {
 		// a member of Codex's passthrough the backend doesn't know yet
@@ -1717,7 +1770,7 @@ func withoutUnreadable(body, msg []byte) ([]byte, bool) {
 		}
 	}
 	if foreignReasoning.Match(msg) {
-		return withoutReasoning(body)
+		return withoutSeals(body)
 	}
 	return nil, false
 }

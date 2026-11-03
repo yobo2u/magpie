@@ -339,7 +339,7 @@ func callSourcesWith(codex []file) []file { return callSourcesInto(nil, codex) }
 // callSourcesInto is callSourcesWith appended to out.
 func callSourcesInto(out []file, codex []file) []file {
 	lists := append(callFileLists(codex), openCodeCallFiles(), zcodeCallFiles(), dshCallFiles(),
-		minimaxCallFiles(), kimiCallFiles(), wslFiles("kimi"), piCallFiles(), codebuddyCallFiles(),
+		minimaxCallFiles(), kimiCallFiles(), wslFiles("kimi"), piCallFiles(), codebuddyCallFiles(), workbuddyAIFiles(),
 		agyCallFiles(),                        // #2097
 		workbuddyCallFiles(), grokCallFiles()) // #4423
 	if out == nil {
@@ -955,6 +955,7 @@ type cxCall struct {
 		ID          string   `json:"id"`
 		SessionID   string   `json:"session_id"`
 		ThreadID    string   `json:"thread_id"`
+		ForkedFrom  string   `json:"forked_from_id"`
 		Upstream    string   `json:"model_provider"`
 		AccountID   string   `json:"creator_account_id"`
 		UserID      string   `json:"creator_user_id"`
@@ -1040,6 +1041,7 @@ func codexCallLine(st *callFile, b []byte) {
 		r.Upstream, r.AccountID, r.UserID = st.str(p.Upstream), st.str(p.AccountID), st.str(p.UserID)
 		r.Usage.context(r.Session, "", "")
 		r.Usage.beginSnapshot(tsAt(b, false), p.ID, p.cxHistorySnapshot)
+		r.Usage.forkedFrom(st.Path, p.ForkedFrom)
 	case l.Type == "turn_context":
 		if p.Upstream != "" {
 			r.Upstream = st.str(p.Upstream)
