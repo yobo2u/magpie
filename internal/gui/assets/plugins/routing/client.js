@@ -477,7 +477,7 @@ function routingPage(part) {
         t("Cache hit rate") + ": " + t("The share of the prompt read from the cache")],
       speed: ["speed", "Speed", speed ? t("{n} tok/s", { n: Math.round(speed) }) : "—",
         t("Output tokens a second after the first, over the streamed replies") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed")],
-      cost: ["cost", "Cost", routeCost(r), r.priced ? costNote() : t("No known price or token counts for this request")],
+      cost: ["cost", "Cost", routeCost(r), [r.priced ? costNote() : routeCredits([r]) ? "" : t("No known price or token counts for this request"), routeCredits([r]) ? creditsNote() : ""].filter(Boolean).join("\n")],
     };
     return visibleMetrics.map((key) => values[key]).filter((metric) => metric[2] !== "—");
   }
@@ -3337,9 +3337,14 @@ function routingPage(part) {
   // or why the lead's pick stood
   function subagentWhy(r) {
     const agent = agentName(r.agent);
+    const said = { agent, model: r.subagent.asked, to: r.subagent.to, why: r.subagent.kept ? t(r.subagent.kept) : "" };
+    // set to follow the lead (cleverpigo on X): To is the lead's model
+    if (r.subagent.lead) return r.subagent.kept
+      ? t("{agent} requested a subagent on {model} and it stayed there: its subagents follow their lead, on {to}, but {why}.", said)
+      : t("{agent} requested a subagent on {model}; magpie put it on {to}, the model its lead is on.", said);
     return r.subagent.kept
-      ? t("{agent} requested a subagent on {model} and it stayed there: its subagents are set to {to}, but {why}.", { agent, model: r.subagent.asked, to: r.subagent.to, why: t(r.subagent.kept) })
-      : t("{agent} requested a subagent on {model}; magpie put it on {to}, the model set for its subagents.", { agent, model: r.subagent.asked, to: r.subagent.to });
+      ? t("{agent} requested a subagent on {model} and it stayed there: its subagents are set to {to}, but {why}.", said)
+      : t("{agent} requested a subagent on {model}; magpie put it on {to}, the model set for its subagents.", said);
   }
   // a request a stand-in of magpie's put on another model than it named
   // (Route.Moved): why, on its row's tag, its title and its story. Neo on
@@ -3645,9 +3650,19 @@ function routingPage(part) {
   setInterval(refreshSessionNames, 15000);
   window.addEventListener("focus", refreshSessionNames);
   const costNote = () => t("Estimated at effective model prices, including cache reads and writes; subscription billing may differ. Totals cover only the requests listed here.");
+  // what the requests cost in their plan's credits, as their replies said
+  // (WorkBuddy's usage.credit, as the Usage page says it; jiabubu on
+  // Discord): "" when no reply said any
+  function routeCredits(rs) {
+    let n = 0, said = 0;
+    for (const r of rs) for (const u of r.usage || []) if (u.credits != null) { n += u.credits; said++; }
+    return said ? ledCredits({ credits: n, credited: said }).textContent : "";
+  }
+  const creditsNote = () => t("What it cost in its plan's credits, as the reply said");
   function routeCost(r) {
-    if (!r.priced) return "—";
-    return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }) + (r.unpriced ? "+" : "");
+    const credits = routeCredits([r]);
+    if (!r.priced) return credits || "—";
+    return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }) + (r.unpriced ? "+" : "") + (credits ? " · " + credits : "");
   }
   function groupedRows(rs, rowEls) {
     askUnnamed(rs);
@@ -3718,9 +3733,10 @@ function routingPage(part) {
         t("Total output tokens divided by total decode time; excludes waiting and replies without usable timing") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed") + "\n" + coverage(total.timed)]));
       const metaSig = JSON.stringify([bits, tokenHelp, meta.map((e) => [e.textContent, e.title])]);
       if (x.meta.dataset.sig !== metaSig) { x.meta.replaceChildren(...meta); x.meta.dataset.sig = metaSig; }
-      setText(x.cost, total.priced ? "≈" + fmtCost({ cost: total.cost, unpriced: 0 }) + (total.unpriced ? "+" : "") : "");
-      x.cost.hidden = !visibleMetrics.includes("cost") || !total.priced;
-      x.cost.title = costNote();
+      const credits = routeCredits(g.rows);
+      setText(x.cost, [total.priced ? "≈" + fmtCost({ cost: total.cost, unpriced: 0 }) + (total.unpriced ? "+" : "") : "", credits].filter(Boolean).join(" · "));
+      x.cost.hidden = !visibleMetrics.includes("cost") || !total.priced && !credits;
+      x.cost.title = [total.priced ? costNote() : "", credits ? t("What {n} of these requests cost in their plan's credits, as the replies said", { n: g.rows.filter((r) => routeCredits([r])).length }) : ""].filter(Boolean).join("\n");
       if (g.key) x.b.setAttribute("aria-expanded", String(open));
       els.push(x.b);
       if (open) els.push(...g.els);
@@ -5749,6 +5765,17 @@ function routingPage(part) {
     gImportText.value = "";
     renderGroups();
   }
+  // importOver: the group of the user's own that pasted text would replace,
+  // by the id it carries (provider.ImportGroupOver): not one magpie found
+  function importOver(text) {
+    const a = text.indexOf("{"), b = text.lastIndexOf("}");
+    if (a < 0 || b < a) return null;
+    let x;
+    try { x = JSON.parse(text.slice(a, b + 1)); } catch { return null; }
+    const id = typeof x?.group?.id === "string" ? x.group.id.trim().toLowerCase() : "";
+    if (x?.magpie !== "routing-group" || !id) return null;
+    return groups.groups.find((g) => g.id === id && !g.auto && !g.hidden) || null;
+  }
   // importBox: paste a shared group, Import adds it; then what was added,
   // and what of it this magpie has none of, until Done
   let gImportBox = null;
@@ -5761,15 +5788,27 @@ function routingPage(part) {
       gImportText.setAttribute("aria-label", t("A routing group shared from magpie"));
       const go = el("button", "text primary rt-gimport-go", t("Import"));
       go.type = "button";
+      // a text whose group id is a group of the user's replaces that group:
+      // the button and the line under the box say which, before it is pressed
+      const warn = el("div", "rt-gimport-note rt-gimport-over");
+      warn.hidden = true;
+      const sync = () => {
+        const over = importOver(gImportText.value);
+        go.textContent = over ? t("Replace {name}", { name: over.name }) : t("Import");
+        warn.hidden = !over;
+        warn.textContent = over ? t("{name} has the same id: its models, routing and rules are replaced by this group's; its accounts and folder rules stay", { name: over.name }) : "";
+      };
+      gImportText.oninput = sync;
       go.onclick = async () => {
         const text = gImportText.value;
         if (!text.trim()) { gImportText.focus({ preventScroll: true }); return; }
+        const replace = !!importOver(text);
         go.disabled = true;
         try {
-          groups = groupsFrom(await api("groups/import", { text }));
+          groups = groupsFrom(await api("groups/import", replace ? { text, replace } : { text }));
           gImport = { res: groups.imported };
           gImportText.value = "";
-          status(t("Added {name}", { name: groups.imported.name }), "ok");
+          status(t(groups.imported.replaced ? "Replaced {name}" : "Added {name}", { name: groups.imported.name }), "ok");
           renderGroups();
           load(); // the gateway's model list, the agents' pickers
         } catch (e) { go.disabled = false; status(e.message, "err"); }
@@ -5779,9 +5818,10 @@ function routingPage(part) {
       no.onclick = closeImport;
       const acts = el("div", "acts");
       acts.append(go, no);
-      parts.push(el("div", "rt-gtpl-head", t("Paste a routing group someone shared from their magpie: its models, routing and rules come with it, never a key")), gImportText, acts);
+      sync();
+      parts.push(el("div", "rt-gtpl-head", t("Paste a routing group someone shared from their magpie: its models, routing and rules come with it, never a key")), gImportText, warn, acts);
     } else {
-      parts.push(el("div", "rt-gimport-done", t("Added {name}", { name: res.name })));
+      parts.push(el("div", "rt-gimport-done", t(res.replaced ? "Replaced {name}" : "Added {name}", { name: res.name })));
       if (res.missing?.length) parts.push(el("div", "rt-gimport-missing", t("Not in your magpie, left out: {models}", { models: res.missing.join(", ") })));
       if (res.instead?.length) parts.push(el("div", "rt-gimport-note", t("The same model from your own provider: {models}", { models: res.instead.join(", ") })));
       if (res.rules) parts.push(el("div", "rt-gimport-note", t(res.rules === 1 ? "1 rule left out with them" : "{n} rules left out with them", { n: res.rules })));
@@ -6614,7 +6654,8 @@ function routingPage(part) {
       const decides = d.members.some((m) => !subOf(m) && deciderOf(m)), chats = d.members.some((m) => subOf(m) || !deciderOf(m));
       const subs = decides ? [] : groups.groups.filter((x) => !x.hidden && !x.decides && x.id !== g?.id && !(g && x.holds?.includes(g.id)))
         .map((x) => ({ value: "group/" + x.id, label: x.name, note: noted("group/" + x.id, "group/" + x.id), icons: groupIcons(x), group: ROUTING_GROUPS, ref: "group/" + x.id }));
-      const ref = (x) => ({ value: x.id, label: x.name || x.id, note: noted(x.providerName, x.id), icon: x.icon, group: x.providerName, ref: x.id, context: x.context });
+      // free: the vendor's word, zero: listed at $0 there (jiangguochao666 on X)
+      const ref = (x) => ({ value: x.id, label: x.name || x.id, note: noted(x.providerName, x.id), icon: x.icon, group: x.providerName, ref: x.id, context: x.context, free: x.free, zero: x.zero });
       // the image models after them, said as such (jzw690 on X): a group
       // of them is picked in Settings › Images, or named at the images API
       const drawRef = (x) => ({ ...ref(x), note: noted(`${x.providerName} · ${t("Image model")}`, x.id) });
@@ -7412,7 +7453,7 @@ function routingPage(part) {
       if (sg) cb.append(stackIcon(groupIcons(sg)), el("span", "", `${sg.name} · ${t("routing group")}`));
       else if (d.classifier) cb.append(icon(m?.icon || "generic"), el("span", "", m ? `${m.name || m.id} · ${m.providerName}` : d.classifier));
       else cb.append(el("span", "", t("choose a model")));
-      const opt = (x) => ({ value: x.id, label: x.name || x.id, note: x.providerName, icon: x.icon, group: x.providerName, ref: x.id, context: x.context });
+      const opt = (x) => ({ value: x.id, label: x.name || x.id, note: x.providerName, icon: x.icon, group: x.providerName, ref: x.id, context: x.context, free: x.free, zero: x.zero });
       const subs = groups.groups.filter((x) => !x.hidden && x.id !== g?.id)
         .map((x) => ({ value: "group/" + x.id, label: x.name, note: "group/" + x.id, icons: groupIcons(x), group: ROUTING_GROUPS, ref: "group/" + x.id }));
       cb.onclick = (ev) => openPicker({ id: "", name: "", fields: [] }, { key: "classifier", label: "model", value: d.classifier, options: [...deciders.map(opt), ...subs, ...groups.models.map(opt)],
