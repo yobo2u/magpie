@@ -75,6 +75,18 @@ run was offered it. `subscriptionRun.names` (`bridgeNames`) maps it back
 to the declared name in `toolStart`, for streamed and whole messages, and
 in `mcpCall` (#2649).
 
+A client's MCP tool that it announced but hasn't loaded (Claude Code's
+tool search names deferred tools in a reminder and leaves them out of
+`tools` until `ToolSearch` loads them) is no tool of the run's, but the
+run's model reads its name in the conversation and calls it,
+`mcp__magpie__<server>__<tool>`. `toolStart` hands that call over under
+the full name, which is the client's own, when the cut name maps to
+nothing and isn't in `subscriptionRun.tools`: handed over cut, as
+`<server>__<tool>`, the client answered "No such tool available" and the
+model had to load it and call again (packinggoods, 11-02,
+`TestClaudeBridgeHandsOverAnUnloadedMagpieTool`). A deferred tool of
+another client MCP server (`mcp__linear__…`) is still not handed over.
+
 A turn with `tool_choice` none is offered every tool the client sent, as
 any other turn is (bbfatx on X). Anthropic caches a prompt as tools, then
 system, then messages, so a turn offered fewer tools (a title or summary
@@ -350,11 +362,37 @@ closed at the first result. Reading the plan's allowance (`/usage`,
 `claudeUsageTUI`) types `/usage` in the interactive mode too: the helper
 is told `{"type":"command","command":"/usage"}`, types it, waits for the
 panel's windows ("NN% used", `commandSettle` still) and closes it with
-Esc. Its result (`local_command: "usage"`) says each window as -p's lines
+Esc. A panel with no window (its words saying why) is taken as drawn only
+once its Settings tabs show and nothing is loading (`usageDrawn`), still
+for three `commandSettle`s: Claude Code draws its banner and folder again
+first, which stays still while a slow /usage loads, and taken as the
+panel it was read as an allowance's error (ikunbots on X, v0.1.2738).
+With no panel by `commandWait`, the result is an error saying what was
+last drawn (`TestShimWaitsPastTheBanner`, `TestUsageDrawn`). Its result (`local_command: "usage"`) says each window as -p's lines
 do, "Current session: 99% used · resets 7pm (Asia/Shanghai)" (`usageText`,
 tested on the bytes Claude Code 2.1.316 drew, `testdata/usage-2.1.316.bin`),
 for `provider.parseClaudeUsage`. Claude Code 2.1.316's `-p /usage`
 printed only the session's cost there, no window, in a real run.
+The helper reads the screen as a terminal shows it (`grid`,
+[`screen.go`](../../internal/claudetui/screen.go), 200 by 50 on Windows
+as its pseudo console is made, 80 by 24 elsewhere), beside the stream:
+Windows' pseudo console sends only the cells that changed, skipping one
+that holds the same letter ("Settin\x1b[1Cs"), and a window drawn only
+for a moment is kept as it looked (`panel`). The panel is drawn before
+its figures, "Loading usage data…" while Claude Code asks for them: the
+helper waits that out (to `commandWait`), presses "r" once on "Error:
+Failed to load usage data", and a panel that still has no figure is an
+error result, "/usage couldn't load the plan's usage: …". Before, 3s
+still on "Loading usage data…" was taken as drawn, and the panel's frame
+was told as the figures, which the card read as an account with no
+allowance (Seagull fries, Windows 11; `TestShimWaitsForUsageFigures`, on
+the bytes the pseudo console passed on for a real 2.1.316,
+`testdata/usage-loading-win-2.1.316.bin`, `usage-failed-win-2.1.316.bin`).
+The provider keeps the account's last reading on that error
+(`claudeUsageUnknown`, as for Claude Code's own "temporarily
+unavailable"), and a panel with no figure otherwise is "Claude Code's
+/usage showed no usage figures: …", never "told no allowance", which is
+kept for an account Claude Code refuses (`claudeUsageDenied`).
 
 These one-off interactive runs (`askClaudeTUI`, `claudeUsageTUI`) work in
 magpie's shared work folder (`oneOffDir`: `claudeWorkDir`, a fresh temp
@@ -567,6 +605,23 @@ the conversation alone. Claude Code still sends its billing block and its
 identity line, so requests come from the real binary. They no longer carry
 Claude Code's prompt, and that is the ban risk the setting names.
 
+A one-off ask in the interactive mode (no tools, no reply before it, not
+lean, no client marks: `appendsPrompt`) gets its caller's instructions by
+`--append-system-prompt-file` instead (`append.md`, the same `leanSystem`
+text), after Claude Code's own prompt, and its first message holds the ask
+alone. The helper pastes a first message as one text without marks, so the
+instructions pasted there were written to the cache by every ask: Claude
+Code's auto mode classifier read 1,197 tokens and wrote 80k on every check
+of one conversation (#2432). Appended, they end the system block Claude
+Code marks itself, which is the same for every ask under the same
+instructions (only the unmarked billing line differs; recorded from Claude
+Code 2.1.316 on 2026-11-03). Such a run is let go after its reply
+(`ended`) and is never shelved or branched (`run.appended`), since a
+session resumed without the file would have no instructions. Every other
+run keeps them in the first message. Tested by
+`TestClaudeTUIOneOffAskAppendsInstructions` and
+`TestClaudeAppendOnlyForInteractiveOneOffs`.
+
 A request with client cache marks (#1717) is never lean: its system marks
 are placed in the first message. The mode is part of the run's identity
 (`cacheIdentity`, and the tool-results check in `serveSubscription`), so a
@@ -691,9 +746,26 @@ after the last reply, with nothing in the log).
 A turn that finds no run under its own key takes one whose `behindKey` is
 its key, rewinds it to `behindTurn` (as `letGo` does) and tells it only
 the turn's messages ("taken back from the side question it answered
-since"). The run is marked `rewound`, so it isn't shelved. A run that
-can't be rewound is let go and the turn told whole to a new run, as
-before. Tried with the real 2.1.290 client in `-p --prompt-suggestions`
+since"). The run is marked `rewound`, so it isn't shelved until it has
+answered a whole turn since (`replied`, set as a turn ends with `stop`,
+cleared at each take-back): the session's lines after the rewind chain
+from the line before the side question, which is what `--resume` goes
+on from. A run that can't be rewound is let go and the turn told whole
+to a new run, as before.
+
+A run let go past `idleMost` while it waits at a side question's reply
+is shelved with its `behindKey` too (#4914, ggbdpq: with suggestions on,
+the next turn after a let-go read 19,844 from the cache and wrote 29,345;
+with them off, 49,560 read and 50 written). A turn that finds no session
+under its own key takes the newest one whose `behindKey` is its key, and
+the run that takes it resumes a copy cut before the side question
+(`cutBehind`): before the `-p` run's message `behindTurn`
+(`cutSessionBefore`), or after an interactive run's `behindLine`
+(`cutSession`). The shelved file is removed. Resumed whole, Claude Code
+would go on with the suggestion's exchange as the conversation's, which
+the client never had. A session that can't be cut is let go and the turn
+told whole, as before. `TestClaudeLetGoConversationAfterSuggestionResumesItsSession`
+holds it, with a stand-in for Claude Code; not tried with the real one. Tried with the real 2.1.290 client in `-p --prompt-suggestions`
 and the real 2.1.290 as the run, against a local mock of Anthropic: one
 run for the whole session, and the turn after each suggestion went on
 from the reply before it. Other side requests that go on from the
@@ -1063,7 +1135,12 @@ of its first message, so the last is the caller's. Not measured: whether
 a real model on a Windows gateway then stops writing PowerShell.
 
 Nothing else of the folder reaches the run. `--setting-sources ""` loads
-no CLAUDE.md, settings or skills from it. Auto memory is off, and
+no CLAUDE.md, settings or skills from it. That also kept the user's own
+`disableDeepLinkRegistration` from every run, its warm-up and its usage
+helper, and each registered the `claude-cli://` URL handler again (#4928):
+they are given `--settings {"disableDeepLinkRegistration":"disable"}`,
+flag settings, which `--setting-sources` doesn't control
+(`disableDeepLinkSettings`). Auto memory is off, and
 `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1` keeps the repository's status out
 of the prompt, which would change it, and Anthropic's cache with it,
 whenever a file changes. The system prompt magpie sends is unchanged; only

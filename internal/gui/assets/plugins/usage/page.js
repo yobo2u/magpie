@@ -18,6 +18,50 @@ function headersPanel(label, first, headers) {
   return panel;
 }
 
+// A call's HTTP headers both ways (usrname1833 on Discord: 查看原始请求和
+// 原始响应的http头, to debug what a capture would show), as the gateway
+// read them out, secrets taken out: the client's, then each request magpie
+// sent upstream for it and the head of its answer. Folded under the bodies
+// on the Gateway page's recent calls and on Routing; open when open is.
+// h is /api/gateway/call's headers, or the archive's upstream ones.
+function wireHeadersView(h, open, toggle) {
+  const box = el("section", "call-wire" + (open ? " open" : ""));
+  const b = el("button", "text call-wire-toggle");
+  b.setAttribute("aria-expanded", String(open));
+  const chev = el("span", "call-chev");
+  chev.append(svg(CHEV_R, 11, 1.6));
+  b.append(chev, el("span", "", t("HTTP headers")));
+  b.onclick = (ev) => { ev.stopPropagation(); toggle(); };
+  box.append(b);
+  if (!open) return box;
+  box.append(wireHeadersGrid(h, true));
+  return box;
+}
+
+// the panels: the client's request (when withClient), and each upstream
+// request with its answer
+function wireHeadersGrid(h, withClient) {
+  const grid = el("div", "call-details call-wire-grid");
+  if (withClient) {
+    const client = headersPanel(t("From the client"), "", h.request);
+    client.classList.add("call-wire-wide");
+    grid.append(client);
+  }
+  const ups = h.upstream || [];
+  if (!ups.length) grid.append(el("p", "call-wire-note", t("No request went upstream.")));
+  let plugin = false;
+  for (const u of ups) {
+    plugin ||= !!u.plugin;
+    grid.append(
+      headersPanel(u.plugin ? t("Handed to plugin {name}", { name: u.plugin }) : t("Sent upstream"), `${u.method} ${u.url}`, u.request),
+      headersPanel(t("Upstream response"), u.error ? u.error : `${u.proto || "HTTP"} ${u.status} · ${ledTook(u.ms)}`, u.response),
+    );
+  }
+  if (h.more) grid.append(el("p", "call-wire-note", t("{n} more requests upstream, not kept", { n: h.more })));
+  if (plugin) grid.append(el("p", "call-wire-note", t("A plugin sends a request on to its vendor with headers of its own, which magpie doesn't see.")));
+  return grid;
+}
+
 // The archived file, whole, however large: to the browser in magpie web,
 // to Downloads in the app (#447).
 async function downloadArchive(name, b) {
@@ -102,6 +146,8 @@ function archivePanel(name, id, redraw) {
     archiveBodyPanel("Response Body", got.response, id + "|archive"),
   );
   box.append(grid);
+  // what magpie sent upstream for it, and the heads that came back
+  if (got.upstream?.length) box.append(wireHeadersGrid({ upstream: got.upstream, more: got.upstreamMore }, false));
   return box;
 }
 
@@ -647,7 +693,7 @@ function renderUsage() {
   const hit = u.cache_read && hitRate !== null ? t("hit rate {p}", { p: Math.round(100 * hitRate) + "%" }) : "";
   tile(fmtN(u.cache_read), t("cache read"), hit, u.cache_write ? t("{n} written", { n: fmtN(u.cache_write) }) + cacheTTLs(u, fmtN) : "");
   tile(fmtN(u.reasoning), t("reasoning"), t("inside output"));
-  tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.unpriced ? t("{n} unpriced", { n: u.unpriced }) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
+  tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.credited ? ledCredits(u).textContent : "", u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.unpriced ? t("{n} unpriced", { n: u.unpriced }) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
 
   // the timeline: one bar per hour, day or week; output sits on top of input
   const chart = $("#chart");
@@ -688,6 +734,10 @@ function renderUsage() {
       const sub = [];
       if (g.sub) sub.push(g.sub);
       sub.push(t(g.calls === 1 ? "{n} call" : "{n} calls", { n: g.calls }));
+      // what the calls cost in their plan's credits, as the replies said
+      // (WorkBuddy's 积分): an account's, a model's, an agent's (lcyksp
+      // on Discord), not only their tokens
+      if (g.credited) sub.push(ledCredits(g).textContent);
       // magpie's own calls apart from the agents' (#1839): magpie's row
       // says it is, and a model's, a key's or an account's how many of
       // its calls were
@@ -2399,7 +2449,12 @@ function renderLedger() {
       : mcp ? [r.providerName && t(r.providerName), r.host].filter(Boolean).join(" · ") || "—"
       : search ? [r.providerName && t(r.providerName), r.host, r.providerKeyName].filter(Boolean).join(" · ") || "—"
       : t(r.providerName) + (r.host ? " · " + r.host : "");
-    const wc = td(el("div", "where-name", where), "where", where);
+    // the provider's logo before its name, as on the Routing page (Jiabubu
+    // on Discord); a session file's record names none for sure
+    const face = !local && providers.find((p) => p.id === r.provider);
+    const line = el("div", "where-line");
+    line.append(...(face ? [icon(face.icon || "generic")] : []), el("div", "where-name", where));
+    const wc = td(line, "where", where);
     const badges = el("div", "source-badges");
     if (local && r.session_account && r.session_official_login) {
       const badge = el("span", "src official", t("OFFICIAL"));

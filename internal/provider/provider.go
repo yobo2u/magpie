@@ -99,6 +99,10 @@ type Provider struct {
 	// under it, with the key in x-goog-api-key, and models under it lists
 	// them (#1346).
 	Gemini string `json:"gemini,omitempty"`
+	// GeminiFilled is that magpie filled Gemini in once, for a provider
+	// at AI Studio's OpenAI-compatible URL (aiStudioNative): a Gemini URL
+	// the user cleared after that stays empty.
+	GeminiFilled bool `json:"geminiFilled,omitempty"`
 	// Decide is the base of a decision API (TypeSafe's System One, which
 	// Jev answers), for routing groups' choices of model and effort. The
 	// provider may also serve conversations on the other endpoints.
@@ -1140,17 +1144,24 @@ func delistedWith(p Provider, was *Provider) []string {
 // left unpicked isn't new when the list that left it out for a while has it
 // again (an Our Free Model channel not read yet when the picks were saved).
 // A list short of no pick is taken as it is: what it left out and lists
-// again later is new (TestClaudePicksOfEveryModelTakeOnesListedSince).
+// again later is new (TestClaudePicksOfEveryModelTakeOnesListedSince). A
+// provider of keys saved before PickedFrom was kept is given it at its next
+// Save, the same picks too, as withNewlyListed serves those picks as they
+// are until it has one (TestLegacyPicksOfEveryModelGetPickedFromAtSave).
 func listedWith(p Provider, was *Provider) []string {
 	if len(p.Models) == 0 {
 		return nil
 	}
-	if was != nil && slices.Equal(normalModels(was.Models), normalModels(p.Models)) {
+	same := was != nil && slices.Equal(normalModels(was.Models), normalModels(p.Models))
+	if same && was.PickedFrom != nil {
 		return was.PickedFrom
 	}
 	from := p
 	if q, err := Find(p.ID); err == nil {
 		from = *q // with its account, whose list it is
+	}
+	if same && (from.Account != nil || p.Account != nil) {
+		return was.PickedFrom // a subscription keeps the date rule
 	}
 	var ids []string
 	for _, m := range from.Available() {
@@ -1538,6 +1549,7 @@ func normalize(p Provider) Provider {
 		}
 	}
 	p.Gemini = GeminiBase(p.Gemini)
+	p.aiStudioNative()
 	// a pick whose URL is gone (cleared from the CLI) is no pick
 	if p.BaseAPI != "" && p.baseOf(p.BaseAPI) == "" {
 		p.BaseAPI = ""

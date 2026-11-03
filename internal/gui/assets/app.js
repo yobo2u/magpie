@@ -489,21 +489,14 @@ function renderAgents() {
     // so the controls line up down the list
     const fields = el("div", "fields");
     const wide = (f) => f.label === "model" || f.label === "large" || f.label === "executor" || f.label === "planner";
-    // an effort or ultracode the model has none of (Claude Code on Haiku
-    // 4.5, ultracode short of xhigh) isn't drawn at all, nor are subagents
-    // with no model to go on, or a sign-in with no other to take (Claude
-    // Code's, until it runs through magpie where magpie takes any key), or
-    // a small model with none to pick (Snow CLI's, on a profile of the
-    // user's own)
-    // nor Aside's account with one account only (#1499)
+    // a field with nothing to pick and nothing set isn't drawn (#1499)
     const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === AUTO_MODE || f.label === MEMORIES || f.label === "sign-in" || f.key === "small" || asideAccount(a, f)) && !f.options.length && !f.value;
     const shownFields = a.fields.filter((f) => !grouped(a, f) && !none(f) && !codexOwnSub(a, f) && !codexRowed(a, f) && !hermesBot(f));
     const tiers = tierMenu(a);
     if (tiers) shownFields.push(tiers);
     const sorted = shownFields.sort((x, y) => wide(y) - wide(x) || extra(x) - extra(y));
     const plain = sorted.filter((f) => !extra(f)).length;
-    // the squares share one cell, side by side: two (Codex's subagents and
-    // sign-in) wrapped the second under the first
+    // the squares share one cell, side by side
     const extras = el("span", "extras-cell");
     const fieldBtn = (f, cls) => {
       const b = el("button", "field " + cls);
@@ -513,8 +506,7 @@ function renderAgents() {
       if (f.value && opt?.direct) b.title += "\n" + directSaid(a, opt);
       const effort = f.key === "effort" || f.label === "effort" || f.label === "thinking" || TIER_EFFORTS.includes(f.label) || f.label === SUB_EFFORT;
       if (opt?.icon || opt?.icons?.length) b.append(optionIcon(opt));
-      // a field with no logo of its own still leads with an icon: how much
-      // effort, or the agent's own for its default, as the picker shows it
+      // no logo of its own: effort's icon, or the agent's for its default
       else if (effort) b.append(effortIcon(f));
       else if (!f.value && !f.menu && a.icon) b.append(icon(a.icon));
       else if (!wide(f) || !f.value) b.append(el("span", "k", t(f.label)));
@@ -523,6 +515,7 @@ function renderAgents() {
       if (f.menu) b.title = f.options.map((o) => `${o.label}: ${o.note}`).join("\n");
       b.append(el("span", "v" + (f.value || f.custom ? "" : " empty"), shown));
       if (f.value && opt?.fast) b.append(fastTag(opt.ultra));
+      if (f.value && opt?.ref) { b.dataset.ref = opt.ref; const g = loadTag(loadOf(opt.ref)); if (g) b.append(g); }
       const c = el("span", "chev");
       c.append(svg(CHEV, 11, 1.7));
       b.append(c);
@@ -543,13 +536,10 @@ function renderAgents() {
     // command as its one control, in words
     const launchOnly = !!a.launch && !a.fields.length && !a.import;
     if (a.launch && !launchOnly) extras.append(launchButton(a));
-    // the panel's opened row has no room for the settings: a line of its
-    // own opens them in a sheet; the window's opened row holds them
-    // (connectPanel)
+    // the panel's settings open in a sheet (connectPanel)
     if (mode === "panel" && agentPrefsOf(a)) fields.append(agentPrefsButton(a));
     if (extras.childNodes.length) fields.append(extras);
-    // an app that takes magpie by a link of its own (Cindy) has nothing to
-    // pick: its row opens the link, and the app asks to add magpie
+    // an app taking magpie by a link (Cindy): its row opens it
     if (a.import && mode !== "panel") fields.append(importButton(a));
     if (launchOnly && mode !== "panel") fields.append(launchSolo(a));
     // the panel shows what's set as words, and a row's controls only
@@ -624,8 +614,7 @@ function renderAgents() {
         if (ev.target.closest(".ag-open, .ag-handle, .ag-fix, .ag-show")) return;
         const open = panelOpenAgent !== a.id;
         panelOpenAgent = open ? a.id : null;
-        // the rows ease open and shut, and the panel's edge moves with them:
-        // it goes now to where they will be, over the same time and curve
+        // the panel's edge moves with the rows, on their curve
         let grow = open ? openBox.querySelector(".ag-body").offsetHeight : 0;
         for (const r of $("#agents").querySelectorAll(".row.agent.open")) {
           grow -= r.querySelector(".ag-in")?.offsetHeight || 0;
@@ -643,9 +632,7 @@ function renderAgents() {
         openBox.addEventListener("transitionend", settle);
       };
     }
-    // one hidden by hand gives its way back in words, rather than being a
-    // greyed row whose way back is its menu. One nothing is set on isn't
-    // hidden: setting something on it brings it up the list.
+    // one hidden by hand says its way back in words
     if (inFold && isHidden(a)) {
       row.classList.add("put-away");
       const back = el("button", "ag-show");
@@ -655,10 +642,8 @@ function renderAgents() {
       back.onclick = (e) => { e.stopPropagation(); setAgentHidden(a, false); };
       who.append(back);
     }
-    // its CLI uninstalled, its folder left behind (#2177, #2173): none of
-    // its settings is offered, as nothing would read them, only that it is
-    // gone; one still connected keeps its switch, which puts back what it
-    // had before magpie (its menu's Disconnect too)
+    // its CLI uninstalled (#2177, #2173): only that it is gone, and the
+    // switch of one still connected
     if (a.cliMissing) {
       row.classList.add("gone");
       row.classList.remove("open");
@@ -676,9 +661,7 @@ function renderAgents() {
       if (a.wired && connectable(a)) row.append(connectSwitch(a));
       return row;
     }
-    // on the name's own line, so the row keeps its height and the pickers
-    // their columns
-    // a row with 「接入」 says it on its line under the name instead
+    // on the name's line; a row with 「接入」 says it under the name
     const kind = mode !== "panel" ? connectKind(a) : "";
     if (a.drift) {
       row.classList.add("drifted");
@@ -686,9 +669,9 @@ function renderAgents() {
     }
     // an app started before magpie's last change (the panel's row)
     else if (!kind && a.appRestart) who.append(appRestart(a));
-    // the CLI's version, and an update when one is out (#202); the panel's
-    // name column has no room for it
+    // the CLI's version and its update (#202)
     if (mode !== "panel") who.append(cliTag(a));
+    if (mode !== "panel" && isHere(a)) who.append(Object.assign(el("span", "ag-missing ag-here", t(HERE)), { title: t(HERE_TIP, { agent: a.name }) }));
     // which of magpie's models its lists show, on a line under the name
     if (mode !== "panel" && a.models && !kind) {
       const line = el("div", "ag-models-line");
@@ -3073,6 +3056,17 @@ function moveAgent(id, to) {
   saveArrangement([...ids, ...folded.map((a) => a.id)], hiddenIds(), []);
 }
 
+const HERE = "This computer only", HERE_TIP = "{agent}'s picks (model, effort…) stay as set here: sync, a Restore and a backup file neither bring another computer's in nor take these to the others";
+const HERE_GLYPH = "M3.5 4.5h9v6h-9zM2 12.5h12";
+const isHere = (a) => !!state.settings?.agentsHere?.includes(a.id);
+async function setAgentHere(a, on) {
+  try {
+    const s = await api("agents/here", { agent: a.id, on });
+    state.settings = { ...state.settings, agentsHere: s.agentsHere || [] };
+    renderAgents();
+    status(t(on ? "{agent}'s picks stay on this computer" : "{agent}'s picks sync with your other computers again", { agent: a.name }), "ok", 2500);
+  } catch (e) { statusErr(e); }
+}
 function setAgentHidden(a, hide) {
   const s = state.settings || {};
   const { all } = arrangeAgents();
@@ -3896,6 +3890,8 @@ function openAgentMenu(anchor, a, inFold) {
         ...term,
         // its own settings, as the square on its row opens them
         ...(agentPrefsOf(a) ? [{ name: t("{agent} settings", { agent: a.name }), literal: true, icon: PREFS_GLYPH, sep: true, run: () => openAgentPrefs(a) }] : []),
+        // its picks kept off sync, as an MCP server can be (chenxiang0010)
+        ...(a.fields.length ? [{ name: HERE, icon: isHere(a) ? CHECK : HERE_GLYPH, sep: !agentPrefsOf(a), tip: t(HERE_TIP, { agent: a.name }), run: () => setAgentHere(a, !isHere(a)) }] : []),
         // for a config rewritten in a way magpie can't see: set it again anyway
         ...(reapply ? [{ name: "Apply again", icon: REAPPLY, sep: true, run: () => reapplyAgent(a) }] : []),
         ...(a.drift?.kind === "replaced" ? [{ name: "Keep current settings", icon: CHECK, run: () => keepAgent(a) }] : []),
@@ -4341,6 +4337,7 @@ async function load(again) {
     tintPanel();
     tintTitleBar();
     renderAgents();
+    readLoads(true);
     redrawSuffix();
     redrawNoNames();
     // Update all's outcome stays until the agents are read again
@@ -4614,7 +4611,7 @@ async function whatsNewOnce() {
   // something else opened meanwhile: the notes wait for the next load
   if (!w?.show || !w.releases?.length || !$("#modal").hidden) { if (w?.show) whatsNewAsked = false; return; }
   api("whatsnew/seen", {}).catch(() => {});
-  showWhatsNew(w.releases, true);
+  showWhatsNew(w.releases, true, { total: w.total });
 }
 
 // openWhatsNew is Settings' way back to the notes: the current version's (or
@@ -4836,7 +4833,7 @@ function openPicker(agent, field, anchor, ev, only) {
   }
   const modelPicker = (["model", "small", "large", MEMORIES, SUB_MODEL, AUTO_MODE, "executor", "planner", ...ROLE_MODELS].includes(field.label) || hermesBot(field)) && !only;
   pick = { agent, field, options, groups, anchor, cursor: 0, free: !only && !field.menu, modelPicker, effortPicker, groupFilter: "all" };
-  if (modelPicker) readSpeeds();
+  if (modelPicker) { readSpeeds(); readLoads(); }
   anchor.classList.add("open");
   const pop = $("#pop");
   pop.classList.toggle("model-picker", modelPicker);
@@ -5266,7 +5263,7 @@ function rateTag(rate = 0, was = 0) {
 // loadTag: how busy its plugin says the model is now (magpie.load)
 function loadTag(n) {
   if (n == null) return null;
-  const g = el("span", "badge ctx", Math.round(n) + "%");
+  const g = el("span", "badge ctx load", Math.round(n) + "%");
   g.title = t("{n}% busy now, as its plugin says", { n: Math.round(n) });
   return g;
 }
@@ -5327,14 +5324,7 @@ function contextTag(n, name) {
   return tag;
 }
 
-// pathTag: an agent's model picker says by each model whether the agent
-// asks it through magpie or of its own vendor directly (Claude Code on its
-// own sign-in), and its Default, while it is connected, that it takes the
-// agent off magpie. Every agent's picker says it so, in one tag the note's
-// ellipsis can't cut off: the others' "· via magpie" ended their notes,
-// where Claude Code's was a tag (EZN7L2C3, #834). Codex's own models,
-// through magpie while it is routed, say so too (via); Codex's, Grok
-// Build's and Antigravity CLI's own said nothing at all
+// pathTag: magpie or the vendor direct, by a picker's model (#834)
 function pathTag(o) {
   if (!pick?.agent || o.custom || o.run) return null;
   let tag = null;
@@ -5351,10 +5341,7 @@ function pathTag(o) {
   return tag;
 }
 
-// modelSpeeds: each catalog ref's speed this week from the usage ledger
-// ({ttft ms, tps, n}, /api/model-speeds), read when a model picker opens,
-// at most once a minute; a model several providers serve shows which of
-// them answers it fastest (axuhere on X)
+// modelSpeeds: each ref's speed this week, read once a minute at most
 let modelSpeeds = {}, speedsRead = 0;
 function readSpeeds() {
   if (Date.now() - speedsRead < 60000) return;
@@ -5365,16 +5352,14 @@ function readSpeeds() {
   }).catch(() => { speedsRead = 0; });
 }
 
-// speedRank: about how long a 200-token reply takes on o's provider, in
-// seconds; Infinity when no reply was timed
+// speedRank: a 200-token reply's seconds
 function speedRank(o) {
   const s = o.ref && modelSpeeds[o.ref];
   if (!s || !(s.ttft || s.tps)) return Infinity;
   return (s.ttft || 0) / 1000 + (s.tps ? 200 / s.tps : 0);
 }
 
-// speedTag: the quiet speed by a picker's model, tokens a second, or the
-// first token's wait when only that was timed
+// speedTag: tok/s, else the first token's wait
 function speedTag(o) {
   const s = o.ref && modelSpeeds[o.ref];
   if (!s || !(s.ttft || s.tps)) return null;
@@ -5382,6 +5367,29 @@ function speedTag(o) {
   const tag = el("span", "badge ctx speed", s.tps ? t("{n} tok/s", { n: Math.round(s.tps) }) : secs + "s");
   tag.title = s.tps && s.ttft ? t("first token in {s}s, {n} tokens a second", { s: secs, n: Math.round(s.tps) }) : s.ttft ? t("first token in {s}s", { s: secs }) : t("{n} tok/s", { n: Math.round(s.tps) });
   return tag;
+}
+
+// modelLoads: by ref lowercased, read every 30s at most (axelburks)
+let modelLoads = {}, loadsRead = 0;
+function readLoads(rows) {
+  if (Date.now() - loadsRead < 3e4 || (rows && !$(".field[data-ref]"))) return;
+  loadsRead = Date.now();
+  api("model-loads").then((l) => {
+    l ||= {};
+    if (JSON.stringify(l) === JSON.stringify(modelLoads)) return;
+    modelLoads = l;
+    for (const b of $$(".field[data-ref]")) {
+      b.querySelector(".load")?.remove();
+      const g = loadTag(loadOf(b.dataset.ref));
+      if (g) b.insertBefore(g, b.querySelector(".chev"));
+    }
+    if (pick?.modelPicker) { const o = pick.items?.[pick.cursor]; filter(o && ((x) => x === o)); }
+  }).catch(() => { loadsRead = 0; });
+}
+// loadOf: ref's load, a model@size's its model's
+function loadOf(ref) {
+  const k = (ref || "").toLowerCase(), at = k.lastIndexOf("@");
+  return modelLoads[k] ?? (at > k.indexOf("/") + 1 ? modelLoads[k.slice(0, at)] : null);
 }
 
 function renderList() {
@@ -5411,18 +5419,15 @@ function renderList() {
     if (ctx) words.append(ctx);
     const speed = pick.modelPicker && speedTag(o);
     if (speed) words.append(speed);
-    // an Aside account's note is its e-mail, or Aside's "Local Account",
-    // then whether Aside has it active: the words are magpie's, the e-mail not
+    const busy = pick.modelPicker && loadTag(loadOf(o.ref));
+    if (busy) words.append(busy);
+    // an Aside account's note: its e-mail (as is), then magpie's words
     let note = o.note && o.note !== (o.label || o.value) ? (own ? t(o.note) : asideAccount(pick.agent, pick.field) ? o.note.split(" · ").map((w) => t(w)).join(" · ") : o.note) : "";
-    // which way the model goes, as a tag the note's ellipsis can't cut
-    // off: "· via magpie" ended a long note (an account's e-mail), and
-    // Claude Code's own models said nothing, so an Opus asked of Anthropic
-    // directly and a Sonnet through magpie looked alike (#726)
+    // which way the model goes, a tag the note's ellipsis can't cut (#726)
     const path = pathTag(o);
     if (path) { words.append(path); note = note.replace(/(^| · )via magpie$/, ""); }
     if (q && o.group && !note) note = o.group;
-    // a note cut off by its ellipsis (the other groups a model is in,
-    // #907) reads whole on hover
+    // a note cut off by its ellipsis reads whole on hover (#907)
     if (note) { const n = el("span", "n", note); n.title = note; words.append(n); }
     li.append(words);
     if (o.run) li.title = t(DISCONNECT_TIP, { agent: pick.agent.name });
@@ -9377,6 +9382,7 @@ function drawEditor(p, presetID) {
     cancel.onclick = cancelEdit;
     const saveBtn = el("button", "text primary", t("Save"));
     saveBtn.onclick = () => {
+      if (pickingNone()) return editorError(t("Pick a model first."), "warn");
       const cx = parseContexts(draft.contexts || "");
       if (cx.error) return contextError(ed, cx.error);
       const ox = parseContexts(draft.outputs || "");
@@ -9976,6 +9982,7 @@ function drawEditor(p, presetID) {
   cancel.onclick = cancelEdit;
   const saveBtn = el("button", "text primary", t(isNew ? "Add" : "Save"));
   const save = () => {
+    if (p && pickingNone()) return editorError(t("Pick a model first."), "warn");
     // a typed icon address first; one that fails stays (hoobnn)
     const waiting = custom && ed.iconFlush?.();
     if (waiting) return waiting.then((ok) => ok && save());
@@ -10986,12 +10993,14 @@ function chosenIds() {
 // provider's models served, not to agents, not to routing groups, while its
 // balance and usage still show. Without it no picks is the vendor's list.
 const noneChosen = () => !!draft.none && !chosenIds().length;
+// Picked only, none picked: Save is refused (yuancjun)
+const pickingNone = () => !!draft.picking && !chosenIds().length;
 // bestChosen: Best in family kept, with nothing picked
 const bestChosen = () => !!draft.best && !draft.none && !chosenIds().length;
 
 // servedIds: the models the provider serves as the editor has it: the
 // picks; none after Select none; else those the vendor's list serves
-const servedIds = (p) => draft.chosen.length ? draft.chosen : draft.none ? [] : p.models.filter((m) => draft.best ? m.best : m.on).map((m) => m.id);
+const servedIds = (p) => draft.chosen.length ? draft.chosen : draft.none || draft.picking ? [] : p.models.filter((m) => draft.best ? m.best : m.on).map((m) => m.id);
 
 // modelsOpen: a provider editor's models let out to their full height
 // (#833), kept for the next editor. MCHIPS_MAX: the box's height held, as
@@ -11143,11 +11152,9 @@ function renderModels(p) {
   names.dataset.provider = p.id;
   const q = p.models.length > 24 ? input("", t("filter {n} models…", { n: p.models.length })) : null;
   let showAll = false;
-  // the chips are held to a few lines, scrolled within; a long list can be
-  // let out to its full height and folded back (#833: 模型区域像 Agent 页面
-  // 一样支持展开 / 收起), as the Agents page's Show more is. Offered only
-  // while the list is taller than those lines; kept open from one editor to
-  // the next till folded
+  // the chips are held to a few lines, scrolled within, and let out to
+  // their full height and folded back (#833), while taller than those lines;
+  // kept open from one editor to the next till folded
   const fold = el("button", "agent-more mchips-fold");
   fold.dataset.unrolls = ""; // it goes down with the models it lets out
   const foldLabel = el("span", "", "");
@@ -11170,6 +11177,7 @@ function renderModels(p) {
   };
   const draw = () => {
     if (agentMenu && chips.contains(agentMenu.anchor)) closeAgentMenu();
+    if (draft.chosen.length) draft.picking = false;
     chips.replaceChildren();
     const f = (q?.value || "").trim().toLowerCase();
     let shown = 0, hidden = 0, unpicked = 0;
@@ -11177,10 +11185,10 @@ function renderModels(p) {
     const picksOnly = draft.chosen.length && !f && unpickedShown !== p.id && !decideOnly(p);
     // none picked: what the vendor's list serves is drawn as served (#614,
     // #1818), none after Select none
-    const served = draft.chosen.length || decideOnly(p) || draft.none ? new Set() : new Set(dashed());
+    const served = draft.chosen.length || draft.picking || decideOnly(p) || draft.none ? new Set() : new Set(dashed());
     // models that would read alike say what tells them apart (modelTells)
     const tells = modelTells(p.models);
-    // a filter is a search: what it doesn't match is left out, picked or not
+    // a filter is a search: what it doesn't match is left out
     for (const m of p.models) {
       const on = draft.chosen.includes(m.id);
       if (f && !m.id.toLowerCase().includes(f) && !(m.name || "").toLowerCase().includes(f) && !(m.default || "").toLowerCase().includes(f)) continue;
@@ -11221,12 +11229,8 @@ function renderModels(p) {
       tested(c, m.id);
       menu(c, m.id);
       // a click picks the model, a served one too: with none picked it
-      // becomes the only pick. A served one clicked used to be left out,
-      // the rest of what was served picked in its place, so a click on
-      // the one model wanted ticked every other (#681)
-      // once one is picked the provider serves its picks, so the last
-      // unpicked leaves none, not the vendor's list again (#1831, kchen0x:
-      // unpicking it went back to exposing every model)
+      // becomes the only pick (#681). The last unpicked leaves none, not
+      // the vendor's list again (#1831, kchen0x)
       c.onclick = () => {
         draft.chosen = on ? draft.chosen.filter((x) => x !== m.id) : [...draft.chosen, m.id];
         draft.none = true;
@@ -11256,6 +11260,7 @@ function renderModels(p) {
     drawWorkOn();
     drawServes();
     why.textContent = decideOnly(p) ? t("Agents never see them: a routing group picks one as its classifier.")
+      : !draft.chosen.length && draft.picking ? t("Pick a model first.")
       : !draft.chosen.length && draft.none ? t("None selected: no agent or routing group uses its models. Its balance and usage still show. Click a model to pick it.")
       : bestChosen() && !draft.unlisted ? t("Best in family: agents see the newest model of each family it lists (dashed), up to {n}. A newer one it lists later takes the old one's place.", { n: 24 })
       : draft.unlisted ? t(draft.chosen.length ? "Agents don't see them: only the routing groups they are in use them." : "Vendor's list: agents don't see it, the routing groups its models are in use up to {n} of it (dashed). Click a model to pick just it.", { n: 24 })
@@ -11661,9 +11666,8 @@ function renderModels(p) {
     names.style.minHeight = "";
     names.scrollTop = top;
   };
-  // what the provider serves, in words (#1831): the vendor's list, the
-  // picks (a click on a model, Select all or none), the newest of each
-  // family, or Usage only (#2068). Picked only starts from the dashed ones
+  // what the provider serves, in words (#1831, #2068): the vendor's list,
+  // the picks, the newest of each family, or Usage only
   const serves = el("div", "segs mserves");
   const servesOpts = [["list", "Vendor's list", "Serve the vendor's list, up to {n} of it (dashed), models it lists later too"], ["picked", "Picked only", "Serve only the models picked"], ["best", "Best in family", "Best in family: agents see the newest model of each family it lists (dashed), up to {n}. A newer one it lists later takes the old one's place."], ["none", "Usage only", "Route nothing to it: no agent or routing group uses its models, and those it lists later aren't added. Its balance and usage still show."]].map(([v, name, tip]) => {
     const b = el("button", "opt", t(name));
@@ -11671,10 +11675,11 @@ function renderModels(p) {
     b.title = t(tip, { n: 24 });
     b.onclick = () => {
       if (v !== "picked" && draft.chosen.length) picksLeft = { id: p.id, picks: [...draft.chosen] };
-      if (v !== "picked") { draft.chosen = []; draft.typed = ""; draft.none = v === "none"; draft.best = v === "best"; }
+      if (v !== "picked") { draft.chosen = []; draft.typed = ""; draft.none = v === "none"; draft.best = v === "best"; draft.picking = false; }
       else {
         if (!draft.chosen.length && picksLeft?.id === p.id) { draft.chosen = picksLeft.picks; draft.none = true; }
-        if (!draft.chosen.length) { draft.chosen = dashed(); draft.none = true; }
+        // none picked: it picks none, not the first 24 (yuancjun)
+        draft.picking = !draft.chosen.length;
         unpickedShown = null; draft.best = false;
       }
       draw();
@@ -11682,7 +11687,7 @@ function renderModels(p) {
     serves.append(b);
     return b;
   });
-  const servesMode = () => draft.chosen.length ? "picked" : draft.none ? "none" : draft.best ? "best" : "list";
+  const servesMode = () => draft.chosen.length || draft.picking ? "picked" : draft.none ? "none" : draft.best ? "best" : "list";
   const drawServes = () => {
     const now = servesMode();
     for (const b of servesOpts) { b.classList.toggle("on", b.dataset.serves === now); b.setAttribute("aria-pressed", b.dataset.serves === now); }
@@ -11701,7 +11706,7 @@ function renderModels(p) {
   };
   const allOff = el("button", "text action", t("Select none"));
   allOff.title = t("Unpick every model");
-  allOff.onclick = () => { draft.chosen = []; draft.none = true; draw(); };
+  allOff.onclick = () => { draft.chosen = []; draft.none = true; draft.picking = false; draw(); };
   bulk.append(allOn, allOff);
   // just the free ones (Discord: 是否可以支持只选择免费模型), offered only
   // when the list has both free and paid models: with none free it would
@@ -21599,24 +21604,43 @@ function sideEffortChip(val, levels, saved, now, cls, dflt, save) {
   val.append(b);
 }
 
-// renderReplies: whether a reply's model names the member of magpie's
-// that answered it (#822), for agents that count usage by it.
+// a reply's model (replyModel): asked for, the member (#822), or the vendor's (ZoeCats)
+const REPLY_MODELS = [
+  ["", "The model asked for", "The group, alias or provider/model the agent asked for. A reply the vendor named as asked keeps the vendor's name"],
+  ["member", "The member that answered", "magpie's provider/model that answered (workbuddy/glm-5.3-flash), for every agent, groups included"],
+  ["vendor", "The vendor's own name", "As the vendor wrote it (glm-5.3-flash-202606), for every agent, groups included"],
+];
+function replyModelRow(s, keep) {
+  const r = el("div", "row pref"), who = el("div", "who"), val = el("div", "val"), n = t("Model name in replies");
+  r.id = "replyModelRow";
+  who.append(el("div", "name", n), el("div", "sub", t("What a reply's model says when the request went out under another name than the agent asked for. The X-Magpie-Model header names the member to every agent, and a request's X-Magpie-Response-Model (asked, member or vendor) picks for itself")));
+  const cur = REPLY_MODELS.find(([v]) => v === (s.replyModel || "")) || REPLY_MODELS[0], b = el("button", "sess-pick reply-model");
+  b.type = "button";
+  b.title = n;
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  b.append(el("span", "", t(cur[1])), svg(CHEV, 11, 1.6));
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(b, REPLY_MODELS.map(([v, name, note]) => ({ v, name, note })), cur[0], (v) => v !== cur[0] && savePrefs({ ...keep, replyModel: v }), "Model name in replies", "sess-menu", "right");
+  };
+  val.append(b);
+  r.append(who, val);
+  return r;
+}
+// renderReplies: a reply's model name, and how replies are kept going
 function renderReplies(s, keep) {
   const box = $("#replyList");
   box.replaceChildren();
   const onOff = [["off", t("Off")], ["on", t("On")]];
-  const r = segRow("memberModelRow", t("Name the member in replies"),
-    t("A reply's model says magpie's provider/model that answered (workbuddy/glm-5.3-flash), not the vendor's own name, for agents that count usage by it. Claude Code, Claude Desktop and Codex keep the vendor's; the X-Magpie-Model header says it to every agent"),
-    onOff, s.memberModel ? "on" : "off", (v) => savePrefs({ ...keep, memberModel: v === "on" }), "sub");
+  const r = replyModelRow(s, keep);
   // a reply stuck in a loop is ended with an error the agent can act on,
   // not let run to its output limit (#1359): on unless turned off
   const l = segRow("loopGuardRow", t("Stop looping replies"),
     t("A reply whose reasoning or text goes round the same few lines is ended with an error the agent can retry, not left to run to its output limit"),
     onOff, s.noLoopGuard ? "off" : "on", (v) => savePrefs({ ...keep, noLoopGuard: v === "off" }));
-  // how many more accounts or members a request the vendor's safety filter
-  // refused is asked of (#248): every one left unless set. Never hands the
-  // refusal back, which Claude Code answers with its own fallback model (DD
-  // on Discord)
+  // how many more are asked after a safety refusal (#248): every one unless set
   const counts = [["0", t("Never ask again")], ["1", "1"], ["2", "2"], ["3", "3"]];
   const n = s.refusalRetries == null || s.refusalRetries < 0 ? "" : String(s.refusalRetries);
   if (n && !counts.some(([id]) => id === n)) counts.push([n, n]); // set by hand in settings.json
@@ -21638,12 +21662,7 @@ function renderReplies(s, keep) {
   box.append(r, l, f, k, c, u);
 }
 
-// renderDisabledModels: the models the user turned off for every request
-// through magpie (#1867). Each pattern is a row with what it matches now and
-// Enable; Disable a model picks one from the list, or takes what is typed
-// (a glob such as *fable*). A disabled model is left out of magpie's lists
-// and refused by the gateway, so nothing reaches it through magpie; an agent
-// signed in to the vendor itself isn't covered, which the row says.
+// renderDisabledModels: models turned off for every request (#1867), a row per pattern
 function renderDisabledModels(s) {
   const box = $("#disabledModelsList");
   if (!box) return;
@@ -21708,11 +21727,7 @@ const REDACT_KINDS = [
   ["bucket", "Cloud storage buckets", "The bucket in s3://, gs://, oss://, cos:// and storage URLs; the path in it stays", false],
 ];
 
-// renderDiscovery: whether magpie reads the agents' own sign-ins —
-// Claude Code's and Codex's files, the Keychain, Copilot's, Cursor's and
-// the rest — and serves them as subscriptions (#1535). Set on its own:
-// saved, magpie forgets the accounts it read, and API-key providers go on.
-// MAGPIE_NO_ACCOUNTS keeps it off for that run whatever is saved.
+// renderDiscovery: whether magpie serves the agents' own sign-ins (#1535), set on its own
 function renderDiscovery(s, keep) {
   const box = $("#discoveryList");
   const r = el("div", "row pref");
@@ -21971,12 +21986,7 @@ function pmSub(m) {
 }
 
 // ---------- what masking swapped (maskrec) ----------
-// Settings › Privacy opens on what masking kept from vendors: how much, of
-// which kinds, found how, from which agents to which providers, over 7 or
-// 30 days (/api/masking/summary), and each request's record under it
-// (/api/masking/records). What a placeholder stood for is asked only while
-// the reader points at it (/api/masking/value): it is in this magpie's
-// memory alone, never on disk, so after a restart it is gone.
+// a placeholder's value is asked only while pointed at (/api/masking/value), in memory alone
 const MASK_KINDS = {
   API_KEY: "API keys", PRIVATE_KEY: "Private keys", TOKEN: "Tokens", PASSWORD: "Passwords", SECRET: "Secrets",
   EMAIL: "Emails", PHONE: "Phone numbers", ID_CARD: "ID numbers", BANK_CARD: "Bank cards",
@@ -22102,11 +22112,7 @@ function openMaskRecord(key) {
   show("masking").then((went) => { if (went !== false && key && view === "masking") magpie.call("masking", "focus", key); });
 }
 
-// renderRedactRules: the user's own rules for secrets magpie's don't know, a
-// gateway's oc_sk_… key say (#195) — one row each, and a row to add one by a
-// prefix or a regular expression. They are set on their own, all of them each
-// time, so one magpie can't use (a pattern that doesn't compile) is said in
-// the row, what was typed kept, and the rest stay as they were.
+// renderRedactRules: the user's own secret rules (#195), all set on their own each time
 let ruleDraft = { kind: "", by: "prefix", match: "", err: "" };
 function renderRedactRules(s, row) {
   const rules = s.redactRules || [];
@@ -22651,7 +22657,7 @@ function prefsKeep(s) {
     redact: !!s.redact, redactPersonal: !!s.redactPersonal, redactKinds: s.redactKinds || {}, redactWords: s.redactWords || [], redactWordsAnyCase: !!s.redactWordsAnyCase, redactWordsWhole: !!s.redactWordsWhole, redactShape: !!s.redactShape, codexWarmup: s.codexWarmup || "",
     claudeWarmup: s.claudeWarmup || "", codexWarmAt: s.codexWarmAt || "", claudeWarmAt: s.claudeWarmAt || "",
     codexWarmAts: warmTimes(s.codexWarmAts, s.codexWarmAt), claudeWarmAts: warmTimes(s.claudeWarmAts, s.claudeWarmAt), workbuddyCheckin: !!s.workbuddyCheckin, traeCheckin: !!s.traeCheckin, minimaxCheckin: !!s.minimaxCheckin, qoderCheckin: !!s.qoderCheckin, noStats: !!s.noStats, noUsageStats: !!s.noUsageStats, signInLinkOnly: !!s.signInLinkOnly,
-    memberModel: !!s.memberModel, noLoopGuard: !!s.noLoopGuard, claudeLeanPrompt: !!s.claudeLeanPrompt, claudePrintMode: !!s.claudePrintMode, refusalRetries: s.refusalRetries ?? null,
+    replyModel: s.replyModel || "", noLoopGuard: !!s.noLoopGuard, claudeLeanPrompt: !!s.claudeLeanPrompt, claudePrintMode: !!s.claudePrintMode, refusalRetries: s.refusalRetries ?? null,
     noUpdatePill: !!s.noUpdatePill, noAutoUpdate: !!s.noAutoUpdate, updateEvery: s.updateEvery || 360, autoRestart: !!s.autoRestart, noAutoDownload: !!s.noAutoDownload, updateChannel: s.updateChannel || "",
     trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, trayNoLogos: !!s.trayNoLogos, trayNoBird: !!s.trayNoBird, trayNoNumber: !!s.trayNoNumber, trayPace: !!s.trayPace, trayNoCost: !!s.trayNoCost, trayWindows: s.trayWindows || {}, vision: s.vision || "", visionEffort: s.visionEffort || "", searcherEffort: s.searcherEffort || "", imageGen: s.imageGen || "", imageTimeout: s.imageTimeout || 0, classifyTimeout: s.classifyTimeout || 0, searcher: s.searcher || "", searchFirst: s.searchFirst || "", currency: s.currency || "usd",
     chineseUnits: !!s.chineseUnits, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0,
@@ -22708,14 +22714,12 @@ function savePrefs(body) {
 //
 // Code moves a view only in answer to a click that asks to go somewhere, and
 // shows that with the reader's event: scrollOnPurpose(e). Called without one
-// (from a load, a timer, a helper that other clicks share) it is refused,
-// and whatever scroll follows is put back.
+// it is refused, and whatever scroll follows is put back.
 let purposeUntil = 0, held = null;
 // guardUntil is purposeUntil when the window is the click guard's own (a
 // field brought back into sight, backToReader): it lets that scroll stand,
 // but it isn't the reader's, so an app menu the click opens stays open.
 let guardUntil = 0;
-// A new purposeful scroll supersedes any still-pending quota navigation.
 const readerScrolls = (ms) => { quotaFocus = ""; purposeUntil = Math.max(purposeUntil, performance.now() + ms); held = null; guardUntil = 0; };
 function scrollOnPurpose(e, ms = 1000) {
   if (!e?.isTrusted || performance.now() - e.timeStamp > 1000) {
@@ -23150,6 +23154,7 @@ for (const v of document.querySelectorAll(".view")) {
     puttingBack(v, from, h);
   }, { passive: true });
 }
+addEventListener("scroll", () => import("./scrollends.js"), { capture: true, passive: true, once: true });
 
 let settingsLoad = Promise.resolve(); // show()'s read of Settings, for openSettingsAt
 async function show(v) {
@@ -24104,6 +24109,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) { lo
 // never under an open menu
 setInterval(async () => {
   if (document.hidden || !state?.agents || document.querySelector(".pop:not([hidden])")) return;
+  readLoads(true);
   let drift;
   try { drift = await api("drift"); } catch { return; }
   let changed = false;

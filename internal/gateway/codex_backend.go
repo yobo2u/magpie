@@ -940,6 +940,9 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest string, body []byte, on *provider.Provider) {
 	start := time.Now()
 	usage.Saw(agentOf(r))
+	// Codex's own turns come here from the mux, not through serve: the
+	// row written below sums this call's tries in its own context (#4456)
+	r = r.WithContext(context.WithValue(r.Context(), upBytesKey{}, &upBytes{}))
 	w0, body0 := w, body // as they came, for the fallbacks (codexFallBack)
 	// Claude's blocks magpie gave Codex (claudeseal) are Claude's alone:
 	// to OpenAI each item is its summary, as before magpie carried them
@@ -977,6 +980,11 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		// provider's model wrote it) turned every turn and compaction
 		// away, as on an account's (provider.CodexToolNames, wing3556)
 		body = provider.CodexToolNames(body)
+		// and a citation without the offsets the backend's schema wants,
+		// another vendor's Responses reply's (Volcengine Ark's
+		// url_citation) as Codex stored it, turned them away alike
+		// (#4921)
+		body = withoutOffsetlessCitations(body)
 	}
 	u := base + rest
 	if r.URL.RawQuery != "" {
@@ -1213,6 +1221,8 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			// a turn to ChatGPT goes zstd-compressed again, as Codex sent it
 			// before magpie read it (ylorn on X); an API key's goes plain
 			sent = provider.CodexCompressed(req, body)
+			// counted for the request's ledger row, as forwardOnce's are (#4456)
+			sentUp(r.Context(), sent, len(body))
 			if res, err = s.client.Do(req); err != nil {
 				msg := "OpenAI: " + err.Error()
 				if overload && busyAgain < lastRetries && droppedUnanswered(r.Context(), err) {
@@ -1349,7 +1359,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			writeError(w, provider.Responses, res.StatusCode, codexKeyRefused(msg))
 			s.record(Call{Route: routeOf(tr), Time: start, From: provider.Responses, To: provider.Responses, Model: modelOf(body),
 				Provider: "openai", Agent: callerOf(r).agent, Status: res.StatusCode,
-				Millis: time.Since(start).Milliseconds(), Error: res.Status})
+				Millis: time.Since(start).Milliseconds(), Error: res.Status, headers: headerLogOf(r.Context())})
 			end(res.StatusCode, res.Status, 0, 0)
 			return
 		}
@@ -1372,7 +1382,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				failWith(res.StatusCode, said)
 				s.record(Call{Route: routeOf(tr), Time: start, From: provider.Responses, To: provider.Responses, Model: modelOf(body),
 					Provider: "openai", Agent: callerOf(r).agent, Kind: callKind(r.Header), Status: res.StatusCode,
-					Millis: time.Since(start).Milliseconds(), Error: said})
+					Millis: time.Since(start).Milliseconds(), Error: said, headers: headerLogOf(r.Context())})
 				end(res.StatusCode, said, 0, 0)
 				return
 			}
@@ -1480,7 +1490,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	}
 	call := Call{Time: start, From: provider.Responses, To: provider.Responses, Model: modelOf(body),
 		Provider: "openai", Agent: callerOf(r).agent, Kind: kind, Status: res.StatusCode,
-		Millis: time.Since(start).Milliseconds(), Fallback: resetNote}
+		Millis: time.Since(start).Milliseconds(), Fallback: resetNote, headers: headerLogOf(r.Context())}
 	if len(tried) > 0 {
 		// the overloads it was asked again for, before the one that answered
 		call.Fallback = strings.Join(append(tried, call.Fallback), "; ")
@@ -1541,6 +1551,9 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		TierAsked: bodyTier(provider.Responses, body), TierSent: bodyTier(provider.Responses, body), TierServed: uu.Tier, TTFT: call.TTFT, FirstText: call.FirstText, ReasoningHidden: call.ReasoningHidden, Flow: call.Flow, Status: call.Status, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
 		RequestID: requestID(res.Header), ResponseID: uu.ResponseID, Endpoint: r.URL.Path}
 	failedWith(&rec, call.Status, call.Error, errType)
+	if up := upBytesOf(r.Context()); up != nil {
+		rec.UpBytes, rec.PlainBytes = up.wire, up.plain
+	}
 	appendUsage(r, rec)
 }
 
@@ -1679,9 +1692,12 @@ func codexRelayedAccount(base string, h http.Header, on *provider.Provider) (pro
 	return *p, true
 }
 
-// unreadableItem is the item OpenAI's refusal names: sealed content it
-// can't verify, or an id it doesn't have ("Item with id 'rs_…' not found").
-var unreadableItem = regexp.MustCompile(`(?i)(?:encrypted content for item|item with id) '?([A-Za-z]+_[A-Za-z0-9_-]+)'?`)
+// unreadableItem is the item a refusal names: sealed content OpenAI
+// can't verify, or an id it doesn't have ("Item with id 'rs_…' not
+// found"), which a relay in front of one answers in words of its own
+// ("Referenced reasoning item 'rs_…' was not found or has expired",
+// #3062).
+var unreadableItem = regexp.MustCompile(`(?i)(?:encrypted content for item|item with id|referenced reasoning item) '?([A-Za-z]+_[A-Za-z0-9_-]+)'?`)
 
 // withoutUnreadable is body without what OpenAI's refusal msg says it
 // can't read: the item it names, the reasoning another account sealed, or
@@ -2791,6 +2807,119 @@ func withoutReasoningText(body []byte) []byte {
 		return body
 	}
 	return b
+}
+
+// citationOffsetRefused is how unfit remembers a provider turning away,
+// for model, a citation without the offsets OpenAI's schema wants
+// (withoutOffsetlessCitations).
+func citationOffsetRefused(model string) string { return "citation offsets\x00" + model }
+
+// citationOffsetRefusal is the ChatGPT backend's refusal of an annotation
+// the offsets its schema wants are missing from, as a relay in front of
+// it passes it on: "Invalid response.create payload: Missing required
+// parameter: 'input[221].content[0].annotations[0].start_index'."
+// (#4921)
+var citationOffsetRefusal = regexp.MustCompile(`input\[\d+\]\.content\[\d+\]\.annotations\[\d+\]\.(?:start|end)_index`)
+
+// refusesCitationOffsets is a 400 refusing a Responses request over a
+// citation that lacks the offsets OpenAI's schema wants.
+func refusesCitationOffsets(status int, b []byte) bool {
+	return badRequest(status) && citationOffsetRefusal.Match(b)
+}
+
+// withoutOffsetlessCitations is a Responses request without the
+// output_text annotations that lack the offsets OpenAI's schema wants on
+// every one, as another vendor's Responses reply wrote them (Volcengine
+// Ark's url_citation, #4921): Codex stored the reply magpie relayed, and
+// where that schema holds — the ChatGPT backend, OpenAI's API, a relay in
+// front of them — the replay was refused whole, every turn of the thread
+// with it. Such an annotation goes; the text, and a citation with its
+// offsets, stay as they came.
+func withoutOffsetlessCitations(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"annotations"`)) || !anyInputItem(body, itemCitesWithoutOffsets) {
+		return body
+	}
+	q, err := rawObject(body)
+	if err != nil {
+		return body
+	}
+	items, err := rawArray(q["input"])
+	if err != nil {
+		return body
+	}
+	changed := false
+	for i, raw := range items {
+		if !itemCitesWithoutOffsets(raw) {
+			continue
+		}
+		it, err := rawObject(raw)
+		if err != nil {
+			continue
+		}
+		parts, err := rawArray(it["content"])
+		if err != nil {
+			continue
+		}
+		itemChanged := false
+		for j, p := range parts {
+			part, err := rawObject(p)
+			if err != nil || string(part["type"]) != `"output_text"` {
+				continue
+			}
+			notes := elementsOf(part["annotations"])
+			if notes == nil {
+				continue
+			}
+			kept := notes[:0]
+			dropped := false
+			for _, a := range notes {
+				if annotationLacksOffsets(a) {
+					dropped = true
+					continue
+				}
+				kept = append(kept, a)
+			}
+			if dropped {
+				part["annotations"], _ = marshalPlain(kept)
+				parts[j], _ = marshalPlain(part)
+				itemChanged = true
+			}
+		}
+		if itemChanged {
+			it["content"], _ = marshalPlain(parts)
+			items[i], _ = marshalPlain(it)
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	q["input"], _ = marshalPlain(items)
+	nb, err := marshalPlain(q)
+	if err != nil {
+		return body
+	}
+	return nb
+}
+
+// itemCitesWithoutOffsets is whether it, an input item, carries an
+// output_text annotation without the offsets OpenAI's schema wants, read
+// as the scan reads it, without decoding the conversation.
+func itemCitesWithoutOffsets(it []byte) bool {
+	if !bytes.Contains(it, []byte(`"annotations"`)) {
+		return false
+	}
+	for _, part := range elementsOf(memberOrNil(it, "content")) {
+		if typ, _ := stringBytes(memberOrNil(part, "type")); string(typ) != "output_text" {
+			continue
+		}
+		for _, a := range elementsOf(memberOrNil(part, "annotations")) {
+			if annotationLacksOffsets(a) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // openaiItemPrefix is the id prefix OpenAI takes for each kind of call item

@@ -309,6 +309,7 @@
   :is(.rt-req, .rt-probe) .to .said .who { min-width: 40px; }
   :is(.rt-req, .rt-probe) .to .said .mdl { max-width: calc(100% - 40px); }
 }
+:is(.rt-req, .rt-probe) .to > .ic { width: 14px; height: 14px; }
 :is(.rt-req, .rt-probe) .to i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 :is(.rt-req, .rt-probe).moved .to i { background: var(--accent); }
 :is(.rt-req, .rt-probe).bad .to { color: var(--red); }
@@ -397,6 +398,12 @@ button.rt-session { cursor: pointer; }
 :where(.rt-col.max760) :is(.rt-req, .rt-probe) .to { grid-column: 2; grid-row: 2; }
 :where(.rt-col.max760) :is(.rt-req, .rt-probe) .meta { grid-column: 2; grid-row: 3; justify-content: flex-start; }
 .rt-acts { padding: 4px 0; }
+/* under the requests, as wide as the page, the accounts and keys sit
+   several to a line, each provider's heading across them: one to a line,
+   a page of many accounts ran on far below the requests (Jiabubu on
+   Discord). Beside the requests (min1150) the column holds one */
+:where(.rt-more:not(.min1150)) .rt-acts, .rt-cols.solo .rt-acts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 168px), 1fr)); align-content: start; }
+:where(.rt-more:not(.min1150)) .rt-acts > :is(.rt-prov, .rt-keys.open), .rt-cols.solo .rt-acts > :is(.rt-prov, .rt-keys.open) { grid-column: 1 / -1; }
 .rt-cols.solo { grid-template-columns: minmax(0, 1fr); }
 .rt-reqs.none { display: block; background: none; border-color: transparent; }
 .rt-reqs.none .empty-state { padding: 14px 12px 18px; font-size: 12px; line-height: 1.6; }
@@ -561,6 +568,19 @@ button.rt-session { cursor: pointer; }
 .rt-group.rt-gpick { cursor: default; }
 .rt-group.rt-gpick.on { background: var(--card-2); }
 .rt-gedit { cursor: default; scroll-margin-top: 12px; }
+/* the group being edited reads as selected among the others: a soft tint
+   and an accent ring, as a list marks its selected row; its Save and
+   Cancel stay at the bottom of the window while its rows scroll by, at a
+   push button's size (Jiabubu on Discord). The list clips instead of
+   hiding its overflow, so the bar can stick. */
+.list.rt-groups { overflow: hidden; overflow: clip; }
+.rt-groups > .rt-gedit { --ged-bg: color-mix(in srgb, var(--accent) 4%, var(--card)); background: var(--ged-bg); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent); }
+.rt-groups > .rt-gedit:first-child { border-radius: 11px 11px 0 0; }
+.rt-groups > .rt-gedit:last-child { border-radius: 0 0 11px 11px; }
+.rt-groups > .rt-gedit:only-child { border-radius: 11px; }
+.rt-groups > .rt-gedit + * { border-top-color: transparent; }
+.rt-gedit > .bar { position: sticky; bottom: 0; z-index: 3; background: var(--ged-bg, var(--card)); padding-bottom: 10px; margin-bottom: -10px; }
+.rt-gedit > .bar > button.text:not(.danger) { height: 28px; padding: 0 12px; border-radius: 7px; font-size: 13px; }
 .rt-gedit .ehead.folds { cursor: pointer; }
 .rt-gedit .ehead.folds:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rt-gedit .segs { max-width: 100%; }

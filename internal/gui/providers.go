@@ -1236,6 +1236,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				writeJSON(rw, map[string]any{
 					"requestBody": c.RequestBody, "responseBody": c.ResponseBody,
 					"requestTruncated": c.RequestTruncated, "responseTruncated": c.ResponseTruncated,
+					// the headers both ways, the client's and each upstream
+					// request's, masked (usrname1833 on Discord)
+					"headers": c.Headers(),
 				})
 				return
 			}
@@ -1795,6 +1798,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				// provider set antigravity prompt=as-written`
 				if !in.PromptAsWritten && old != nil {
 					in.PromptAsWritten = old.PromptAsWritten
+				}
+				// and that magpie filled the Gemini URL in once, which the
+				// form doesn't send: a URL cleared in it stays cleared
+				if !in.GeminiFilled && old != nil {
+					in.GeminiFilled = old.GeminiFilled
 				}
 				// and additional_tools taken, set with `magpie provider
 				// set <id> additional-tools=on` (#2660)
