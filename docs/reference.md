@@ -1135,6 +1135,15 @@ OpenCode ignores:
   ASCII, so this is where a name like 华为云 HUAWEI goes. One line of at
   most 80 bytes; anything else is ignored. It is the package's own word:
   never shown as reviewed, and never used to find a plugin by name.
+  A repository tagged `magpie-plugin` shows it on its card under Discover
+  → Unofficial, on GitHub too, in place of the repository's name (npm's
+  copy of the package says it when the card installs from npm).
+- **What the plugin is**: `"magpie": { "summary": { "en": "…", "zh": "…" } }`
+  is its card's line under Discover → Unofficial, on GitHub, in the window's
+  language (zh-TW reads `zh`), else in English, else GitHub's description.
+  A sentence a language: one line of at most 300 bytes, a language code of
+  at most 12; anything else is ignored. A card that shows a name or a
+  summary of the package's own says "Its own words": nobody reviewed them.
 - **An API key's field**: a `type: "api"` method's `label` titles the key's
   field, as OpenCode's dialog does (one that only says "API key" reads
   "<provider> API key"), and its `placeholder` is the hint inside the field
@@ -2209,6 +2218,7 @@ It exposes:
 | `/api/version`, `/api/tags`, `/api/show` | the catalog as an Ollama server lists it, for a client that takes a custom endpoint only as Ollama (below) |
 | `/mcp/magpie/hub` | MCP (Streamable HTTP): every MCP server in the Library, as one server, for any app, while *Library → MCP → MCP router* is on |
 | `/mcp/magpie/hub/{agent}` | MCP (Streamable HTTP): the Library's MCP servers ticked for that agent, as one server, while *Library → MCP → MCP router* is on |
+| `/v1/magpie/native/{provider}/{path}` | a provider's own API, as it is (GET, POST, PUT, PATCH, DELETE; below) |
 
 With that switch on, each agent that takes an MCP server over HTTP is
 given one entry, `magpie`, in place of the Library's servers, and magpie
@@ -2222,6 +2232,27 @@ reaches magpie at, with its key. Turning the switch off gives every agent
 each server's own entry again. It is guarded as the gateway is: a local
 request, or one with a gateway key, and no other web page
 ([MCP router](subsystems/mcp-router.md)).
+
+`/v1/magpie/native/<provider>/<path>` reaches a provider's own API
+through magpie, for what the OpenAI shape doesn't carry. `<provider>` is
+the provider's id; `<path>` is joined to its host, not to its base URL,
+so `/v1/magpie/native/ark/api/v3/contents/generations/tasks` asks
+`https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks`.
+GET, POST, PUT, PATCH and DELETE are passed on with the query and body as
+sent, and the answer comes back as it came, a stream as it arrives.
+magpie signs it with the provider's key, the way that provider takes one;
+the caller's own `Authorization`, `x-api-key`, `x-goog-api-key`, cookies
+and `?key=` never go on. It serves a provider added with an API key (a
+vendor's or your own), not a subscription, a sign-in or a plugin's
+account. A path with a `.` or `..` segment (encoded too), a backslash, a
+leading or encoded slash, or a scheme is refused. It takes the gateway key
+every route does, and a key held to models, accounts or a spend limit is
+refused it. With Settings › Privacy masking on, a JSON body is masked and
+put back in the answer, and a body that isn't JSON is refused. Each
+request is a Requests row and a usage record, with tokens when the
+answer reports them. Ark's short paths (`images/generations`,
+`contents/generations/tasks[/<id>]`) still go under the key's base as
+before.
 
 Each `/v1/models` entry includes `reasoning` and `supported_reasoning_levels`
 (`[{"effort":"low"}, ...]`), and the same levels as plain names in

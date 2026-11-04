@@ -1857,9 +1857,10 @@ func retryable(status int, body []byte) bool {
 // quota. A conversation grown too long for the model, or a request the
 // vendor turned away as it reads, would fail the same at the next asked:
 // nobody rests for it. Nor does an account rest when a model generated
-// empty output (#1221).
+// empty output (#1221), nor for any error in magpie's own words, a LAN
+// peer's loop guard among them (magpieSaid).
 func lateRests(msg string) bool {
-	return !tooLong(http.StatusBadRequest, msg) && !refusedWords.MatchString(msg) && !protectionWords.MatchString(msg) && !strings.Contains(msg, emptyReply)
+	return !tooLong(http.StatusBadRequest, msg) && !refusedWords.MatchString(msg) && !protectionWords.MatchString(msg) && !magpieSaid(msg)
 }
 
 // unsaidMargin is how far past a model's window a request's estimate
@@ -1867,6 +1868,36 @@ func lateRests(msg string) bool {
 // bytes, which most text runs under (Devin counted 173,954 tokens of one
 // estimated at 151,851), so one past it by a fifth hardly fits.
 const unsaidMargin = 1.2
+
+// lengthMargin is how far into a model's window a request must be for a
+// refusal that speaks of length, without naming what is long, to be taken
+// as too long for it (#4420, MYCF711): a group member answered 400
+// "内容太长了，请精简输入或开启新对话" at ~730K on a model it declares at
+// 1M, its own ceiling lower than the window it declares, so the request
+// never came near unsaidMargin. What the vendor's message says decides:
+// length words (lengthWords) and nothing of a limit of another kind; the
+// request's size only rules out the other things such words are said of,
+// a field or a picture, which a request under half the window more likely
+// is. tooLongRe's wordings are the fallback that holds at any size.
+const lengthMargin = 0.5
+
+// lengthWords say the request is too long, or to make it shorter or start
+// over, without naming what overflowed.
+var lengthWords = regexp.MustCompile(`(?i)太长|过长|超长|精简|缩短|删减|(开启|新建|开始|重新开启)(一个)?新的?(对话|会话|聊天)|too (long|large|big)|shorten|reduce (the )?(length|size)|start a new (conversation|chat|session)`)
+
+// partWords name a part of the request whose length isn't the
+// conversation's: a picture, a file, the reply, a field, a name.
+var partWords = regexp.MustCompile(`(?i)图片|图像|文件|附件|输出|回复|名称|字段|参数|标题|image|picture|file|attachment|output|max_tokens|max_completion|completion|title|description`)
+
+// saysLength says a request error's message speaks of the request's length
+// and of nothing else: not a pace, a quota, a part of the request.
+func saysLength(status int, body []byte) bool {
+	if status != 400 && status != 422 {
+		return false
+	}
+	said := vendorMessage(body)
+	return lengthWords.MatchString(said) && !partWords.MatchString(said) && !paceWords.MatchString(said)
+}
 
 // tooLongUnsaid says a failure that doesn't say why was the request being too
 // long for the model, as some vendors put it: Devin's 502 "capacity
@@ -1877,13 +1908,15 @@ const unsaidMargin = 1.2
 // as a vendor's error, never compacts. The message it is told instead
 // says the prompt is too long. Not for a rate limit, an account's
 // trouble, a model it doesn't serve, a region it doesn't serve, or one
-// already saying it overflowed.
+// already saying it overflowed. A request error that speaks of length
+// (saysLength) needs only lengthMargin of the window.
 func tooLongUnsaid(p provider.Provider, model string, tokens, status int, body []byte) (string, bool) {
 	switch status {
 	case 400, 413, 422, 500, 502, 503, 504:
 	default:
 		return "", false
 	}
+	raw := body
 	// the words are matched decoded, too (#1669)
 	body = wordsOf(body)
 	if overflowed(status, body) || failure(status, body) != failOther || quotaWords.Match(body) ||
@@ -1891,10 +1924,17 @@ func tooLongUnsaid(p provider.Provider, model string, tokens, status int, body [
 		return "", false
 	}
 	window := windowOf(p, model)
-	if window <= 0 || float64(tokens) < float64(window)*unsaidMargin {
+	margin := unsaidMargin
+	if saysLength(status, raw) {
+		margin = lengthMargin
+	}
+	if window <= 0 || float64(tokens) < float64(window)*margin {
 		return "", false
 	}
 	msg := fmt.Sprintf("prompt is too long: about %d tokens, more than %s's context window of %d", tokens, model, window)
+	if float64(tokens) < float64(window) {
+		msg = fmt.Sprintf("prompt is too long: about %d tokens, more than %s takes here, though its context window is %d", tokens, model, window)
+	}
 	said := strings.TrimSpace(vendorMessage(body))
 	if len(said) > 200 {
 		said = said[:200] + "…"
@@ -1961,7 +2001,7 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	switch {
 	case wait > longestPause:
 		return 0, false
-	case status == 408, status == 500, status == 502, status == 503, status == 504, status == 529:
+	case busyStatus(status):
 		if bytes.Contains(body, []byte(didNotStream)) {
 			return 0, false
 		}
@@ -2413,7 +2453,7 @@ func (h *holdWriter) pass() {
 	}
 	dst := h.w.Header()
 	for k, v := range h.header {
-		if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != answeredThereHeader && k != keyLimitThereHeader { // magpie's own notes, for restAfter and settle
+		if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != answeredThereHeader && k != keyLimitThereHeader && k != namedStatusHeader { // magpie's own notes, for restAfter and settle
 			dst[k] = v
 		}
 	}
@@ -2939,7 +2979,7 @@ func (h *holdWriter) keepAlive() {
 		}
 		dst := h.w.Header()
 		for k, v := range src {
-			if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != answeredThereHeader && k != keyLimitThereHeader && k != "Content-Length" {
+			if k != resetsHeader && k != refusedHeader && k != zdrHeader && k != answeredThereHeader && k != keyLimitThereHeader && k != namedStatusHeader && k != "Content-Length" {
 				dst[k] = slices.Clone(v)
 			}
 		}
@@ -3656,6 +3696,11 @@ func streamEvent(ev []byte) (kind, status int, msg string) {
 		if json.Unmarshal(v.Message, &m) == nil && m != "" {
 			msg += " " + m
 		}
+		if said := namedStatusOf(raw); said != 0 {
+			// the error names its own status, and it is the one it fails
+			// as (#4855), not the one its words guess
+			return eventError, said, msg
+		}
 		return eventError, streamStatus(msg), msg
 	}
 	refusal := func(reason string) (int, int, string) {
@@ -4135,7 +4180,106 @@ func errorReply(body []byte) (status int, msg string, ok bool) {
 	} else if json.Unmarshal(v.Error, &e) != nil || e.Message == nil && e.Type == nil && e.Code == nil && e.Status == nil {
 		return 0, "", false
 	}
+	if said := namedStatusOf(v.Error); said != 0 {
+		// the error names its own status (#4855)
+		return said, provider.APIError(b, "the upstream reported an error"), true
+	}
 	return streamStatus(string(wordsOf(b))), provider.APIError(b, "the upstream reported an error"), true
+}
+
+// namedStatus is the status an error carried under a 200 names for
+// itself (#4855): its error object's own (namedStatusOf), or, as words
+// alone (a reply's error text), the status they name (textStatus). 0
+// when it names none.
+func namedStatus(body []byte) int {
+	var v struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if b := bytes.TrimSpace(body); len(b) > 0 && b[0] == '{' {
+		if json.Unmarshal(b, &v) == nil && carries(v.Error) {
+			return namedStatusOf(v.Error)
+		}
+		return 0
+	}
+	return textStatus(string(body))
+}
+
+// namedStatusOf is the status an error object names for itself (#4855):
+// a plugin that ends an OpenAI-compatible stream after its 200 can only
+// say what went wrong in the frame, and the status it names there is the
+// routing signal. A number 400–599 on a member of its own, status first,
+// then code as Gemini's relays carry it (a string code is not a status);
+// else the status its message names in words (textStatus). 0 when it
+// names none, when its words say the request is too long (its overflow is
+// read from the words, wherever it is said), and for magpie's own words,
+// which a magpie relayed to says too (magpieSaid).
+func namedStatusOf(errRaw []byte) int {
+	if !carries(errRaw) {
+		return 0
+	}
+	var e struct {
+		Code    json.RawMessage `json:"code"`
+		Status  json.RawMessage `json:"status"`
+		Message json.RawMessage `json:"message"`
+	}
+	var msg string
+	if json.Unmarshal(errRaw, &msg) != nil {
+		if json.Unmarshal(errRaw, &e) != nil {
+			return 0
+		}
+		json.Unmarshal(e.Message, &msg)
+	}
+	if magpieSaid(msg) || tooLong(http.StatusBadRequest, msg) {
+		return 0
+	}
+	num := func(raw json.RawMessage) int {
+		// a string code ("429", Zhipu's "1113") is the vendor's own
+		// code, not a status: json.Number would take a quoted number
+		var n json.Number
+		if len(raw) == 0 || raw[0] < '0' || raw[0] > '9' || json.Unmarshal(raw, &n) != nil {
+			return 0
+		}
+		if i, err := n.Int64(); err == nil && i >= 400 && i < 600 {
+			return int(i)
+		}
+		return 0
+	}
+	for _, raw := range []json.RawMessage{e.Status, e.Code} {
+		if n := num(raw); n != 0 {
+			return n
+		}
+	}
+	return textStatus(msg)
+}
+
+// httpSaid is a status an error's words name as one, "(HTTP 503)" or
+// "（HTTP 503）": a plugin that can't fail its 200 any more puts its
+// upstream's status in its message (mycf_711's wps-lingxi rows,
+// "灵犀上游返回 AIError：AI服务异常（上游暂时不可用，可重试）（HTTP 503）").
+var httpSaid = regexp.MustCompile(`[(（]\s*HTTP\s*(429|5\d\d)\s*[)）]`)
+
+// textStatus is the status an error's words name (httpSaid), 0 when they
+// name none, or say the request is too long, or are magpie's own. Only a
+// rate limit or a server's failure is read so: a 4xx a message quotes may
+// be about anything it fetched, not the request.
+func textStatus(msg string) int {
+	if magpieSaid(msg) || tooLong(http.StatusBadRequest, msg) {
+		return 0
+	}
+	m := httpSaid.FindStringSubmatch(msg)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// magpieSaid says an error is in magpie's own words, not an upstream's:
+// its loop guard ending a reply, an empty reply, a reasoning loop asked
+// again. Said by a magpie this one relays to (a LAN peer) too, they are
+// no failure of the account that answered (#4855).
+func magpieSaid(msg string) bool {
+	return strings.Contains(msg, loopGuardSaid) || strings.Contains(msg, emptyReply) || strings.Contains(msg, reloopedError)
 }
 
 // streamStatus is the status an error in a stream stands for, as a vendor
