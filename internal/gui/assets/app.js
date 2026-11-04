@@ -31,6 +31,9 @@ if (mode === "panel" && !document.body.classList.contains("linux")) $("header.to
 // `magpie web`: the page in a browser tab, with no window of the app's
 // around it — it opens links itself, and what is the desktop's is left out
 const web = !!window.bootPrefs?.web;
+// the version that served this page, which servedAnew compares the one
+// answering now with
+const pageVersion = window.bootPrefs?.version || "";
 // magpie web seen from another computer: localhost is the viewer's (curtinp118)
 const remotePage = web && !/^(localhost|127(\.\d+){3}|\[::1\]|::1)$/i.test(location.hostname);
 // layout.js applies the mode and platform before the header can paint.
@@ -790,6 +793,7 @@ function renderAgents() {
       // what is folded, and how many of them were hidden by hand
       label.textContent = showAllAgents ? t("Show less")
         : !unset.length ? t("{n} hidden agents", { n: byHand.length })
+        : !used.length ? t("Show all {n} agents", { n: unset.length })
         : t("Show {n} more", { n: unset.length });
       more.setAttribute("aria-expanded", String(showAllAgents));
     };
@@ -2861,9 +2865,14 @@ function arrangeAgents() {
   // having nothing to connect, once any is set
   const counts = all.some(connectable) ? onMagpie : agentUsed;
   const anyUsed = all.some((a) => !hidden.has(a.id) && counts(a));
+  // a new user's first view is Get started alone: its second step names the
+  // agents found here, each connected in a click, and the whole list is
+  // folded under it until one is, a step at a time rather than every agent
+  // at once (Renzexi01 on X: 一进来就这么复杂)
+  const guiding = !anyUsed && !!guideShown();
   // what is set on it alone decides where one not hidden goes: pinned in view
   // by hand, one cleared stayed up among the set ones with nothing to say why
-  const inView = (a) => !hidden.has(a.id) && (!anyUsed || agentUsed(a));
+  const inView = (a) => !guiding && !hidden.has(a.id) && (!anyUsed || agentUsed(a));
   return { all, shown: all.filter(inView), folded: all.filter((a) => !inView(a)) };
 }
 
@@ -4405,6 +4414,7 @@ function updatePath(p) {
 async function renderUpdateBadge() {
   const b = $("#update"), label = b.querySelector("span");
   const u = await api(updatePath("update")).catch(() => null);
+  if (servedAnew(u)) return;
   if (u) updateLast = u, u.at = Date.now();
   // pulling: a click is downloading it again, and restarts once it's in
   const pulling = !!u && !!b.dataset.pulling && ["checking", "downloading", "ready"].includes(u.state);
@@ -4533,6 +4543,16 @@ async function backAsNew(was) {
     const u = await fetch("/api/update").then((r) => (r.ok ? r.json() : null)).catch(() => null);
     if (u && u.current !== was) return location.reload();
   }
+}
+
+// servedAnew reloads, once, a browser's page that another version of
+// magpie now answers for (visamzh on X): its magpie restarted into an
+// update put in elsewhere. The badge and the Version row both ask.
+let reloadingAnew = false;
+function servedAnew(u) {
+  if (!web || !pageVersion || !u?.current || u.current === pageVersion) return false;
+  if (!reloadingAnew) { reloadingAnew = true; location.reload(); }
+  return true;
 }
 
 // updateStuck says why this magpie can't replace itself where it is: off
@@ -22300,6 +22320,7 @@ async function renderUpdate(r, u) {
     if (early) renderUpdate(r, updateLast);
     else if (bare) r.querySelector(".who").append(el("div", "sub say", "\u00a0"));
     u = await api(updatePath("update?fresh=1")).catch(() => null);
+    if (servedAnew(u)) return;
     if (!u || !r.isConnected || seqOf(r) !== seq) return;
     if (early) updateSeq.set(r, seq + 1); // stops timers
   } else if (!r.isConnected) return;
@@ -24112,6 +24133,8 @@ setInterval(async () => {
 }
 window.addEventListener("focus", () => loadBack());
 setInterval(renderUpdateBadge, 15 * 60 * 1000); // a window left open still hears of a new version
+// a browser's page on screen hears of it within a minute (servedAnew)
+if (web) setInterval(() => { if (!document.hidden) renderUpdateBadge(); }, 60e3);
 // renderPluginDot puts a dot on Plugins while a plugin's update waits for
 // the reader (someone else's plugin, or one pinned; the community's update
 // by themselves)

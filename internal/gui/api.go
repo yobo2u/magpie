@@ -626,8 +626,8 @@ func searchState(s *settingsJSON) {
 		}
 		s.SearchAPIs = append(s.SearchAPIs, j)
 	}
-	for _, v := range provider.SearchVendors {
-		s.SearchVendors = append(s.SearchVendors, searchVendorJSON{ID: v.ID, Name: v.Name, KeysURL: v.KeysURL, NeedURL: v.Base == "", KeyOptional: v.KeyOptional, Base: v.Base})
+	for _, v := range provider.AllSearchVendors() {
+		s.SearchVendors = append(s.SearchVendors, searchVendorJSON{ID: v.ID, Name: v.Name, KeysURL: v.KeysURL, NeedURL: v.WantsURL(), KeyOptional: v.KeyOptional, Base: v.Base})
 	}
 	s.SearchProvider = gateway.Searcher()
 	s.SearchAuto, s.SearchUnused = gateway.AutoSearcher(), gateway.SearcherUnused()
@@ -992,6 +992,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// and the text size, which the Mac's header measures against the
 		// traffic lights
 		boot := map[string]any{"lang": s.Lang, "theme": s.Theme, "textSize": s.TextSize, "web": isWeb(w)}
+		// and the version that served the page: a browser's page reloads
+		// once another answers in its place (visamzh on X), as after its
+		// own restart to update (backAsNew)
+		boot["version"] = Version
 		if s.Colorblind {
 			boot["colorblind"] = true
 		}
