@@ -221,6 +221,12 @@ type Settings struct {
 	// tool's description (gateway.hubWhere). "" is this computer's name, said
 	// only to an agent on another computer. This computer's own (KeepOwn).
 	RouterNote string `json:"routerNote,omitempty"`
+	// RouterAllTools gives every agent the router's tools whole. Off, an
+	// agent that doesn't search its MCP tools itself and is given more
+	// than a few is given two in their place, one that finds a tool and
+	// one that runs it (gateway.hubOnDemand; ArvinCharl on X: the tools
+	// filled the context). This computer's own (KeepOwn).
+	RouterAllTools bool `json:"routerAllTools,omitempty"`
 	// Port is the gateway's port on this computer, 0 for DefaultPort.
 	// MAGPIE_ADDR, where it is set, comes first (GatewayAddr).
 	Port int `json:"port,omitempty"`
@@ -732,6 +738,11 @@ type Settings struct {
 	// off, in tokens: 0 is WorkingWindow (#876: 272K was the only one).
 	// A provider's or a model's own (ModelCompacts) comes before it.
 	CompactAt int `json:"compactAt,omitempty"`
+	// AgentCompacts is Long conversations of an agent's own, by its kind
+	// (CompactAgents), over CompactAt and FullContext for that agent alone
+	// (molianyin4227 on Discord: models differ, so one size for every
+	// agent fits none). An agent with none follows those two (ForAgent).
+	AgentCompacts map[string]AgentCompact `json:"agentCompacts,omitempty"`
 	// CodexAsyncCompact has Codex (0.163 on) compact a long conversation
 	// in the background, while its turn goes on, once it is past
 	// CodexAsyncCompactPercent of the model's window (#2490, lantern2077
@@ -1324,6 +1335,29 @@ func (s Settings) Working(n int) int {
 	return n
 }
 
+// AgentCompact is one agent's Long conversations: Full its FullContext,
+// At its CompactAt (0 is WorkingWindow).
+type AgentCompact struct {
+	At   int  `json:"at,omitempty"`
+	Full bool `json:"full,omitempty"`
+}
+
+// CompactAgents are the agents whose configs magpie writes a compaction
+// window into, by the key each reads: Codex's model catalog
+// (auto_compact_token_limit), Claude Code's settings.json
+// (CLAUDE_CODE_AUTO_COMPACT_WINDOW, autoCompactWindow) and Grok Build's
+// model tables (context_window). Only these take an AgentCompact.
+var CompactAgents = []string{"codex", "claude", "grok"}
+
+// ForAgent is s as the agent of that kind reads Long conversations: its
+// own AgentCompact in CompactAt and FullContext, when it has one.
+func (s Settings) ForAgent(kind string) Settings {
+	if c, ok := s.AgentCompacts[kind]; ok {
+		s.CompactAt, s.FullContext = c.At, c.Full
+	}
+	return s
+}
+
 // Compact is where a conversation on a longer window is compacted when
 // neither its model nor its provider says (ModelCompacts): CompactAt,
 // else WorkingWindow, and 0 under FullContext, the model's whole window.
@@ -1364,7 +1398,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.QuotaReads = cur.QuotaReads
 	s.NoAccountDiscovery = cur.NoAccountDiscovery
 	s.LAN, s.AllowIPs = cur.LAN, cur.AllowIPs
-	s.RouterNote = cur.RouterNote
+	s.RouterNote, s.RouterAllTools = cur.RouterNote, cur.RouterAllTools
 	s.FetchPrivate = cur.FetchPrivate
 	s.SessionTerminal = cur.SessionTerminal
 	s.PanelShortcut = cur.PanelShortcut
@@ -1872,6 +1906,18 @@ func SetRouterNote(note string) error {
 		return err
 	}
 	s.RouterNote = CleanRouterNote(note)
+	return save(s, true)
+}
+
+// SetRouterAllTools sets RouterAllTools alone, from what the file holds
+// now. A settings file that can't be read is left as it is, with the error.
+func SetRouterAllTools(on bool) error {
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	s.RouterAllTools = on
 	return save(s, true)
 }
 

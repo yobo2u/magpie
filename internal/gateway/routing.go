@@ -40,10 +40,11 @@ const usageHalfLife = time.Hour
 
 var routed = struct {
 	sync.Mutex
-	used     map[string]tokenUse // candidate restKey → tokens it served
-	failures map[string]int      // candidate restKey → failures since it last answered
-	slow     map[string]slowRun  // candidate restID → its slow starts since it last answered (restSlow)
-}{used: map[string]tokenUse{}, failures: map[string]int{}, slow: map[string]slowRun{}}
+	used     map[string]tokenUse  // candidate restKey → tokens it served
+	failures map[string]int       // candidate restKey → failures since it last answered
+	slow     map[string]slowRun   // candidate restID → its slow starts since it last answered (restSlow)
+	answered map[string]time.Time // provider ID → when one of its candidates last answered (answeringLately)
+}{used: map[string]tokenUse{}, failures: map[string]int{}, slow: map[string]slowRun{}, answered: map[string]time.Time{}}
 
 // slowRun is a model's slow starts in a row on one account or key, and
 // when the last of them was.
@@ -82,6 +83,9 @@ func served(rest, key string, tokens int) {
 // when it has one, the candidate's model-specific rest.
 func servedCandidate(c candidate, tokens int) {
 	served(c.restKey(), c.restKey(), tokens)
+	routed.Lock()
+	routed.answered[c.p.ID] = time.Now()
+	routed.Unlock()
 	provider.NoteServed(c.p, time.Now())
 	provider.Unretire(c.p.ID, c.model) // back in service, if it was said retired
 	if id := c.restID(); id != c.restKey() {
@@ -93,12 +97,14 @@ func servedCandidate(c candidate, tokens int) {
 	}
 }
 
-// forbidden is a plain 403 one request was given, and the rest it took:
-// what forbiddenAlike and unforbid read.
+// forbidden is a plain 403, or a plain 5xx (plainUnavailable), one
+// request was given, and the rest it took: what forbiddenAlike and
+// unforbid read.
 type forbidden struct {
-	c    candidate
-	rest Rest
-	try  int // its index in the route's Tries, -1 untraced
+	c     candidate
+	rest  Rest
+	try   int    // its index in the route's Tries, -1 untraced
+	words string // a 5xx's status and words (refusalWords); "" for a 403
 }
 
 // plainForbidden says a reply is a 403 that says nothing of why: no
@@ -109,17 +115,75 @@ func plainForbidden(c candidate, status int, body []byte) bool {
 		!modelRefused(status, body) && !codeAssistModelMissing(c.p, status, body)
 }
 
+// plainUnavailable says a reply is a 500, 502 or 503 that says nothing
+// the account is at fault for, nor that the vendor is busy: no quota,
+// credit, rate, overload (vendorOverloaded), no proxy down, not ChatGPT's
+// reset (codexReset) or its protection refusal, each read on its own
+// path. Such a 5xx may be an outage or the request's: an upstream, or a
+// plugin putting its upstream's error in its own words, refusing a
+// request it will always refuse (mycf_711 on Discord: 127 of one
+// provider's 128 503s, "AIError AI服务异常" word for word, were one
+// agent's request with an empty tool schema, and each walked every
+// account into backoff). forbiddenAlike tells them apart: the same words
+// from two accounts, while the provider answers other requests.
+func plainUnavailable(c candidate, status int, body []byte) bool {
+	switch carriedStatus(status, body) {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+	default:
+		return false
+	}
+	return failureOf(c, status, body) == failOther && !vendorOverloaded(status, body) &&
+		!codexReset(status, body) && !protectionRefused(status, body) &&
+		!bytes.Contains(body, []byte(didNotStream)) && refusalWords(status, body) != ""
+}
+
+// idRun is a run in an error's words that differs from one try to the
+// next: a request or trace id, a timestamp.
+var idRun = regexp.MustCompile(`[0-9a-fA-F][0-9a-fA-F-]{11,}|\d{6,}`)
+
+// refusalWords is a 5xx's status and the words it said, ids left out
+// (idRun), for two tries' to be compared; "" when it said nothing, as a
+// bare 502 from a proxy down does, which proves nothing alike.
+func refusalWords(status int, body []byte) string {
+	w := strings.Join(strings.Fields(string(wordsOf(body))), " ")
+	if w == "" {
+		return ""
+	}
+	w = idRun.ReplaceAllString(w, "#")
+	if len(w) > 512 {
+		w = w[:512]
+	}
+	return strconv.Itoa(carriedStatus(status, body)) + " " + w
+}
+
+// answeringLately is how recently a provider must have answered a request
+// for the same 5xx from two of its accounts to read as the request's: a
+// provider answering others is up. One that answered nothing in it may be
+// down, and rests as before, so an outage is backed off once this has
+// passed since its last answer.
+const answeringLately = 5 * time.Minute
+
+// answeredLately says one of provider id's candidates answered a request
+// within answeringLately.
+func answeredLately(id string) bool {
+	routed.Lock()
+	at := routed.answered[id]
+	routed.Unlock()
+	return !at.IsZero() && time.Since(at) < answeringLately
+}
+
 // forbiddenAlike is the plain 403s of c's mates earlier in the request:
 // another key or account of its provider, asked the same model at the
 // same reasoning. Two of them refusing one request alike, it is the
 // request that is refused, not each account (plugins#243,
 // zygs1083-dotcom: Factory's 403 for a Claude Code wrapper it refused
 // rested every account in turn, and the next requests found them all in
-// backoff).
+// backoff). A plain 5xx (words, refusalWords) is alike only to one of
+// the same status and words; a 403 (words "") only to a 403.
 // The rest of seen is returned beside them, for the request to keep.
-func forbiddenAlike(seen []forbidden, c candidate) (alike, others []forbidden) {
+func forbiddenAlike(seen []forbidden, c candidate, words string) (alike, others []forbidden) {
 	for _, f := range seen {
-		if f.c.p.ID == c.p.ID && f.c.model == c.model && f.c.effort == c.effort && f.c.who() != c.who() {
+		if f.c.p.ID == c.p.ID && f.c.model == c.model && f.c.effort == c.effort && f.c.who() != c.who() && f.words == words {
 			alike = append(alike, f)
 		} else {
 			others = append(others, f)
@@ -1981,6 +2045,11 @@ type weighing struct {
 	// only when the routing weighs by it (routes.Strategy.ByFree)
 	free map[string]bool
 
+	// expires is when each free seat's quota is first lost (routes.Expires),
+	// by rest key: filled only when the routing weighs by plan
+	// (routes.Strategy.ByPlan, Free quota by expiry)
+	expires map[string]time.Time
+
 	// speed is each seat's speed lately, by restID (a group's heads can
 	// be two models on one key): filled only when the routing weighs by
 	// it (routes.Strategy.BySpeed)
@@ -2012,8 +2081,11 @@ func (c candidate) allowanceKey() allowanceKey {
 }
 
 type left struct {
-	used   float64
-	renews []time.Time
+	used float64
+	// weekLow: used is at lowShare or more for its budget windows alone,
+	// no rate cap of it near full (Allowance.CapUsed, routes.Seat.WeekLow)
+	weekLow bool
+	renews  []time.Time
 	// fullest: when the window used is the share of renews
 	// (Allowance.Fullest), zero when not known
 	fullest time.Time
@@ -2072,6 +2144,14 @@ func routingOf(routing string) string {
 	return provider.Ordered
 }
 
+// keepsWeek: routed so, a pool keeps an account running low on its week
+// alone with those that have room (routes.Seat.WeekLow): Smart and Use
+// before expiry, which spend what a reset would lose.
+func keepsWeek(routing string) bool {
+	r := routingOf(routing)
+	return r == "" || r == provider.Pace
+}
+
 // goesRound: routed so, a pool goes round by itself (in turn, by weight),
 // so its first is marked as the turn's and the rate limited aren't sent
 // back.
@@ -2116,6 +2196,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			l := left{used: u, renews: r, fullest: a.Fullest(c.model, now), soon: a.Renewal(c.model, now), lapse: a.Lapse(c.model, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
 				restarts: rs, dueRestart: !rs.IsZero() && due.Equal(rs), credits: spendsCredits(c.p, a)} // one not known counts as unused
 			l.dueExpiry = !l.dueRestart && !l.lapse.IsZero() && due.Equal(l.lapse)
+			l.weekLow = u >= lowShare && u < usedShare && a.CapUsed(c.model, now) < lowShare
 			l.first = l.credits && provider.CodexCreditsFirst(c.p.Account.User)
 			if b, bu, has := a.Left(c.model); has {
 				// a wallet's figure is weighed only against the same
@@ -2143,7 +2224,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			pace = provider.FreshPace
 		}
 		seats[i] = routes.Seat{Key: c.rest, Account: c.p.Account != nil, Known: known, Learns: learns(c, wg.lefts),
-			Used: l.used, Soon: l.soon, Lapse: l.lapse, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits, First: l.first,
+			Used: l.used, WeekLow: l.weekLow, Soon: l.soon, Lapse: l.lapse, Pace: pace, Weight: keyWeight(c), Resting: resting(c), Tokens: routed.used[c.restKey()].now(now), Credits: l.credits, First: l.first,
 			Left: l.bal, LeftIn: l.balIn, Spent: spentRest(c)}
 	}
 	routed.Unlock()
@@ -2160,6 +2241,26 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 		for i, c := range cs {
 			free := c.p.FreeModel(c.model)
 			seats[i].Free, wg.free[c.rest] = free, free
+		}
+	}
+	if st.ByPlan {
+		// an account's plan as its vendor or plugin named it
+		// (Account.Plan): a free one is spent before a paid one, and the
+		// trace tells it free with when its quota is first lost
+		if wg.free == nil {
+			wg.free = map[string]bool{}
+		}
+		wg.expires = map[string]time.Time{}
+		for i, c := range cs {
+			seats[i].FreePlan = c.p.Account != nil && provider.FreePlan(c.p.Account.Plan)
+			if seats[i].FreePlan {
+				wg.free[c.rest] = true
+			}
+			if wg.free[c.rest] {
+				if t := routes.Expires(seats[i]); !t.IsZero() {
+					wg.expires[c.rest] = t
+				}
+			}
 		}
 	}
 	if st.BySpeed {
