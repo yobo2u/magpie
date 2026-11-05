@@ -318,6 +318,12 @@ type Provider struct {
 	// fitting, which a backend that isn't OpenAI's needs (#350).
 	CodexAsSent bool `json:"codexAsSent,omitempty"`
 
+	// ImageFilesOff, `image-files=off`, has DeepSeek's own API sent an
+	// agent's inline images inline on every turn. By default each goes up
+	// once through DeepSeek's Files API, for a day, and the turns name it
+	// by its file id (gateway's deepseek_files.go, #5407).
+	ImageFilesOff bool `json:"imageFilesOff,omitempty"`
+
 	// PromptAsWritten, on Antigravity's subscription, has the system prompt
 	// go to Google exactly as the agent wrote it. By default the few lines
 	// Google answers with a 429 "Resource has been exhausted" whatever
@@ -865,8 +871,14 @@ func (p Provider) clone() Provider {
 // AllBuilt counts the times All built the list anew, for tests.
 var AllBuilt atomic.Int64
 
+// AllBuiltAt is when the build All last counted was asked for (allProviders
+// entered, the hold's rule read at once after), for a test to judge a build
+// by when it was asked, not by when the request that asked began (#2965).
+var AllBuiltAt atomic.Int64
+
 func allProviders() []Provider {
 	AllBuilt.Add(1)
+	AllBuiltAt.Store(time.Now().UnixNano())
 	f := load()
 	out, picks := ownOf(f)
 	for _, a := range Accounts() {
