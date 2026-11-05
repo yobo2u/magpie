@@ -4320,7 +4320,24 @@ function fit(extra = 0, glide) {
   if (h === fit.last) return;
   fit.last = h;
   const still = !glide || calm();
-  api("window/fit?h=" + h + (still ? "" : "&ms=" + glide.ms + "&ease=" + glide.ease), {});
+  fitSend("window/fit?h=" + h + (still ? "" : "&ms=" + glide.ms + "&ease=" + glide.ease));
+}
+// fitSend asks for one height at a time. Wails serves each of the page's
+// requests on a goroutine of its own, so two fits asked together reached
+// the panel in either order (69 of 400 pairs the wrong way round in a real
+// WKWebView), and the older one landing last kept the panel at its height:
+// fit.last and the panel's own height then took the newer as done, and the
+// Allowances tab's card was cut off by the foot (robot_yz on X). A fit
+// asked while one is on its way waits for it, and only the latest goes.
+function fitSend(path) {
+  if (fitSend.busy) { fitSend.next = path; return; }
+  fitSend.busy = true;
+  api(path, {}).catch(() => {}).finally(() => {
+    fitSend.busy = false;
+    const next = fitSend.next;
+    fitSend.next = null;
+    if (next) fitSend(next);
+  });
 }
 
 // the panel brought up on its Allowances tab is the reader opening them
@@ -9440,7 +9457,7 @@ function drawEditor(p, presetID) {
       if (a.agent === "claude" && !p.switchOnly) ed.append(claudeModeRow());
       // switched connected or not (Greatrobbort on X)
       const via = a.wsl ? t("Runs through WSL · {distro}: Claude Code there signs in and answers; Windows has none of its own.", { distro: a.wsl }) + " " : "", alone = /^c(laude|odex)$/.test(a.agent) ? " " + t("Just want accounts switched? {agent} needn't be connected to magpie.", { agent: a.agentName }) : "";
-      ed.append(...field(t("Accounts"), renderAccounts(a, p), via + (p.routing ? t("Tick every account to use; Routing says how requests spread over them.") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).own && (a.logins || []).some((l) => l.own) ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName && a.agentName !== a.agent ? a.agentName : p.name }) : subOf(a.agent).own || subOf(a.agent).plugin ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota.") : t("{agent} signs in to the first. Tick more and magpie moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })) + alone));
+      ed.append(...field(t("Accounts"), renderAccounts(a, p), via + (p.routing ? t("Tick every account to use; Routing says how requests spread over them.") + (subOf(a.agent).own ? " " + t("Only requests through magpie use them; {agent} itself stays signed in as it is.", { agent: a.agentName || p.name }) : "") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).own && (a.logins || []).some((l) => l.own) ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName && a.agentName !== a.agent ? a.agentName : p.name }) : subOf(a.agent).own || subOf(a.agent).plugin ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota.") : t("{agent} signs in to the first. Tick more and magpie moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })) + alone));
       ed.append(...pluginOptionsField(subOf(a.agent), true));
       if ((a.logins || []).filter((l) => l.active || l.on).length > 1) ed.append(...renderRouting(p));
       if (p.move) ed.append(...renderMove(p));
@@ -12246,7 +12263,7 @@ const SUBS = [
   // Google's sign-ins; Gemini CLI's own account is read too
   { agent: "gemini", name: "Gemini CLI", icon: "geminicli-color", plans: "Code Assist Standard · Enterprise", own: true },
   // accounts can also come from another tool's export (Antigravity Cockpit, Antigravity Manager, CLIProxyAPI)
-  { agent: "antigravity", name: "Antigravity", icon: "antigravity-color", plans: "Google AI Pro · Ultra · free", risk: true, importable: true },
+  { agent: "antigravity", name: "Antigravity", icon: "antigravity-color", plans: "Google AI Pro · Ultra · free", own: true, risk: true, importable: true },
 ];
 // subOf: the subscription an agent id is. One moved onto its plugin signs
 // in through the plugin, still named, drawn, warned about and asked where
@@ -14520,9 +14537,9 @@ function accountModels(p, ref, isKey, name) {
   draw();
   save.onclick = () => { save.classList.add("busy"); post(acctModels.chosen, t("{who} serves only {models}", { who: name, models: acctModels.chosen.join(", ") })); };
   const av = el("button", "text action", t("Select all available"));
-  av.title = t(isKey ? "Ticks every model this key's own list has, un-ticked ones too" : "Ticks every model shown");
+  av.title = t(isKey ? "Ticks every model this key's own list has, un-ticked ones too" : "Ticks every model this account's own list has, else every model shown");
   av.onclick = async () => {
-    const was = acctModels, r = isKey && await api("provider/keylisted", { id: p.id, account: ref }).catch((e) => (status(e.message, "warn"), null));
+    const was = acctModels, r = await api("provider/keylisted", { id: p.id, account: ref }).catch((e) => (status(e.message, "warn"), null));
     if (acctModels !== was || r === null) return;
     for (const id of r?.known ? r.models.filter((x) => ids.includes(x)) : ids) if (!was.chosen.includes(id)) was.chosen.push(id);
     chips.isConnected ? draw() : renderProviders();
@@ -16949,6 +16966,18 @@ function planSpan(q) {
 // move (panelArrange); panelPeek: the card a menu bar cell asked for, shown
 // though the tab hides it, until the panel is put away or the tab left.
 let panelArranging = false, panelPeek = "";
+// the Allowances tab's cards at 0 (quotaAtZero) in sight, as the reader chose
+let panelZeroOpen = kept("panelZeroOpen", false);
+// quotaAtZero: a fresh reading with nothing left: each window used up and
+// any balance 0 or less (runking on Discord); not a failed or old one, a
+// percent, a text or unlimited window, Codex's credits, resets or a check-in
+function quotaAtZero(q) {
+  if (q.error || q.asOf || q.resets?.count || q.checkins || creditsOn(q)) return false;
+  const ns = (q.balanceParts?.length ? q.balanceParts.map((p) => p.text) : q.balance ? [q.balance] : []).map((s) => String(s || "").match(/^(-?)[^\d-]*(-?)(\d[\d,]*(?:\.\d+)?)[^\d%]*$/));
+  const ws = q.windows || [];
+  return ws.length + ns.length > 0 && ns.every((m) => m && (m[1] || m[2] || !(+m[3].replace(/,/g, "") > 0)))
+    && ws.every((w) => w.heldBy || (w.balance != null ? !(w.balance > 0) : !w.unlimited && !quotaNoShare(w) && w.used >= 100));
+}
 if (mode === "panel") document.addEventListener("visibilitychange", () => {
   if (!document.hidden) return;
   // an account its eye showed is hidden again once the panel is put away
@@ -17339,7 +17368,7 @@ function renderPanelUse() {
 function renderPanelQuota(lazy) {
   const box = $("#panelQuota");
   if (mode !== "panel" || !box) return;
-  const drawn = JSON.stringify([quotas, quotaHistV, quotaLeft, quotaRange, [...panelOptsFolded], state?.settings, locale, panelTab, panelPeek, panelArranging, usageArranging, Math.floor(Date.now() / 60e3)]);
+  const drawn = JSON.stringify([quotas, quotaHistV, quotaLeft, quotaRange, [...panelOptsFolded], state?.settings, locale, panelTab, panelPeek, panelArranging, panelZeroOpen, usageArranging, Math.floor(Date.now() / 60e3)]);
   if (lazy && renderPanelQuota.drawn === drawn) return;
   renderPanelQuota.drawn = drawn;
   const subs = byUsageOrder(keyCards(quotas || []).filter((q) => q.balance || q.error || q.windows?.length));
@@ -17382,6 +17411,9 @@ function renderPanelQuota(lazy) {
   const hidden = new Set(state.settings?.panelUsageHidden || []);
   const peek = (q) => !!panelPeek && (trayCardID(q) === panelPeek || q.balanceCard === panelPeek || q.provider === panelPeek);
   const away = new Set(subs.filter((q) => hidden.has(q.provider) && !peek(q)).map((q) => q.provider));
+  // a balance, or a vendor's every account, at 0: behind the foot's button
+  const zero = new Set(subs.filter((q) => quotaAtZero(q) && !peek(q)));
+  let atZero = 0;
   // the sections in order: a vendor's accounts, or a run of balances
   const parts = [], groups = new Map();
   for (const q of subs) {
@@ -17389,6 +17421,7 @@ function renderPanelQuota(lazy) {
     // a balance with windows (Command Code's credits beside its 5-hour and
     // weekly windows) is the windows' card; a balance alone, a figure
     if (q.balance && !q.windows?.length) {
+      if (zero.has(q) && ++atZero && !panelZeroOpen) continue;
       const last = parts[parts.length - 1];
       if (last?.bals) last.bals.push(q);
       else parts.push({ bals: [q] });
@@ -17400,6 +17433,7 @@ function renderPanelQuota(lazy) {
   for (const part of parts) {
     if (part.bals) { box.append(panelBalances(part.bals)); continue; }
     const { name, qs } = part;
+    if (qs.every((q) => zero.has(q)) && (atZero += qs.length) && !panelZeroOpen) continue;
     const g = el("div", "pq-group");
     const head = el("div", "pq-gh");
     head.append(icon(qs[0].icon), el("span", "pq-gn", name));
@@ -17437,6 +17471,14 @@ function renderPanelQuota(lazy) {
   arrange.title = t("Choose which subscriptions this tab shows, and their order");
   arrange.onclick = () => { panelArranging = true; panelPeek = ""; renderPanelQuota(); $("#panelQuota .pq-arow .pq-ahandle")?.focus(NO_SCROLL); };
   foot.append(arrange);
+  if (atZero) {
+    const z = el("button", "pq-more pq-zero", panelZeroOpen ? t("Fold the ones at 0") : t("{n} at 0", { n: atZero }));
+    z.type = "button";
+    z.title = t("Nothing left here: every window used up, or a balance of 0");
+    z.setAttribute("aria-expanded", String(panelZeroOpen));
+    z.onclick = () => { panelZeroOpen = !panelZeroOpen; try { localStorage.setItem("magpie.panelZeroOpen", panelZeroOpen); } catch {} renderPanelQuota(); box.querySelector(".pq-zero")?.focus(NO_SCROLL); };
+    foot.append(z);
+  }
   if (away.size) foot.append(el("span", "pq-hidden", t("{n} hidden", { n: away.size })));
   box.append(foot);
   restoreFlash();
@@ -21905,6 +21947,8 @@ function pmSub(m) {
     if (m.gpu) return t("On, on the GPU ({device})", { device: m.device });
     // AstrLink Guard on a Mac: CoreML, on the device its plan picked
     if (m.via) return { "Neural Engine": t("On, with CoreML on the Neural Engine"), GPU: t("On, with CoreML on the GPU"), CPU: t("On, with CoreML on the CPU") }[m.device] || t("On, with CoreML");
+    // the Intel build on Apple silicon: Go, translated, several times slower
+    if (m.rosetta) return t("On, slowly under Rosetta: the next update installs magpie for Apple silicon");
     if (m.gpuError && m.model === "astrlink-guard") return t("On, on the CPU: CoreML failed ({error})", { error: m.gpuError });
     return m.gpuError ? t("On, on the CPU: the GPU failed ({error})", { error: m.gpuError }) : t("On, on the CPU");
   }

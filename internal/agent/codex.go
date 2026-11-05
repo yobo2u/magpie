@@ -787,6 +787,15 @@ func codexIn(at place) *Agent {
 		if err != nil {
 			log.Println("codex: moving magpie's threads:", err)
 		}
+		// one written to in the last minute (the thread the takeover's
+		// turn ran in, as the account came back) stayed on magpie, and
+		// nothing else may Sync for hours: the Codex app then can't resume
+		// it on the provider it is on now, so Retry fails the same way
+		// each time and its model reads unavailable (nb5p on Discord).
+		// Another Sync comes once the thread is quiet.
+		if sessions.CodexThreadsBusyOn(dir, magpieID) {
+			codexThreadsLater()
+		}
 	}
 	// bringOver is bringBack the other way: while magpie is Codex's
 	// provider, the threads Codex started on OpenAI before are listed
@@ -1419,9 +1428,9 @@ func codexIn(at place) *Agent {
 			return own
 		}
 		if p != "" && p != magpieID && !isCCSwitchMirror(p) {
-			own = say(group(p, options(catalog.Codex(), "")))
+			own = say(group(p, codexNamed(catalog.Codex())))
 		} else {
-			own = codexInMagpie(say(group("OpenAI", options(ownCodex(), ""))))
+			own = codexInMagpie(say(group("OpenAI", codexNamed(ownCodex()))))
 			// with magpie Codex's provider (magpie API, or a magpie model
 			// picked with no ChatGPT sign-in beside it), Codex's own models
 			// are reached through magpie on a ChatGPT account there: picked
@@ -1431,7 +1440,7 @@ func codexIn(at place) *Agent {
 			if api() || asProvider() {
 				for i, o := range own {
 					if id := codexOwnViaMagpie(o.Value); id != "" {
-						own[i].Label, own[i].Value, own[i].Ref = o.Value, id, id
+						own[i].Value, own[i].Ref = id, id
 					} else if !api() {
 						own[i].Via, own[i].Direct = false, "OpenAI"
 					}
@@ -2391,6 +2400,21 @@ func ownCodex() []catalog.Model {
 	return out
 }
 
+// codexNamed is Codex's own models as its picker offers them, each under
+// its name, as every model of magpie's is (viaMagpie): the picker drew
+// the slug (gpt-6-astra) in front and the name after it in grey, the
+// only list in magpie that did (nb5p on Discord). The value stays the
+// slug Codex is set to.
+func codexNamed(ms []catalog.Model) []Option {
+	out := options(ms, "")
+	for i, m := range ms {
+		if m.Name != "" {
+			out[i].Label = m.Name
+		}
+	}
+	return out
+}
+
 // codexInMagpie marks Served those of Codex's own models that magpie's list
 // shows Codex on a ChatGPT account of the user's (codex/gpt-5.5): its
 // pickers leave out magpie's codex/… as only a hop (codexViaMagpieFor), so these
@@ -2589,6 +2613,33 @@ func codexStaleCache(path, tag string) error {
 		return err
 	}
 	return edit.WriteAtomic(path, out)
+}
+
+// codexThreadsAgain is the Sync codexThreadsLater asks for; a test
+// replaces it. Set in init: a var's initializer naming SyncCatalogSoon
+// would be an initialization cycle through the agents' list.
+var codexThreadsAgain func()
+
+func init() { codexThreadsAgain = SyncCatalogSoon }
+
+// codexThreadsWait is how long codexThreadsLater waits: past the window
+// in which a thread counts as being written to.
+var codexThreadsWait = sessions.ActiveWindow + 5*time.Second
+
+var codexThreadsPending satomic.Bool
+
+// codexThreadsLater runs codexThreadsAgain once codexThreadsWait has
+// passed, for the threads bringBack left on magpie as they were being
+// written to. One wait at a time: another call while one is pending
+// adds none.
+func codexThreadsLater() {
+	if !codexThreadsPending.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(codexThreadsWait, func() {
+		codexThreadsPending.Store(false)
+		codexThreadsAgain()
+	})
 }
 
 // codexUsedUp reports whether the ChatGPT account Codex is signed in to
