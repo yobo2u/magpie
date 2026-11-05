@@ -43,18 +43,11 @@ const remotePage = web && !/^(localhost|127(\.\d+){3}|\[::1\]|::1)$/i.test(locat
 // General turns it off, and they are back.
 let gatewayMode = web && !!window.bootPrefs?.gateway;
 const GATEWAY_HIDES = ["agents", "library"];
-// Plugins › Built-in (builtins.go; Lxxyx on X: too much to look through):
-// the optional parts of the window switched off, by id. Whatever is marked
-// data-feature="<id>" leaves the page while its feature is off — by a
-// style, so what a page draws later goes too — a page's tab leaves the nav
-// (navHides), a link to the page opens Agents (show), and Settings and its
-// search pass over its rows. boot.js says which before the first paint,
-// each read of the settings after (applyFeatures). The gateway is the
-// same either way. Whatever is marked data-feature-off="<id>" is the
-// other way round, there only while its feature is off: where a page
-// says what went and turns it back on (bigbenniu on X: with routing
-// groups off, the Routing page offered no new group and said nothing of
-// why).
+// Plugins › Built-in (builtins.go, Lxxyx): the window's parts switched off,
+// by id. data-feature="<id>" leaves by a style while off; its tab leaves the
+// nav (navHides), a link opens Agents (show), Settings skips its rows.
+// boot.js says which before paint, applyFeatures after. data-feature-off is
+// there only while off: where a page says what went (bigbenniu).
 let featuresOff = new Set(window.bootPrefs?.featuresOff || []);
 const featureSel = () => [...featuresOff].map((id) => `[data-feature~="${id}"]`).join(",");
 const featureHides = (n) => { const sel = featureSel(); return !!sel && !!n?.closest(sel); };
@@ -1396,6 +1389,7 @@ function connectLine(a, kind) {
     return line;
   }
   if (kind === "empty" && !switchable(a)) { say(t("Add a key or a subscription first; then there are models to connect")); return line; }
+  if (a.appSnag) { say(t("The {agent} app hit an error · quit it and open it again", { agent: a.name }), "wait"); return line; }
   if (!a.wired && a.native && a.native.provider !== "disconnected") {
     say(t(a.native.detail), "bad");
     if (a.native.provider === "invalid") line.append(driftFix(a, "Reconnect"));
@@ -6224,6 +6218,7 @@ function renderProviders(quiet) {
     const name = el("div", "name", p.name);
     if (p.sponsored) name.append(el("span", "badge", t("sponsored")));
     if (p.off) name.append(el("span", "badge off", t("Switched off")));
+    if (p.self) name.append(Object.assign(el("span", "badge" + (p.keepSelf ? "" : " off"), t("This magpie")), { title: selfNote(p) }));
     if (p.move && p.move.state !== "plugin") name.append(deprecatedBadge());
     const n = p.models.filter((m) => m.on).length;
     // rate windows: what it bills at now (#2463)
@@ -6913,6 +6908,57 @@ function segsPlace(box) {
   const home = box.isConnected && box.parentElement.closest("[id]");
   return home ? box.dataset.kind + "@" + home.id + ":" + [...home.querySelectorAll(".segs")].filter((x) => x.dataset.kind === box.dataset.kind).indexOf(box) : "";
 }
+// A tap with a mouseup and no click (refeccd, Tap to click) clicks its control.
+// WebKit before bug 329642 may give a tap, while a text field has focus, let
+// go before pressed: a press 300ms/12px from a lone release, not let go in
+// 100ms (tapBack), clicks its control, and the click the next release pairs
+// with it is dropped.
+let tapBack = false;
+{
+  let d, clicked, held = false, loose = null, eat = false, wait = 0;
+  const mouse = (e) => e.isTrusted && e.isPrimary && !e.button && e.pointerType === "mouse";
+  const sel = 'button, a[href], summary, label, .opt, [role="button"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="option"]';
+  const drag = (el) => getComputedStyle(el).getPropertyValue("--wails-draggable").trim() === "drag";
+  const fire = (el) => { if (el && !clicked && el.isConnected && !el.disabled && !el.closest('[inert], [aria-disabled="true"]') && !drag(el)) el.click(); };
+  const press = (el) => { clicked = false; setTimeout(() => fire(el), 30); };
+  addEventListener("pointerup", (e) => {
+    if (!mouse(e)) return;
+    // let go soon after: a press in order after all
+    if (wait) clearTimeout(wait), wait = 0, tapBack = false, held = true;
+    eat = tapBack;
+    loose = held ? null : { t: performance.now(), x: e.clientX, y: e.clientY };
+    held = tapBack = false;
+  }, true);
+  addEventListener("pointerdown", (e) => {
+    if (!mouse(e)) return;
+    const u = loose;
+    loose = null;
+    eat = false;
+    tapBack = !!u && performance.now() - u.t < 300 && Math.hypot(e.clientX - u.x, e.clientY - u.y) < 12;
+    held = !tapBack;
+    const el = tapBack && e.target.closest?.(sel);
+    if (tapBack) clicked = false, wait = setTimeout(() => { wait = 0; fire(el); }, 100);
+  }, true);
+  addEventListener("mousedown", (e) => {
+    const el = !tapBack && e.isTrusted && !e.button && e.target.closest?.(sel);
+    d = el && { el, t: performance.now(), x: e.clientX, y: e.clientY };
+  }, true);
+  addEventListener("click", (e) => {
+    if (eat && e.isTrusted && e.detail) {
+      eat = false;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      return;
+    }
+    clicked = true;
+  }, true);
+  addEventListener("mouseup", (e) => {
+    const p = d;
+    d = null;
+    if (p && e.isTrusted && !e.button && p.el.contains(e.target) && performance.now() - p.t < 300 && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 12) press(p.el);
+  }, true);
+}
+
 // A press on an option still picks it when the control is drawn again before
 // the button is let go (a save's answer redraws Settings): down and up were on
 // two buttons, so no click came. Let go on the same option of the same
@@ -6930,7 +6976,7 @@ function segsWho(box) {
   return [place, [...home.querySelectorAll(".segs")].filter((x) => x.dataset.kind === box.dataset.kind).length, ...rows].join(" ");
 }
 addEventListener("pointerdown", (e) => {
-  const b = e.isPrimary && e.button === 0 && e.pointerType !== "touch" && e.target.closest?.(".segs > .opt");
+  const b = !tapBack && e.isPrimary && e.button === 0 && e.pointerType !== "touch" && e.target.closest?.(".segs > .opt");
   segsPress = b ? { b, who: segsWho(b.parentElement), i: optAt(b), t: performance.now(), x: e.clientX, y: e.clientY } : null;
 }, true);
 addEventListener("pointercancel", () => { segsPress = null; }, true);
@@ -6956,24 +7002,6 @@ addEventListener("pointerup", (e) => {
     if (!clicked) [...document.querySelectorAll(".segs")].find((x) => segsWho(x) === p.who)?.querySelectorAll(":scope > .opt")[p.i]?.click();
   });
 }, true);
-
-// A tap whose mouseup comes and no click (refeccd, Tap to click on a Mac): the
-// control pressed and let go is clicked once; a click comes with the mouseup.
-{
-  let d, clicked;
-  addEventListener("mousedown", (e) => {
-    const el = e.isTrusted && !e.button && e.target.closest?.('button, a[href], summary, label, .opt, [role="button"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="option"]');
-    d = el && { el, t: performance.now(), x: e.clientX, y: e.clientY };
-  }, true);
-  addEventListener("click", () => { clicked = true; }, true);
-  addEventListener("mouseup", (e) => {
-    const p = d;
-    d = null;
-    if (!p || !e.isTrusted || e.button || !p.el.contains(e.target) || performance.now() - p.t >= 300 || Math.hypot(e.clientX - p.x, e.clientY - p.y) >= 12 || getComputedStyle(p.el).getPropertyValue("--wails-draggable").trim() === "drag") return;
-    clicked = false;
-    setTimeout(() => { if (!clicked && p.el.isConnected && !p.el.disabled && !p.el.closest('[inert], [aria-disabled="true"]')) p.el.click(); }, 30);
-  }, true);
-}
 
 // An installed list's order, the reader's pick, remembered for each list
 // (#481): its names A→Z or Z→A, and for a list that has one, a view of its
@@ -8428,7 +8456,8 @@ function iconPicker(ed) {
         for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
         const data = await api("icons", { data: btoa(bin) });
         draft.icon = data.icon;
-        draft.iconFrom = "";
+        draft.iconFrom = typed = "";
+        asking = false;
         editorError("");
         draw();
         syncHead();
@@ -8438,8 +8467,7 @@ function iconPicker(ed) {
     };
     const choose = el("button", "text", t("Choose a picture…"));
     choose.onclick = () => file.click();
-    // the site's own icon (as before), a picture's address, or the name's
-    // letters on a tile: many sites have no /favicon.ico (usrname1833)
+    // the site's icon, a picture's address or the name's letters (usrname1833)
     const base = () => draft[apiField[draft.api]] || draft.chat || draft.responses || draft.anthropic || "";
     const site = el("button", "text", t("Get icon"));
     site.setAttribute("aria-haspopup", "menu");
@@ -8453,9 +8481,11 @@ function iconPicker(ed) {
       try {
         const data = await api(path, { name: draft.name || "", ...body });
         draft.icon = data.icon;
-        draft.iconFrom = body.url && !data.failed ? body.url : "";
+        // a typed address only, not the base URL (Refeccd)
+        const u = path === "icons/url" && body.url;
+        draft.iconFrom = u && !data.failed ? u : "";
         if (data.failed) note = t("That picture couldn't be used, so the icon is the name's letters: {why}", { why: data.failed });
-        asking = !!body.url;
+        if (!(asking = !!u)) typed = "";
         ok = !data.failed;
       } catch (e) {
         note = e.message;
@@ -8521,7 +8551,7 @@ function iconPicker(ed) {
         const b = el("button", n === draft.icon ? "on" : "");
         b.title = n.replace(/-color$/, "");
         b.append(icon(n));
-        b.onclick = () => { draft.icon = n; draft.iconFrom = ""; open = false; draw(); syncHead(); };
+        b.onclick = () => { draft.icon = n; draft.iconFrom = typed = ""; asking = open = false; draw(); syncHead(); };
         grid.append(b);
       }
       box.append(find, grid);
@@ -9230,6 +9260,13 @@ function drawEditor(p, presetID) {
     if (p) h.append(providerSwitch(p));
     ed.append(h);
     if (p?.off) ed.append(el("div", "hint off-note", t("Switched off: agents aren't given its models and no request goes to it. Its keys and settings are kept; switch it on to use it again.")));
+    if (p?.self) {
+      const [keep, cb] = tick(t("Use it anyway"), !!p.keepSelf);
+      cb.onchange = () => accountAction("provider/keepself", { id: p.id, keepSelf: cb.checked }, t(cb.checked ? "{name} is used anyway" : "{name} is left out: it is this magpie", { name: p.name }));
+      const note = el("div", "hint off-note self-note", selfNote(p));
+      note.append(keep);
+      ed.append(note);
+    }
   }
 
   // a vendor's global and China endpoints are presets of their own, one row
@@ -9428,7 +9465,7 @@ function drawEditor(p, presetID) {
   // folded under Advanced, out of the way of the key and the models: open
   // when one of them is set, or as it was left in this editor
   const adv = edAligned(el("details", "more advanced"));
-  adv.open = advanced && advanced.of === editing ? advanced.open : advancedSet(draft, p);
+  adv.open = advanced && advanced.of === editing ? advanced.open : advancedSet(draft, p) || (custom && !!(draft.balanceURL || "").trim());
   const of = editing;
   adv.onfold = (open) => { advanced = { of, open }; };
   adv.append(el("summary", "", t("Advanced")));
@@ -9780,8 +9817,13 @@ function drawEditor(p, presetID) {
     advIn.append(...field(t("Rests"), rtk, t("Off: a 429 or an out-of-quota refusal doesn't rest its keys, and the next request is sent to it as usual. For a relay whose limits pass in a moment.")));
   }
 
-  // a balance token of the vendor's own (AiHubMix), or a custom one's (balanceFix)
-  let balFix = null;
+  // a balance token of the vendor's own (AiHubMix), or a custom one's (balanceFix), its URL above (balSlot)
+  let balFix = null, balSlot = null;
+  if (custom) {
+    balSlot = el("div", "bal-slot");
+    balSlot.style.display = "contents";
+    advIn.append(balSlot);
+  }
   if (p?.balanceToken?.takes || custom) {
     const saved = !!p?.balanceToken?.set;
     const tok = input(draft.balanceToken || "", saved && !draft.clearBalanceToken ? t("saved · paste a new one to replace it") : t("optional · the account's system access token"), "password");
@@ -9796,7 +9838,9 @@ function drawEditor(p, presetID) {
       side.append(drop);
       pair.append(side);
     }
-    const tokHelp = custom || p.balanceURL
+    const tokHelp = custom
+      ? t("Leave it empty to read the key's own balance: most relays tell it at the Balance URL above (a sub2api relay's …/v1/usage, a new-api relay's …/api/usage/token). Only for the whole account's balance: a new-api relay's System Access Token, or a sub2api panel's login token (a JWT, sent as a Bearer); it is used for nothing else.")
+      : p.balanceURL
       ? t("What the Balance URL is asked with in place of the key, when it wants the account's own token: a new-api relay's System Access Token, or a sub2api panel's login token (a JWT, sent as a Bearer); it is used for nothing else.")
       : t("A key tells only what is left on itself. For the whole account's balance on the Usage page, generate a System Access Token in {p}'s settings and paste it here; it is used for nothing else.", { p: pr?.name || p.name });
     const [label, wrap] = field(t("Account balance"), pair, tokHelp);
@@ -9809,13 +9853,10 @@ function drawEditor(p, presetID) {
     advIn.append(label, wrap);
   }
 
-  // StepFun tells a Step Plan's 5-hour, weekly and credit windows only to
-  // its platform's sign-in, never to a key: signed in once in a window of
-  // magpie's, the Usage page shows them
+  // a Step Plan's windows are told only to a StepFun sign-in
   if (p?.stepPlan) ed.append(...field(t("Step Plan allowances"), renderStepPlan(p.stepPlan, p.id), t("A key tells only the balance. The Step Plan's 5-hour, weekly and credit windows are told only to a StepFun sign-in: bring yours here once and magpie keeps it (for 30 days), used for nothing else.")));
 
-  // a key on a team's GLM Coding Plan is told the team's windows only with
-  // the team's organization and project, which the console shows (#236)
+  // a team's GLM Coding Plan windows need its org and project (#236)
   const team = p ? !!p.zhipuTeam : !!pr?.zhipuTeam;
   if (team) {
     draft.zhipuTeam = draft.zhipuTeam || { org: p?.zhipuTeam?.org || "", project: p?.zhipuTeam?.project || "" };
@@ -9861,9 +9902,7 @@ function drawEditor(p, presetID) {
         : t("The plan's 5-hour, weekly and monthly windows are told only to the account's access key (Volcengine console → API Access Keys), not to the plan's API key. Give it here for the Usage page to show them; it is used for nothing else.")),
     ];
     ed.append(...rows);
-    // a preset with the plan at some of its regions only (Tencent Cloud's
-    // 企业版 beside its personal plan) asks for it at those, and at an
-    // endpoint none of its regions has, which may be one of them
+    // the plan at some regions only (Tencent's 企业版)
     const at = pr?.accessKeyRegions;
     if (at?.length) {
       accessAt = (r) => {
@@ -9910,9 +9949,7 @@ function drawEditor(p, presetID) {
   }
 
   if (p) ed.append(...field(t("Models"), renderModels(p), ""));
-  // Azure OpenAI's models are its deployments, which magpie lists with the
-  // key once the resource is added (#1995): said here, so no one takes the
-  // add page for one where they must type them
+  // Azure's models are its deployments, listed with the key (#1995)
   else if (pr?.id === "azure") ed.append(...field(t("Models"), el("div", "hint azure-models", t("No need to type them: once added, magpie lists the deployments this key can call. Type a deployment's name as a model id only if that list can't be fetched.")), ""));
   if (p?.drawIds?.length) ed.append(...renderDrawers(p));
   if (p?.filmIds?.length) ed.append(...renderVideomakers(p));
@@ -9967,10 +10004,7 @@ function drawEditor(p, presetID) {
     onRegion = (r) => { draft.region = r.id; if (r.decide) { draft.decide = du.value = r.decide; fill(); } };
     ed.append(...wsRow);
     fill();
-    // Jev's own presets (TypeSafe, Vercel, Cloudflare) name it and the
-    // gateway docs' address; a provider that also serves conversations
-    // (OpenRouter, OpenCode Zen, Ollama …) asks its own decision models
-    // on System One, and Jev's title and Cloudflare's example aren't its
+    // Jev's own presets name it; the others ask their own decision models
     const jev = decideOnly(p || pr) && /jev/i.test(pr?.name || p?.name || "");
     ed.append(...field(t(jev ? "Jev endpoint" : "System One endpoint"), du, tmpl().includes(WORKSPACE) ? t("The address the decision model is asked at, POST …/systemone under it; the workspace ID above fills it in") : jev ? t("The address Jev is asked at; paste the one from your gateway's docs, e.g. Cloudflare's …/accounts/<account id>/ai/run") : t("The address its decision models are asked at, POST …/systemone under it")));
   }
@@ -10027,8 +10061,6 @@ function drawEditor(p, presetID) {
     const bal = input(draft.balanceURL, "https://…/api/usage/token", "url");
     bal.classList.add("bal-url");
     bal.oninput = () => { draft.balanceURL = bal.value; balPath.placeholder = balanceFieldOf(bal.value); };
-    // how the URL is asked: GET, or POST with no body for a vendor that
-    // answers only a POST (#2368)
     const method = segs([["", "GET"], ["POST", "POST"]], draft.balanceMethod === "POST" ? "POST" : "", (v) => { draft.balanceMethod = v; });
     method.classList.add("bal-method");
     method.setAttribute("role", "group");
@@ -10036,7 +10068,8 @@ function drawEditor(p, presetID) {
     method.title = t("How the Balance URL is asked: GET, or POST with no body for a vendor that answers only a POST");
     const balAsk = el("div", "pair bal-ask");
     balAsk.append(method, bal);
-    inner.append(...field(t("Balance URL"), balAsk, t("Where the vendor tells what is left on the key, asked with it like a chat request; {key} in it or in a header is each key's own, for a vendor that takes the key in the URL (…?key={key}); shown on the Usage page")));
+    if (p && !draft.balanceURL) import("./balfound.js").then(() => balFound(balAsk, p, draft, bal, () => balPath), () => {});
+    balSlot.append(...field(t("Balance URL"), balAsk, t("Where the vendor tells what is left on the key, asked with it like a chat request; {key} in it or in a header is each key's own, for a vendor that takes the key in the URL (…?key={key}); shown on the Usage page")));
     const balPath = input(draft.balancePath, balanceFieldOf(draft.balanceURL));
     balPath.classList.add("bal-path");
     balPath.oninput = () => { draft.balancePath = balPath.value; };
@@ -10059,7 +10092,8 @@ function drawEditor(p, presetID) {
         try {
           const r = await api("provider/balance", body);
           res.className = "bal-res " + (r.error ? "bad" : r.ok ? "ok" : "");
-          res.textContent = r.error ? balanceError(r.error) || r.error : r.ok ? t("Balance") + " " + r.amount : t("No Balance URL to ask");
+          res.textContent = r.error ? balanceError(r.error) || r.error : r.ok ? t("Balance") + " " + r.amount : t(r.looked ? "No balance at /v1/usage or /api/usage/token" : "No Balance URL to ask");
+          if (r.looked) window.balFoundShow?.(r);
           res.title = r.error || "";
         } catch (e) { res.className = "bal-res bad"; res.textContent = e.message; }
         check.classList.remove("busy");
@@ -10067,7 +10101,7 @@ function drawEditor(p, presetID) {
       balPair.append(res);
       balPair.classList.add("wrap");
     }
-    inner.append(...field(t("Balance field"), balPair, t("Where the amount is in the reply, e.g. data.balance; it can be a sum with + - * / and brackets, e.g. data.total / 500000 or (1 - credits.used / 70) %; \"$\" in front adds the sign, \"%\" after it shows a percent, with a bar; several, each with a label, go apart by \";\", e.g. 5h: a.used / a.cap %; $credits.left; a list's items are a.*.used, or a[status=active].used for those that match, put in sum(), max(), min() or count(); an amount the reply hasn't shows \"—\" and the others still show")));
+    balSlot.append(...field(t("Balance field"), balPair, t("Where the amount is in the reply, e.g. data.balance; it can be a sum with + - * / and brackets, e.g. data.total / 500000 or (1 - credits.used / 70) %; \"$\" in front adds the sign, \"%\" after it shows a percent, with a bar; several, each with a label, go apart by \";\", e.g. 5h: a.used / a.cap %; $credits.left; a list's items are a.*.used, or a[status=active].used for those that match, put in sum(), max(), min() or count(); an amount the reply hasn't shows \"—\" and the others still show")));
     more.append(inner);
     ed.append(more);
   }
@@ -11959,9 +11993,8 @@ function renderModels(p) {
   return box;
 }
 
-// renderDrawers: its image models, ticked for Settings → Images (321sssrt on X)
 function renderDrawers(p) {
-  return field(t("Image models"), mediaChips("mchips drawers", p.drawIds, "hiddenDrawers", p), t("Settings → Images lists the ticked ones. Agents don't chat with these, so they aren't among its models."));
+  return field(t("Image models"), mediaChips("mchips drawers", p.drawIds, "hiddenDrawers", p, p.drawNames), p.drawPicks ? t("ChatGPT's image backend picks the model itself, whichever is named, so one GPT Image is listed") : t("Settings → Images lists the ticked ones. Agents don't chat with these, so they aren't among its models."));
 }
 
 // renderVideomakers: its video models, ticked to be offered (axelburks on Discord)
@@ -11969,13 +12002,15 @@ function renderVideomakers(p) {
   return field(t("Video models"), mediaChips("mchips videomakers", p.filmIds, "hiddenVideomakers", p), t("Only the ticked ones are offered when making a video. Agents don't chat with these, so they aren't among its models."));
 }
 
-function mediaChips(cls, ids, key, p) {
+function mediaChips(cls, ids, key, p, names) {
   const chips = el("div", cls);
   draft[key] ||= [...(p[key] || [])];
   for (const id of ids) {
     const c = el("button", "mchip pick");
     c.type = "button";
-    c.append(el("span", "", id));
+    const n = names?.[id];
+    c.append(el("span", "", n || id));
+    if (n) c.title = id;
     const show = () => { const on = !draft[key].includes(id); c.classList.toggle("on", on); c.setAttribute("aria-pressed", on); };
     c.onclick = () => {
       draft[key] = draft[key].includes(id) ? draft[key].filter((x) => x !== id) : [...draft[key], id];
@@ -11989,11 +12024,8 @@ function mediaChips(cls, ids, key, p) {
 
 // renderRouting: how the gateway spreads requests over the keys or
 // accounts a provider has on, and how long a conversation stays with the
-// one that answered it. Both are staged in the editor's draft (routing,
-// affinity) and made with its Save, as the rest of the editor is: a click
-// shows the option and what it does, nothing is sent or redrawn, and
-// Cancel drops it (01huadalang on Discord: each click saved and redrew,
-// so looking through what each says lagged).
+// one that answered it. Both are staged in the draft and made with Save
+// (01huadalang on Discord: each click saved and redrew).
 const ROUTINGS = [
   ["", "Smart", "The first takes requests while it has quota to spare; when it runs low, the one with the most left takes over. One out of credit sits out half an hour, one out of quota until it resets, one rate limited as long as the vendor asks, and one that fails a minute, longer each time it fails again."],
   ["order", "In order", "Requests go to the first; the next takes over when the one before runs out of quota, hits a rate limit or fails."],
@@ -13987,7 +14019,7 @@ function windowCapsOf(p, user) { return Object.keys(p?.accountWindowCaps?.[Strin
 function windowCapOf(p, user, w) {
   const own = windowOwnCapOf(p, user, w);
   if (own) return own >= 100 ? 0 : own;
-  return accountCapOf(p, user);
+  return w?.ownCap ? 0 : accountCapOf(p, user);
 }
 // capHeldOf: how the account is held at cap, as the gateway reads it —
 // a window at or past its cap (capFor: its own, else the account's), not
@@ -14080,7 +14112,7 @@ function pillNumber(at, val, ph, cls, label, parse, bad, own, set) {
 // sets the window's own cap, a family's its models' (tiers); not on-demand's.
 function windowCapMeter(m, p, user, w) {
   const ids = (w.tiers || [w]).map((x) => x.capId), owns = ids.map((capId) => windowOwnCapOf(p, user, { capId }));
-  if (!ids.every(Boolean)) return m;
+  if (!ids.every(Boolean) || w.ownCap && !(owns[0] % 100)) return m;
   const own = new Set(owns).size > 1 ? 0 : owns[0], cap = accountCapOf(p, user);
   const name = t(w.name);
   const b = spanBtn(el("span", m.className + " aq-set" + (own ? " own" : "")));
@@ -19433,13 +19465,19 @@ function applyPrefs(s, rate) {
   const got = rate?.rate > 0 ? rate : s.fx?.rate > 0 ? s.fx : null;
   const moved = !!got && got.rate !== fx.rate;
   if (got) fx = got;
+  let costs = false;
   if (currency !== (s.currency || "usd") || (moved && currency === "cny")) {
     currency = s.currency || "usd";
-    if (applyPrefs.painted) magpie.call("usage", "costs");
+    costs = true;
   }
   if (chineseUnits !== !!s.chineseUnits) {
     chineseUnits = !!s.chineseUnits;
-    if (applyPrefs.painted) { magpie.call("usage", "costs"); if (mode === "panel" && panelTab === "stats") renderPanelUse(); }
+    costs = true;
+  }
+  // the panel's Usage tab too, whenever drawn: its read can beat the state (dLdgKyRd)
+  if (costs) {
+    if (applyPrefs.painted) magpie.call("usage", "costs");
+    if (mode === "panel" && panelTab === "stats" && panelUse) renderPanelUse();
   }
   applyPrefs.painted = true;
   if (!prefsBusy && (s.textSize || 100) !== textSize) { textSize = s.textSize || 100; newTextSize(); applyZoom(textSize); }
@@ -20412,6 +20450,11 @@ function askLANNames(urls, then) {
       then();
     } catch { hosts.forEach((h) => lanNames.delete(h)); }
   }, 300);
+}
+
+function selfNote(p) {
+  return t(p.keepSelf ? "This is this magpie itself, used anyway: its models are listed twice, and a request through it passes here twice."
+    : "This is this magpie itself, brought by sync from a computer that uses it. It is left out, so its models aren't listed twice; a request for one is served here.");
 }
 
 function tick(label, on) {
@@ -22660,24 +22703,14 @@ function savePrefs(body) {
 // ---------- header / footer ----------
 
 // ---------- where the reader is ----------
-// Two rules keep the page under the reader, held here for every view so no
-// part of the app has to remember them:
-//
-// - A view moves only for the reader: the wheel or trackpad, a touch, the
-//   keys that scroll, Tab, a drag. Anything else that scrolls it is put
-//   back before it's painted: a part redrawn and measured while briefly
-//   shorter pulls the page up to what was left of it (WebKit has no scroll
-//   anchoring), WebKit scrolls a field it focuses to the middle of the view,
-//   and code sets scrollTop.
-// - What the reader clicks stays where it is on the screen while what the
-//   click does redraws around it, till they scroll or click again or it has
-//   settled: a click is never a scroll. A page left shorter under it keeps
-//   room at its foot; a data-unrolls control goes down with what it opens;
-//   a view at its top stays there (gui-shell.md, "A click never moves").
-//
-// Code moves a view only in answer to a click that asks to go somewhere, and
-// shows that with the reader's event: scrollOnPurpose(e). Called without one
-// it is refused, and whatever scroll follows is put back.
+// For every view (gui-shell.md, "A click never moves"):
+// - A view moves only for the reader (wheel, touch, scroll keys, Tab, a
+//   drag); any other scroll (a shorter redraw, WebKit centring a focused
+//   field, code) is put back before paint.
+// - What the reader clicks stays put on screen while the click redraws
+//   around it, till they scroll, click again or it settles. A shorter page
+//   keeps room at its foot; data-unrolls goes down with what it opens.
+// Code scrolls only with the reader's event: scrollOnPurpose(e).
 let purposeUntil = 0, held = null;
 // guardUntil is purposeUntil when the window is the click guard's own (a
 // field brought back into sight, backToReader): it lets that scroll stand,
@@ -22714,16 +22747,11 @@ function keyboardFocus(e) {
     if ((r.top < b.top || r.bottom > b.bottom) && scrollOnPurpose(e, 400)) focused.scrollIntoView({ block: "nearest" });
   }));
 }
-// A wheel or a touch can scroll the view before the page is told of it (the
-// browser scrolls off the main thread; WebKit, a loaded Mac): put back as no
-// one's, the reader lost a step. What was put back is kept a moment, and a
-// wheel or touch made before it, the same way, gives it back.
-// macOS 13's WebKit (16.6) may scroll a view under a wheel or a coast it never
-// tells the page of: every scroll was put back, the page shook and only the
-// bar's drag moved it (issenn). Three put back the same way in a second, no
-// redraw under a click's hold (h) moving them, are the reader's: given back,
-// and so is each one after that goes on the same way within a second. Code
-// scrolls once; not a run.
+// A wheel or touch may scroll before the page hears of it: what was put back
+// is kept a moment, and a wheel or touch before it, the same way, gives it
+// back. macOS 13's WebKit may never tell of one (issenn): three put back the
+// same way in a second, not by a click's hold (h), are the reader's, and so
+// is each after it within a second.
 let putBack = [], run = null; // { v, by: px put back, at, h: held }, the last second's
 function puttingBack(v, from, h) {
   const by = from - v.scrollTop, at = performance.now(), d = Math.sign(by);
@@ -22787,16 +22815,10 @@ addEventListener("touchend", flings, { capture: true, passive: true });
 addEventListener("scroll", () => { if (performance.now() < flingUntil) flings(); }, { capture: true, passive: true });
 // a drag, not the tremble of a click
 let downAt = null;
-// A scrollbar dragged by the mouse is the reader's scroll, but Chromium and
-// WebView2 give it no pointermove: the press lands on the view itself with
-// the pointer past its content, in the scrollbar band, the scrolls then come
-// with no event of the reader's between them, and the lift ends it. Held for
-// the drag's length they count as the reader's, so the view follows the bar
-// instead of putting every one of them back (emo172, #1089).
-// Whatever the last click was holding in place is let go of here, as the
-// wheel and a drag of the content let go of it through readerScrolls: a hold
-// keeps what was clicked on the screen frame by frame, and would fight the
-// drag — the same bug as the one this fixes, with a click before it.
+// A scrollbar drag is the reader's, but Chromium and WebView2 send no
+// pointermove: a press in the bar band holds its scrolls as the reader's
+// till the lift (emo172, #1089), and lets go of the last click's hold, which
+// would fight the drag.
 let barDrag = null;
 // WebKit sends the drag's last scrolls after the lift, once the gesture is
 // over, so the reader's window is held open past it for them, as a flick's is

@@ -175,7 +175,11 @@ type providerJSON struct {
 	BalanceURL    string `json:"balanceURL,omitempty"`
 	BalancePath   string `json:"balancePath,omitempty"`
 	BalanceMethod string `json:"balanceMethod,omitempty"`
-	ModelsURL     string `json:"modelsURL,omitempty"`
+	// the query magpie found by itself for a relay added by hand with no
+	// Balance URL, and its field (provider.BalanceFound)
+	BalanceFound      string `json:"balanceFound,omitempty"`
+	BalanceFoundField string `json:"balanceFoundField,omitempty"`
+	ModelsURL         string `json:"modelsURL,omitempty"`
 	// an account-wide balance token (provider.BalanceToken): whether the
 	// vendor takes one, and whether one is saved; never the token itself
 	BalanceToken struct {
@@ -251,6 +255,11 @@ type providerJSON struct {
 	// RestartApp: magpie restarts the Codex app's app-server for an
 	// account change it makes by itself (provider.Provider.RestartApp)
 	RestartApp bool `json:"restartApp,omitempty"`
+	// Self: a Remote magpie that turned out to be this magpie (sync
+	// brought it from the computer that uses this one), left out of
+	// routing unless KeepSelf (provider.Provider.SelfAnswered)
+	Self     bool `json:"self,omitempty"`
+	KeepSelf bool `json:"keepSelf,omitempty"`
 	// CapStop and CapCareful: how its accounts end at their caps
 	// (plugins#349), set on their own with capstop and capcareful
 	CapStop    bool `json:"capStop,omitempty"`
@@ -292,6 +301,13 @@ type providerJSON struct {
 	Exposed   int         `json:"exposed"`           // how many reach the agents
 	Draws     int         `json:"draws,omitempty"`   // how many of its models draw images (gateway.Drawers)
 	DrawIDs   []string    `json:"drawIds,omitempty"` // those models' ids, listed apart in its editor
+	// the names those are shown by where one isn't its id: a ChatGPT
+	// account's gpt-image-2 is its one GPT Image, whichever model its
+	// backend draws with (StarBits on X read the id as an old model)
+	DrawNames map[string]string `json:"drawNames,omitempty"`
+	// its vendor draws with the model it picks, whichever is named: a
+	// ChatGPT account's one GPT Image (gateway.VendorPicksDrawer)
+	DrawPicks bool `json:"drawPicks,omitempty"`
 	// those of them unticked in its editor (provider.HiddenDrawers)
 	HiddenDrawers []string `json:"hiddenDrawers,omitempty"`
 	// its video models (gateway.Videomakers), listed apart in its editor
@@ -702,7 +718,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
-		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
+		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate,
 		RateWindows: p.RateWindows, RateNow: rateNowOf(p, time.Now()),
 		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM,
@@ -723,6 +739,9 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 				out.AccountUsers[strings.ToLower(strings.TrimSpace(r))] = u
 			}
 		}
+	}
+	if p.BalanceURL == "" {
+		out.BalanceFound, out.BalanceFoundField, _ = provider.BalanceFound(p)
 	}
 	if out.Fallback == nil {
 		out.Fallback = []string{}
@@ -1009,8 +1028,15 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 	// lists them apart, as Settings → Images is where one is picked
 	for _, m := range gateway.DrawersOf(p, func() []catalog.Model { return ls.Available }) {
 		out.DrawIDs = append(out.DrawIDs, m.ID)
+		if m.Name != "" && m.Name != m.ID {
+			if out.DrawNames == nil {
+				out.DrawNames = map[string]string{}
+			}
+			out.DrawNames[m.ID] = m.Name
+		}
 	}
 	out.Draws = len(out.DrawIDs)
+	out.DrawPicks = out.Draws > 0 && gateway.VendorPicksDrawer(p)
 	for _, id := range out.DrawIDs {
 		if p.DrawerHidden(id) {
 			out.HiddenDrawers = append(out.HiddenDrawers, id)
@@ -2001,6 +2027,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.KeepLogin = old.KeepLogin // set on its own, with keeplogin
 					in.KeepLoginAs = old.KeepLoginAs
 					in.SwitchOnly, in.RestartApp = old.SwitchOnly, old.RestartApp // switchonly, restartapp
+					in.KeepSelf = old.KeepSelf                                    // keepself
 					in.CapStop, in.CapCareful = old.CapStop, old.CapCareful       // capstop, capcareful
 					in.Off = old.Off                                              // and this with off and on
 					if in.Contexts == nil {
@@ -2246,6 +2273,13 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
+		case "keepself":
+			// a Remote magpie that is this magpie, used anyway or left out
+			// (hanslin1666 on Discord)
+			if err := provider.SetKeepSelf(in.ID, in.KeepSelf); err != nil {
+				fail(rw, err)
+				return
+			}
 		case "capstop":
 			// a request ends at the accounts' caps, 429, or goes on to the
 			// fallbacks (plugins#349)
@@ -2392,6 +2426,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			out := map[string]any{"ok": ok, "amount": amount}
 			if err != nil {
 				out["error"] = err.Error()
+			}
+			if u, field, looked := provider.BalanceFound(q); looked {
+				// asked where relays tell a key its balance: where, or that
+				// neither told it
+				out["looked"], out["found"], out["foundField"] = true, u, field
 			}
 			writeJSON(rw, out)
 			return
