@@ -78,13 +78,7 @@ const (
 // key, a model that sees images, a request that asks a reply, and the
 // provider not set image-files=off.
 func dsFilesOn(p provider.Provider, to provider.Protocol, path string, body []byte) bool {
-	if p.ImageFilesOff || p.Key == "" || p.Account != nil || p.IsPlugin() || countsTokens(path) {
-		return false
-	}
-	if to != provider.Chat && to != provider.Responses && to != provider.Anthropic {
-		return false
-	}
-	if provider.HostOf(p.Base(to)) != deepseekHost {
+	if p.ImageFilesOff || p.Key == "" || countsTokens(path) || !p.ImageFilesAt(to) {
 		return false
 	}
 	// deepseek-flash sees images; deepseek-v4-pro reads each as the text
@@ -315,6 +309,7 @@ func (s *Server) withDeepSeekFiles(ctx context.Context, p provider.Provider, to 
 	if len(ids) == 0 {
 		return body, false
 	}
+	byFile := 0
 	out, err := walkImages(to, body, func(im imageAt) (json.RawMessage, error) {
 		_, b64, ok := dsInlineImage(to, im)
 		if !ok {
@@ -325,7 +320,11 @@ func (s *Server) withDeepSeekFiles(ctx context.Context, p provider.Provider, to 
 		if id == "" {
 			return nil, nil
 		}
-		return dsFileBlock(to, im.Block, id), nil
+		block := dsFileBlock(to, im.Block, id)
+		if block != nil {
+			byFile++
+		}
+		return block, nil
 	})
 	if err != nil || bytes.Equal(out, body) {
 		return body, false
@@ -334,6 +333,12 @@ func (s *Server) withDeepSeekFiles(ctx context.Context, p provider.Provider, to 
 		for k := range ids {
 			sent.keys = append(sent.keys, k)
 		}
+	}
+	if u := upBytesOf(ctx); u != nil {
+		// the inline images this try left out, for the request's row
+		u.saved += len(body) - len(out)
+		// and how many they were (matrix0487 on Discord)
+		u.images = max(u.images, byFile)
 	}
 	return out, true
 }
@@ -451,6 +456,7 @@ func (s *Server) dsResolve(ctx context.Context, p provider.Provider, to provider
 		}
 		if u := upBytesOf(ctx); u != nil {
 			u.wire += up
+			u.saved -= up // and are what the files cost it
 		}
 	}
 	return ids

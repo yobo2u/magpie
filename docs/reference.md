@@ -551,8 +551,10 @@ shared magpie's cards named with it (`Codex · office`, id `office/codex`), as
 that magpie last read them — only the computer holding the sign-ins asks the
 vendors, and it answers from what it has kept (`GET /v1/magpie/quotas/cards`).
 A card's refresh here has it read that card once more
-(`POST /v1/magpie/quotas/refresh`, at most once in 30 seconds a card); until it
-has read anything, the remote's one card says so. Their history is shown with
+(`POST /v1/magpie/quotas/refresh`, at most once in 30 seconds a card); the
+remote's own card has it read every card, each saved Claude account's
+`/usage` too, as its Usage page's Refresh does, and is waited for up to 25
+seconds (#5443). Until it has read anything, the remote's one card says so. Their history is shown with
 its own. A check-in is pressed on that computer, not here. A Codex card's
 reset can be used from here (#3850): **Use one…** asks first, as for this
 computer's accounts, and that magpie spends it on its account
@@ -946,6 +948,48 @@ default, `us-east-1`, `eu-central-1`, `ap-northeast-1`, `cn-hongkong` and
 `sk-sp-` keys), with the plan's documented text models. Both serve Chat
 Completions at `/compatible-mode/v1` and Anthropic Messages at
 `/apps/anthropic`.
+
+### Embeddings and rerank
+
+The gateway serves two retrieval APIs beside chat, at `/v1/embeddings` and
+`/v1/rerank` (also without `/v1`). Both take the gateway's key, as chat does,
+and the model is named as `/v1/models` names one, `provider/model` or the
+bare id.
+
+- `/v1/embeddings` takes OpenAI's body: `model`, `input` (a string or a
+  list), and whatever else the vendor takes (`dimensions`,
+  `encoding_format`; Voyage's `input_type`, `output_dimension`,
+  `output_dtype`, `truncation`).
+- `/v1/rerank` takes the body Cohere, Jina and Voyage share: `model`,
+  `query`, `documents` (a list of strings), and `top_n` (Cohere, Jina) or
+  `top_k` (Voyage), `return_documents`. The answer is the vendor's, its
+  results in `results` (Cohere, Jina) or `data` (Voyage), each an `index`
+  into `documents` with its `relevance_score`.
+
+The body goes to the provider's `<base>/embeddings` or `<base>/rerank` as
+sent, with only `model` changed to the vendor's name for it, and the answer
+comes back as the vendor gave it, a refusal with its status and words. The
+tokens counted are its `usage.total_tokens`. A model is asked only on its own
+API's route: an embedding model named on `/v1/rerank`, or a reranker on
+`/v1/embeddings`, is a 404, and neither is in the models agents are offered.
+A model several providers serve under one id is a routing group of its kind
+made per request (see Routing groups).
+
+Voyage AI (`voyage`, heatonz on Discord) is a preset of only these: an
+API key from dashboard.voyageai.com, at `https://api.voyageai.com/v1`. It has
+no list of models to fetch, so the preset names them: the embedding models
+`voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-4`,
+`voyage-finance-2`, `voyage-law-2`, `voyage-3-large`, `voyage-3.5`,
+`voyage-3.5-lite`, `voyage-code-3` and `voyage-code-2`, and the rerankers
+`rerank-3`, `rerank-3-lite`, `rerank-2.5` and `rerank-2.5-lite`. Its Test asks
+`voyage-4-large` for one embedding. Its contextualized
+(`/v1/contextualizedembeddings`) and multimodal (`/v1/multimodalembeddings`)
+embeddings have no route here.
+
+```sh
+curl localhost:3425/v1/rerank -H "Authorization: Bearer $MAGPIE_KEY" \
+  -d '{"model":"voyage/rerank-3","query":"what eats seeds","documents":["a magpie","a stone"],"top_k":1}'
+```
 
 ### Google Vertex AI
 
@@ -1402,7 +1446,13 @@ A call to a model no price is known for is counted at the price of the model
 the reply said answered, at the same provider, when that one has a price: a
 relay that sells `kimi-k3` as `moonshot-kimi-k3` answers as `kimi-k3`, so its
 calls are counted at `relay-a/kimi-k3`'s price. A model with a price of its
-own, `0` included, keeps it whatever its reply says.
+own, `0` included, keeps it when the reply's name is that model however
+spelled, the vendor's own alias, or a relay's rename. A call the vendor
+genuinely answered with another model — the `swapped` mark `magpie usage
+--csv` and the Requests page show — is counted at the model that answered,
+which is the one the vendor billed for; a price you set for the model you
+asked for, `0` included, still says what that model costs you, and when the
+model that answered has no price the asked-for one's is kept.
 
 `magpie model price provider/model` says where a price came from, and for a
 model with none, the two commands that give it one.
@@ -3154,8 +3204,10 @@ key. See [Connecting anything else](#connecting-anything-else) for the
 protocol-specific base URLs. Keep `3425` behind a firewall or VPN and do not
 expose it publicly without gateway-key authentication.
 
-Such a page is in **gateway mode**: it shows Providers, Gateway, Routing,
-Usage, Sessions, Plugins and Settings, with no Agents or Library tab.
+Such a page is in **gateway mode**: it shows Sessions, Library, Providers,
+Routing, Gateway, Usage, Masking, Plugins and Settings, with no Agents tab.
+The Library has its MCP servers alone, with the MCP router: other
+computers' apps connect at the router's address with a gateway key.
 Sessions lists only the sessions of other computers' agents that came
 through this gateway, never this machine's agents' session files
 ([gateway sessions](subsystems/gateway-sessions.md)). Settings leaves out what is written into this machine's agents (provider in

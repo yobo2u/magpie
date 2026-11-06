@@ -922,8 +922,9 @@ func (s *Server) Handler() http.Handler {
 	mux := s.routes()
 	// the goroutine dump first, ahead of every lock the rest can be stuck
 	// on (dumpFirst)
-	// a socket's turns go through all of it again (socketEntry)
-	return socketEntry(s.dumpFirst(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(keyLimited(mux))))))))))
+	// a socket's turns go through all of it again (socketEntry); the
+	// agent's Retry-After is bounded on the way out (retryCapped)
+	return socketEntry(s.dumpFirst(retryCapped(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(keyLimited(mux)))))))))))
 }
 
 // routes are the client APIs, each by its pattern: readOnlyGuard reads
@@ -1200,9 +1201,7 @@ func (s *Server) quotaCardsRefresh(w http.ResponseWriter, r *http.Request) {
 		case id != "":
 			provider.RefreshUsage(ctx, id, user)
 		case scope != nil:
-			for _, q := range scope.cards(provider.CachedCards(time.Now())) {
-				provider.RefreshUsage(ctx, q.Provider, q.User)
-			}
+			provider.RefreshEach(ctx, scope.cards(provider.CachedCards(time.Now())))
 		default:
 			provider.ReadAllCards(ctx)
 		}
@@ -2496,7 +2495,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	chose, _ := r.Context().Value(magpieChoseKey{}).(bool)
 	if keyHeld && (isGroup && !groupAllowed(keyWho, g, ms) || !isGroup && !modelAllowed(keyWho, p, model)) {
 		call.Status, call.Error = 403, "model not allowed for the gateway key"
-		writeError(w, from, 403, keyModelError(keyWho, call.Model))
+		// the model the key was checked against is named, not the one the
+		// client sent: an agent that stands a request on another model
+		// (Desktop's check on its list's first, a stand-in, a tier) was
+		// refused for that one, and the sent one the key may well hold
+		// (#4175); a group as the key's lists name it (its ref), a model
+		// as provider/model, which a privacy move may have changed since
+		checked := p.ID + "/" + model
+		if isGroup {
+			checked = g.Ref()
+		}
+		writeError(w, from, 403, keyModelError(keyWho, checked))
 		turnedAway()
 		return
 	}
@@ -2540,7 +2549,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		conv := conversationID(r.Header, body)
 		sealedLead = leadProvider(scope, parent)
-		sealers = []string{sealedLead, leadProvider(scope, conv)}
+		sealers = []string{sealedLead, leadProvider(scope, affinityID(r.Header, body))}
 		readable := func() bool {
 			return isGroup && slices.ContainsFunc(ms, func(m provider.Member) bool { return s.sealedReader(m.Provider, m.Model, sealers) }) || !isGroup && s.sealedReader(p, model, sealers)
 		}
@@ -3000,6 +3009,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// grown conversation is refused again, and the member that answered
 	// is asked first (#3453)
 	cands, pl = behindOverflow(stuck, cands, pl, len(body))
+	// requests that came together go to as many keys or accounts as are
+	// alike for them, each counted where it goes until it ends (#5242);
+	// one kept, pinned, sealed to its account, or a new conversation
+	// leastHeld spread is counted where it is
+	poolRouting, poolGroup := p.Routing, (*provider.Group)(nil)
+	if isGroup {
+		poolRouting, poolGroup = g.Routing, &g
+	}
+	leastHeldIt := aff.Why == "first" && (rotate || spread)
+	reorder := !aff.Kept && aff.Why != "strict" && pin == "" && leadAccount == "" && checkpoint == nil && !leastHeldIt
+	cands, pl, unburst := burstSpread(poolRouting, poolGroup, hit != nil && hit.Use != "", reorder, cands, pl)
+	defer unburst()
 	// of those resting, only the one back soonest is asked (#1799); the
 	// whole list still finds a Codex account to spend a reset on
 	all := cands
@@ -5040,6 +5061,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		if up := upBytesOf(r.Context()); up != nil {
 			rec.UpBytes, rec.PlainBytes = up.wire, up.plain
+			rec.DownBytes, rec.ImageFilesSaved, rec.ImageFiles = up.downOf(), up.saved, up.images
 		}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
 		withBodies(&rec, &call)
@@ -5347,7 +5369,7 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 			heardNet() // the network is up (offline.go)
 		}
 	}()
-	if provider.HostOf(p.Base(to)) == deepseekHost {
+	if p.ImageFilesAt(to) {
 		// which images a try named by file (deepseek_files.go)
 		ctx = context.WithValue(ctx, dsSentKey{}, &dsSent{})
 	}
@@ -5477,10 +5499,14 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		body = s.withoutRefusedThinking(p, body)
 		// and those another vendor signed, to Claude (thinking_bound.go)
 		body = withoutForeignThinking(p, body)
-		if isKimi(p, to) || p.IsOpenCode() && strings.Contains(strings.ToLower(modelOf(body)), "deepseek") {
+		if isKimi(p, to) || isDeepSeekAnthropic(p, to) || p.IsOpenCode() && strings.Contains(strings.ToLower(modelOf(body)), "deepseek") {
 			// Claude Code's deferred-tool blocks, for which Kimi's
 			// Anthropic endpoint turns the whole request away with a 400
-			// that names nothing to learn from (#2042). OpenCode's
+			// that names nothing to learn from (#2042). DeepSeek's own
+			// Anthropic endpoint now takes a tool_addition at no position
+			// it can appear in (#5404, a 2026-11-05 check against
+			// api.deepseek.com), so its blocks come out up front too,
+			// not after a refusal taught it. OpenCode's
 			// DeepSeek route hides the refusal behind a 422 "Endpoint
 			// is unavailable."; other OpenCode models keep their blocks.
 			body = withoutDeferredTools(body)
@@ -5716,9 +5742,12 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 			n = int(r.ContentLength)
 		}
 		sentUp(ctx, n, len(body))
-		return p.Do(s.client, r)
+		res, err := p.Do(s.client, r)
+		return gotDown(ctx, res), err
 	}
 	res, err := p.Do(s.client, req)
+	// what comes back is counted as it is read, as what went is (#4456)
+	res = gotDown(ctx, res)
 	if err == nil && res.StatusCode >= 400 && provider.OpenCodeURL(req.URL.String()) {
 		logOpenCodeRefusal(p, req, res.StatusCode)
 	}
@@ -9157,6 +9186,24 @@ func nativeSessionOf(in http.Header) string {
 // (conversationOpening). One message is hashed as the request has it, as
 // it always was; several are hashed as writeOpening reads them, so the
 // cache mark an agent moves on from turn to turn doesn't move the id.
+// affinityID is the conversation a turn's account is kept for: an agent's
+// own session (conversationID), else the caller's X-Magpie-Session, else
+// the conversation's hash. Two callers that send the same opening with
+// their own X-Magpie-Session are two conversations (#5242). It is magpie's
+// own key and never goes upstream: conversationID, which a vendor or a
+// plugin is sent (Kilo, ConversationHeader), doesn't read X-Magpie-Session.
+func affinityID(in http.Header, body []byte) string {
+	for _, h := range sessionHeaders {
+		if v := strings.TrimSpace(in.Get(h)); v != "" {
+			return v
+		}
+	}
+	if v := strings.TrimSpace(in.Get(SessionHeader)); v != "" {
+		return v
+	}
+	return conversationID(in, body)
+}
+
 func conversationID(in http.Header, body []byte) string {
 	for _, h := range sessionHeaders {
 		if v := strings.TrimSpace(in.Get(h)); v != "" {
@@ -10008,7 +10055,8 @@ func writeErrorSaid(w http.ResponseWriter, proto provider.Protocol, status int, 
 // "input token count … exceeds the maximum",
 // xAI's "maximum prompt length is", Groq's "reduce the length of the
 // messages", OpenRouter's "maximum allowed input length", Together's
-// "longer than the model's context length", llama.cpp's "available
+// "longer than the model's context length" or, without the 's, "longer
+// than the model context length" (#4040, easyrev), llama.cpp's "available
 // context size", LM Studio's "greater than the context length", Copilot's
 // "prompt token count of", MiniMax's "context window exceeds limit",
 // Kimi's "exceeded model token limit", DS4's "configured context size",
@@ -10029,7 +10077,7 @@ func writeErrorSaid(w http.ResponseWriter, proto provider.Protocol, status int, 
 // "输出过长" (the reply) isn't taken; bare "token数量超过上限" isn't either,
 // as a day's allowance is said so too.
 var tooLongRe = regexp.MustCompile(`(?i)context_length_exceeded|prompt is too long|input is too long|(exceeds?|exceeded|over|beyond)( the)?( model'?s?)?( maximum)? context|context (length|limit|window) (exceeded|is exceeded)|context (window )?(is )?full\b|maximum context length|too many (input |prompt )?tokens|上下文(长度)?(超|过长)|超(过|出)(了)?(模型)?(的)?(最大)?上下文` +
-	`|input token count.*exceeds the maximum|maximum prompt length is \d|reduce the length of the messages|maximum allowed input length|longer than the model'?s context length|available context size|greater than the context length|prompt token count of [\d,]+ exceeds the limit|context window exceeds limit|exceeded model token limit|configured context size|prompt too long|prompt exceeds max length|context_window_exceeded|exceeded (max |maximum )?context length|range of input length should be|token limit exceeded|input tokens? (count )?(exceeds?|exceeded) (the )?(max(imum)? )?limit` +
+	`|input token count.*exceeds the maximum|maximum prompt length is \d|reduce the length of the messages|maximum allowed input length|longer than the model'?s? context length|available context size|greater than the context length|prompt token count of [\d,]+ exceeds the limit|context window exceeds limit|exceeded model token limit|configured context size|prompt too long|prompt exceeds max length|context_window_exceeded|exceeded (max |maximum )?context length|range of input length should be|token limit exceeded|input tokens? (count )?(exceeds?|exceeded) (the )?(max(imum)? )?limit` +
 	`|(内容|输入|文本|提示词?|prompt|问题|对话|消息)(内容|文本)?(长度)?\s*(太长|过长|超长)|字数(太多|过多)` +
 	`|(内容|输入|文本|提示词?|prompt|问题|对话|消息)[^，。,.;；!！]{0,12}超(过|出)[^，。,.;；!！]{0,12}(长度|token|令牌|字数)` +
 	`|(输入|提示词?|prompt)\s*的?\s*(长度|token|令牌|字数)[^，。,.;；!！]{0,8}超(过|出)`)

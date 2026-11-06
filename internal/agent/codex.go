@@ -804,7 +804,7 @@ func codexIn(at place) *Agent {
 		// each time and its model reads unavailable (nb5p on Discord).
 		// Another Sync comes once the thread is quiet.
 		if sessions.CodexThreadsBusyOn(dir, magpieID) {
-			codexThreadsLater()
+			codexThreadsLater(dir, magpieID)
 		}
 	}
 	// bringOver is bringBack the other way: while magpie is Codex's
@@ -902,6 +902,12 @@ func codexIn(at place) *Agent {
 		}
 		if err != nil {
 			log.Printf("codex: moving %s's threads to magpie: %v", from, err)
+		}
+		// one the Codex app has open (the chat on screen as magpie became
+		// the provider) or wrote to this minute stayed on from: it moves
+		// once it is let go (crypto0xfish on Discord)
+		if sessions.CodexThreadsBusyOn(dir, from) {
+			codexThreadsLater(dir, from)
 		}
 	}
 	// mirrorsTaken are the mirrors takeMirrors pointed at magpie (#1796)
@@ -1298,8 +1304,9 @@ func codexIn(at place) *Agent {
 	}
 	// the model Codex writes its memories with (Yc on Discord): [memories]
 	// extract_model summarises a thread, consolidation_model folds them in
-	// (codex-rs/config/src/types.rs). Unset, Codex takes gpt-5.6-luna and
-	// gpt-5.6-terra, whatever its model; magpie sets both to one pick.
+	// (codex-rs/config/src/types.rs). Unset, Codex takes models of its own
+	// whatever its model (from 0.167.0 gpt-6-luna and gpt-6.1-terra, before
+	// that gpt-5.6-luna and gpt-5.6-terra); magpie sets both to one pick.
 	memories := func() (string, error) {
 		m, err := edit.GetTOMLTable(path, "memories")
 		return cmp.Or(m["consolidation_model"], m["extract_model"]), err
@@ -1421,6 +1428,9 @@ func codexIn(at place) *Agent {
 		}
 		if err != nil {
 			log.Printf("codex: moving OpenAI's threads to %s: %v", to, err)
+		}
+		if sessions.CodexThreadsBusyOn(dir, "openai") {
+			codexThreadsLater(dir, "openai")
 		}
 		if len(ids) == 0 {
 			return
@@ -1947,6 +1957,24 @@ func codexIn(at place) *Agent {
 				return nil
 			}
 			return errors.Join(dropMirrorFailover(), dropBase())
+		},
+		// what no Disconnect could name, marks gone: only what names magpie
+		// itself goes, by the same gates a Disconnect takes them by
+		TakeLeftovers: func() (bool, error) {
+			took := false
+			if viaBase() {
+				if err := dropBase(); err != nil {
+					return false, err
+				}
+				took = true
+			}
+			if asProvider() {
+				if err := dropProvider(); err != nil {
+					return false, err
+				}
+				took = true
+			}
+			return took, nil
 		},
 		OwnVia: codexOwnViaMagpie,
 		SideModel: func() string {
@@ -2778,24 +2806,66 @@ var codexThreadsAgain func()
 
 func init() { codexThreadsAgain = SyncCatalogSoon }
 
-// codexThreadsWait is how long codexThreadsLater waits: past the window
-// in which a thread counts as being written to.
-var codexThreadsWait = sessions.ActiveWindow + 5*time.Second
+// codexThreadsWait is how often codexThreadsLater looks again: within
+// it of a thread going quiet, or of the Codex app letting it go, the
+// Sync is asked for.
+var codexThreadsWait = 15 * time.Second
 
-var codexThreadsPending satomic.Bool
+// codexThreadsFor is how long codexThreadsLater keeps looking, in
+// nanoseconds: a thread the Codex app keeps open all day waits for the
+// next Sync after it. Read at each look, so a test ends a wait by
+// setting it to 0.
+var codexThreadsFor satomic.Int64
 
-// codexThreadsLater runs codexThreadsAgain once codexThreadsWait has
-// passed, for the threads bringBack left on magpie as they were being
-// written to. One wait at a time: another call while one is pending
-// adds none.
-func codexThreadsLater() {
-	if !codexThreadsPending.CompareAndSwap(false, true) {
+func init() { codexThreadsFor.Store(int64(12 * time.Hour)) }
+
+var (
+	codexThreadsMu      sync.Mutex
+	codexThreadsPending = map[string]bool{}
+)
+
+// codexThreadsLater runs codexThreadsAgain once no thread of the Codex
+// home dir on the provider p is being written to or held open
+// (sessions.CodexThreadsBusyOn), for the threads a move off p left there:
+// bringBack's on magpie as they were being written to (nb5p on Discord),
+// and bringOver's and lendOwn's on OpenAI that the Codex app had open as
+// magpie became Codex's provider. Those the app refuses to go on with
+// ("This chat uses OpenAI, but your current provider is magpie",
+// crypto0xfish on Discord) while it keeps them loaded, and once it lets
+// them go (the chat closed, the app quit) it resumes them on the provider
+// their row names, so they have to move by then; nothing else may Sync
+// for hours. It looks every codexThreadsWait, which is a database read
+// and a try of the locks Codex holds, for up to codexThreadsFor. One wait
+// at a time for each home and provider: another call while one is
+// pending adds none.
+func codexThreadsLater(dir, p string) {
+	key := dir + "\x00" + p
+	codexThreadsMu.Lock()
+	if codexThreadsPending[key] {
+		codexThreadsMu.Unlock()
 		return
 	}
-	time.AfterFunc(codexThreadsWait, func() {
-		codexThreadsPending.Store(false)
-		codexThreadsAgain()
-	})
+	codexThreadsPending[key] = true
+	codexThreadsMu.Unlock()
+	done := func() {
+		codexThreadsMu.Lock()
+		delete(codexThreadsPending, key)
+		codexThreadsMu.Unlock()
+	}
+	wait := codexThreadsWait
+	go func() {
+		for start := time.Now(); time.Since(start) < time.Duration(codexThreadsFor.Load()); {
+			time.Sleep(wait)
+			if !sessions.CodexThreadsBusyOn(dir, p) {
+				// let go first: the Sync it asks for may find another
+				// thread busy and ask again
+				done()
+				codexThreadsAgain()
+				return
+			}
+		}
+		done()
+	}()
 }
 
 // codexUsedUp reports whether the ChatGPT account Codex is signed in to
@@ -2850,6 +2920,19 @@ func EndCodexFailover() (ended bool, err error) {
 	}
 	codexDaemonCheck(a.Path)
 	return true, nil
+}
+
+// TakeCodexLeftovers takes out of this machine's Codex config what magpie
+// wrote that no Disconnect could name: the base URL at magpie's gateway,
+// and magpie as its provider, where the marks magpie keeps them by are
+// gone with magpie's own files (#3866). It answers whether it changed
+// anything.
+func TakeCodexLeftovers() (bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, err
+	}
+	return codex(home).TakeLeftovers()
 }
 
 // RelayOpenCodex leaves a relay at the gateway's address for the Codex
