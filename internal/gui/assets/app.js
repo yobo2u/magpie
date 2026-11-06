@@ -6,7 +6,7 @@ const mode = params.get("mode") || "window";
 // focus without a scroll, as every focus call here asks
 const NO_SCROLL = { preventScroll: true };
 // a Mac window hidden by orderOut leaves its page drawing: the app says so (#4293)
-let outOfSight = false;
+let outOfSight = false, asleep;
 for (const [k, off] of [["hidden", true], ["visibilityState", "hidden"]]) {
   const own = Object.getOwnPropertyDescriptor(Document.prototype, k)?.get;
   try { own && Object.defineProperty(Document.prototype, k, { configurable: true, get() { return outOfSight ? off : own.call(this); } }); } catch {}
@@ -14,33 +14,33 @@ for (const [k, off] of [["hidden", true], ["visibilityState", "hidden"]]) {
 window.magpieWindowVisibility = (v) => {
   if (outOfSight !== v) return;
   outOfSight = !v;
-  document.documentElement.classList.toggle("magpie-out-of-sight", outOfSight);
+  const c = document.documentElement.classList;
+  c.toggle("magpie-out-of-sight", outOfSight);
+  // out of sight 30s: let go of layers, laid out now since a hidden page
+  // never draws (#5530)
+  clearTimeout(asleep); c.remove("magpie-asleep");
+  if (outOfSight && mode == "window") asleep = setTimeout(() => { c.add("magpie-asleep"); document.body.offsetWidth; }, 3e4);
   document.dispatchEvent(new Event("visibilitychange"));
 };
 addEventListener("focus", () => magpieWindowVisibility(true)); // focused is on screen
-// kept: magpie.<k> in localStorage, read as JSON; d when it holds none, or
-// not d's kind, or can't be read. keep writes one, for this time only if
-// it can't be kept
+// kept: magpie.<k> in localStorage as JSON; d when none, not d's kind or
+// unreadable. keep writes one, for this time only if it can't be kept
 function kept(k, d) { try { const v = JSON.parse(localStorage.getItem("magpie." + k)); return v && typeof v == typeof d && Array.isArray(v) == Array.isArray(d) ? v : d; } catch { return d; } }
 function keep(k, v) { try { localStorage.setItem("magpie." + k, JSON.stringify(v)); } catch {} }
-// The panel loads Wails for ExecJS readiness, but stays attached to the tray.
-// On Linux it is dragged by its header like the window: a Wayland window
-// can't be put by the icon, so KWin places it, and since it has no KWin
-// title bar (#1283) the header is the only handle it has (#1430).
+// The panel stays attached to the tray; on Linux it is dragged by its
+// header, as KWin places a Wayland window with no title bar (#1283, #1430).
 if (mode === "panel" && !document.body.classList.contains("linux")) $("header.top").style.setProperty("--wails-draggable", "no-drag");
 // `magpie web`: the page in a browser tab, with no window of the app's
 // around it — it opens links itself, and what is the desktop's is left out
 const web = !!window.bootPrefs?.web;
-// the version that served this page, which servedAnew compares the one
-// answering now with
+// the version that served this page, for servedAnew
 const pageVersion = window.bootPrefs?.version || "";
 // magpie web seen from another computer: localhost is the viewer's (curtinp118)
 const remotePage = web && !/^(localhost|127(\.\d+){3}|\[::1\]|::1)$/i.test(location.hostname);
 // layout.js applies the mode and platform before the header can paint.
-// Gateway mode (gatewaymode.go): magpie web on a server that is only the
-// gateway for other computers' agents leaves out this computer's agents'
-// pages — Agents, the Library but its MCP tab — and their settings;
-// Settings › General turns it off, and they are back.
+// Gateway mode (gatewaymode.go): magpie web serving only other computers'
+// agents leaves out this one's agents' pages (Agents, the Library but MCP)
+// and settings, until Settings › General turns it off.
 let gatewayMode = web && !!window.bootPrefs?.gateway;
 const GATEWAY_HIDES = ["agents"];
 // Plugins › Built-in (builtins.go, Lxxyx): the window's parts switched off,
@@ -1838,13 +1838,13 @@ function guideCard(g) {
       add.onclick = (e) => { e.stopPropagation(); guideTemplate(tp, name); };
       acts.append(add);
     }
-    const open = el("button", "text guide-open", t("Open Routing"));
+    const open = el("button", "text guide-open", t("Open routing groups"));
     open.type = "button";
     open.dataset.feature = "routing";
     open.onclick = (e) => {
       e.stopPropagation();
-      if (mode === "window") show("routing");
-      else api("window/main?view=routing", {}).catch(statusErr);
+      if (mode === "window") show("groups");
+      else api("window/main?view=groups", {}).catch(statusErr);
     };
     acts.append(open);
     three.body.append(acts);
@@ -4467,10 +4467,7 @@ function updatePath(p) {
 }
 
 // renderUpdateBadge shows the header's Update pill once a newer magpie is
-// downloaded (a click restarts into it) or, where magpie can't replace
-// itself, out (a click opens the release page). The user may keep it away:
-// for good (Settings), or for this version (its ×, or a right-click), until
-// a newer one is out. magpie still downloads it and puts it in on quitting.
+// downloaded or out; Settings or its × keeps it away.
 async function renderUpdateBadge() {
   const b = $("#update"), label = b.querySelector("span");
   const u = await api(updatePath("update")).catch(() => null);
@@ -4511,7 +4508,7 @@ async function renderUpdateBadge() {
       delete b.dataset.pulling;
       return restart();
     }
-    label.textContent = downloadingText(u);
+    b.title = label.textContent = downloadingText(u);
     setTimeout(renderUpdateBadge, 700);
     return;
   }
@@ -4563,14 +4560,16 @@ async function renderUpdateBadge() {
   };
 }
 
-// downloadingText is the pill's word while an update downloads: its
-// percent once there is one. The answer leaves done out while it is 0, and
-// total too while the size isn't known yet, so the first reads have none —
-// they said "NaN%" (inaction on Discord).
+// downloadingText is the pill's word while an update downloads: its percent
+// (none while the size is unknown: "NaN%", inaction on Discord) and speed,
+// then the step after the bytes, never still (esir_tech on Discord)
+const UPDATE_STEPS = { retry: "Reconnecting…", verify: "Verifying…", unpack: "Unpacking…", signature: "Checking signature…" };
 function downloadingText(u) {
-  const p = u?.total > 0 ? Math.floor(((u.done || 0) / u.total) * 100) : NaN;
-  return Number.isFinite(p) ? t("Downloading… {p}%", { p: Math.min(100, Math.max(0, p)) }) : t("Downloading…");
+  const p = u?.total > 0 ? Math.floor(((u.done || 0) / u.total) * 100) : NaN, s = UPDATE_STEPS[u?.step];
+  if (s && u.step !== "retry") return t(s);
+  return (s ? t(s) : Number.isFinite(p) ? t("Downloading… {p}%", { p: Math.min(100, Math.max(0, p)) }) : t("Downloading…")) + (u?.speed ? " · " + speedText(u.speed) : "");
 }
+const speedText = (b) => (b >= 1e6 ? t("{n} MB/s", { n: (b / 1e6).toFixed(1) }) : t("{n} KB/s", { n: Math.max(1, Math.round(b / 1e3)) }));
 
 // updatePillOff is whether the user keeps the Update pill away for v.
 function updatePillOff(v) {
@@ -5652,7 +5651,7 @@ function keptNote(m) {
     act.onclick = (ev) => {
       ev.stopPropagation();
       closePicker();
-      if (mode !== "window") api("window/main?view=routing&newgroup=" + encodeURIComponent(m.id), {}).catch(statusErr);
+      if (mode !== "window") api("window/main?view=groups&newgroup=" + encodeURIComponent(m.id), {}).catch(statusErr);
       else window.newGroupWith?.(m.id, m.name, ev);
     };
   }
@@ -6001,6 +6000,7 @@ function loadProviders() {
   return p;
 }
 
+const rtView = (v) => v === "routing" || v === "groups";
 async function loadProvidersNow() {
   // The page's first opening (#1519, fatkun): a list is drawn at once, as
   // the Agents page draws the last state, and the fresh one replaces it
@@ -6053,7 +6053,7 @@ async function loadProvidersNow() {
     magpie.call(view, "render", was);
     backAfterLoad($("#view-" + view));
   // under Routing: drawn when opened (#4652)
-  } else if (view === "routing") { providersBehind = true; markNewPartners(); }
+  } else if (rtView(view)) { providersBehind = true; markNewPartners(); }
   else renderProviders();
   renderArchive();
   providersWhileFetching();
@@ -6070,7 +6070,7 @@ function providersWhileFetching() {
   clearTimeout(providersWhileFetching.timer);
   if (!providers?.fetching) return;
   providersWhileFetching.timer = setTimeout(async () => {
-    if (!(["providers", "routing"].includes(view) || providersPage(view)) || editing !== null || adding || document.hidden) return;
+    if (!(view === "providers" || rtView(view) || providersPage(view)) || editing !== null || adding || document.hidden) return;
     let next;
     try { next = await api("providers"); } catch { providersWhileFetching(); return; }
     const json = (p) => JSON.stringify({ ...p, fetching: false, gateway: { ...p.gateway, calls: 0 } });
@@ -7997,7 +7997,7 @@ function advancedSet(d, p) {
     !!d.proxyMode || Object.values(d.accountProxies || {}).some((x) => x?.mode) ||
     [d.concurrency, d.maxAccounts, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!d.rateWindows?.length ||
-    !!(d.searches || d.authHeader || d.passUserAgent || d.unredacted || d.countFree || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.http1 || d.imageFilesOff) ||
+    !!(d.searches || d.authHeader || d.passUserAgent || d.unredacted || d.countFree || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.http1 || d.imageFilesOff || d.passErrors) ||
     !!d.fallback?.length || !!p?.balanceToken?.set;
 }
 function priceRateError(ed) {
@@ -9190,7 +9190,7 @@ function baseAPIOf(p) {
 
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), passHeaders: (p.passHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], hiddenVideomakers: [...(p.hiddenVideomakers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, http1: !!p.http1, limitRestOff: !!p.limitRestOff, imageFilesOff: !!p.imageFilesOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), passHeaders: (p.passHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], hiddenVideomakers: [...(p.hiddenVideomakers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, http1: !!p.http1, limitRestOff: !!p.limitRestOff, passErrors: !!p.passErrors, imageFilesOff: !!p.imageFilesOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
 }
 
 // duplicateProvider opens the Add form on a copy of p, its key p's unless another is pasted (#268).
@@ -9604,9 +9604,7 @@ function drawEditor(p, presetID) {
     keyCount.title = n > 1 ? t("The first is tried first; the other {n} are added to its accounts", { n: n - 1 }) : "";
   };
   key.oninput = () => { draft.key = key.value; countKeys(); };
-  // a curl command from a vendor's docs pasted into the key or the Base URL
-  // fills the form (@mark_li21 on X), saying what it took; a key it only
-  // stands for is left out, and the key's box is where to paste one
+  // a pasted curl command fills the form (@mark_li21 on X)
   const fromCurl = (e) => {
     const c = curlOf(e.clipboardData?.getData("text") || "");
     if (!c) return false;
@@ -9667,10 +9665,7 @@ function drawEditor(p, presetID) {
   }
   const keyWrap = el("div", "pair");
   keyWrap.append(key, side);
-  // Google Vertex AI takes no key: it is asked at the user's own Google
-  // Cloud project with a token their Google credentials mint, so its
-  // project, location, credentials file and a service account to go as
-  // are asked in its place, the project first
+  // Vertex AI: no key, the user's Google Cloud project's token
   const vertex = p ? !!p.vertex : !!pr?.vertex;
   let vertexProject = null;
   if (vertex) draft.vertex = draft.vertex || { project: p?.vertex?.project || "", location: p?.vertex?.location || "", credentials: p?.vertex?.credentials || "", impersonate: p?.vertex?.impersonate || "" };
@@ -9810,6 +9805,12 @@ function drawEditor(p, presetID) {
     const [rtk, rcb] = tick(t("Set it aside when out of quota or rate limited"), !draft.limitRestOff);
     rcb.onchange = () => { draft.limitRestOff = !rcb.checked; };
     advIn.append(...field(t("Rests"), rtk, t("Off: a 429 or an out-of-quota refusal doesn't rest its keys, and the next request is sent to it as usual. For a relay whose limits pass in a moment.")));
+  }
+
+  if (p ? p.takesPassErrors : custom) {
+    const b = el("button", "sess-pick pass-errors"), d = draft;
+    import("./passerrors.js").then(() => passErrorsFill(b, d), statusErr);
+    advIn.append(...field(t("Errors"), b));
   }
 
   // image-files, on DeepSeek's own API (#5407)
@@ -10170,6 +10171,7 @@ function drawEditor(p, presetID) {
     if (tlsTakes()) { body.insecureTLS = !!draft.insecureTLS && onHTTPS(); body.http1 = !!draft.http1 && onHTTPS(); }
     if (custom) body.limitRestOff = !!draft.limitRestOff;
     if (p?.takesImageFiles) body.imageFilesOff = !!draft.imageFilesOff;
+    if (p ? p.takesPassErrors : custom) body.passErrors = !!draft.passErrors;
     if (!decideOnly(p || pr)) body.nativeCompaction = !!draft.nativeCompaction && carriesCompaction();
     body.passUserAgent = !!draft.passUserAgent && uaPassable();
     const cx = parseContexts(draft.contexts || "");
@@ -11429,11 +11431,11 @@ function renderModels(p) {
     lost.hidden = !none.length;
     if (!none.length) return;
     lost.append(t("In no routing group, so no agent can use them now: {models}.", { models: none.slice(0, 8).join(", ") + (none.length > 8 ? " …" : "") }));
-    if (!p.unlisted) { lost.append(" " + t("Once saved, make a group of them in Routing.")); return; }
+    if (!p.unlisted) { lost.append(" " + t("Once saved, make a group of them in Routing groups.")); return; }
     for (const id of none.slice(0, 4)) {
       const b = el("button", "text action", t("Make a routing group of {model}", { model: id }));
       b.dataset.feature = "routing"; // made on the Routing page
-      b.onclick = (ev) => { if (mode !== "window") api("window/main?view=routing&newgroup=" + encodeURIComponent(p.id + "/" + id), {}); else window.newGroupWith?.(p.id + "/" + id, "", ev); };
+      b.onclick = (ev) => { if (mode !== "window") api("window/main?view=groups&newgroup=" + encodeURIComponent(p.id + "/" + id), {}); else window.newGroupWith?.(p.id + "/" + id, "", ev); };
       lost.append(b);
     }
   };
@@ -17943,10 +17945,10 @@ function autoResetTitle(on) {
 
 // How long before a reset runs out it is used (codexResetLead; the owner, 10-30):
 // half an hour unless set or out of range, as the gateway reads it. RESET_LEADS in minutes.
-const RESET_LEADS = [15, 30, 60, 120, 180, 360, 720, 1440];
+const RESET_LEADS = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
 function resetLeadMinutes(s = state?.settings) {
   const m = s?.codexResetLead;
-  return Number.isInteger(m) && m >= 15 && m <= 1440 ? m : 30;
+  return Number.isInteger(m) && m >= 5 && m <= 1440 ? m : 30;
 }
 function resetLeadWords(m) {
   return m < 60 || m % 60 ? t("{n} min", { n: m }) : t("{n} h", { n: m / 60 });
@@ -22458,8 +22460,7 @@ async function renderUpdate(r, u) {
       break;
     }
     case "found": {
-      // downloads wait for a click (Settings' Download updates
-      // automatically off, #2296): what is out, and how big it is
+      // downloads wait for a click (#2296): what is out, and its size
       sub.textContent = t("{v} is out", { v: u.latest }) + (u.size ? " · " + t("{done} MB", { done: (u.size / 1e6).toFixed(1) }) : "");
       const get = btn(t("Download update"), async () => {
         if (updateBusy) return;
@@ -22480,9 +22481,16 @@ async function renderUpdate(r, u) {
       if (!web) page();
       break;
     case "downloading":
+      if (UPDATE_STEPS[u.step] && u.step !== "retry") {
+        sub.textContent = t("{v} is downloaded", { v: u.latest }) + " · " + t(UPDATE_STEPS[u.step]);
+        again(700);
+        break;
+      }
       sub.textContent = t("Downloading {v}…", { v: u.latest });
-      if (u.total) sub.textContent += " " + Math.floor((u.done / u.total) * 100) + "% · " + t("{done} of {total} MB", { done: (u.done / 1e6).toFixed(1), total: (u.total / 1e6).toFixed(1) });
+      if (u.total) sub.textContent += " " + Math.floor(((u.done || 0) / u.total) * 100) + "% · " + t("{done} of {total} MB", { done: ((u.done || 0) / 1e6).toFixed(1), total: (u.total / 1e6).toFixed(1) });
       else if (u.done) sub.textContent += " " + t("{done} MB", { done: (u.done / 1e6).toFixed(1) });
+      if (u.step === "retry") sub.textContent += " · " + t("Reconnecting…");
+      else if (u.speed) sub.textContent += " · " + speedText(u.speed);
       page();
       again(700);
       break;
@@ -22498,15 +22506,11 @@ async function renderUpdate(r, u) {
     case "error":
       // the reason in sight: "timed out" says try a proxy, a 404 says wait
       sub.textContent = t(u.latest ? "Couldn't download {v}" : "Couldn't check for updates", { v: u.latest }) + (u.error ? " · " + u.error.replace(/^Get "[^"]*": /, "") : "");
-      // the network broke it off, after the tries download makes by itself
-      // (AIMetaPhD on X: an EOF from GitHub's asset host, with its whole
-      // signed address): what happened and what to do, in the app's words
+      // the network broke it off (AIMetaPhD on X): said in the app's words
       if (u.network && u.latest) sub.textContent = t("{v}'s download broke off, a network problem. Click Check to try again, or download it from the release page", { v: u.latest });
       sub.title = u.error || "";
       if (u.error) sub.classList.add("wraps");
-      // through a mirror (#893): it's the mirror's failing — it didn't
-      // answer, or sent a file that isn't the release's, never installed —
-      // and GitHub itself is offered, which also takes the mirror away
+      // through a mirror (#893): the mirror's failing; GitHub is offered
       if (u.mirror) {
         sub.textContent = t("Couldn't download {v} through the mirror {mirror}; it may be down or sent a file that doesn't match the release, which isn't installed", { v: u.latest, mirror: u.mirror })
           + (u.error ? " · " + u.error.replace("through the mirror " + u.mirror + ": ", "").replace(/^Get "[^"]*": /, "") : "");
@@ -22528,9 +22532,7 @@ async function renderUpdate(r, u) {
       if (u.latest) page();
       break;
     case "blocked": {
-      // the new version didn't start on this computer (#894) and this one
-      // runs on: why, and what the user can do. The clock doesn't download
-      // it again; Check tries it once more.
+      // the new version didn't start here (#894): why, and what to do
       const b = u.blocked || {};
       sub.textContent = b.policy
         ? t("{v} didn't start on this computer: Windows' Smart App Control (or another app control policy) blocked the new version, which isn't signed. magpie stays on {cur}. Download it and run it yourself, or turn Smart App Control off and check again", { v: u.latest || b.version, cur: u.current })
@@ -22877,7 +22879,7 @@ const readerAt = new WeakMap();
 // took it out of sight, and it isn't brought back (backToReader)
 const scrolledFrom = new WeakMap();
 // Where the reader is is the view's scrollTop, unless the view names a part
-// to keep in place (keepInView, the Routing page's groups under parts that
+// to keep in place (keepInView, the Routing page's lists under parts that
 // redraw on their own): then it is where that part is on screen as the
 // reader leaves it, and the view follows it (scroll anchoring WebKit lacked).
 const pinOf = new Map(), pinAt = new WeakMap();
@@ -23156,7 +23158,7 @@ async function show(v) {
       if (view === "library" && modalFormDirty() && !(await confirmDiscard())) return false;
       if (view === "library") magpie.call("library", "close"); else closeModal();
     }
-    if (view === "routing" && magpie.call("routing", "dirty")) {
+    if (rtView(view) && magpie.call("routing", "dirty")) {
       if (!(await confirmDiscard())) return false;
       magpie.call("routing", "discard");
     }
@@ -23164,8 +23166,7 @@ async function show(v) {
       if (!(await confirmDiscard())) return false;
       magpie.call("library", "discard");
     }
-    // the page left lets go of what was only for this visit (the Usage
-    // page's Requests, what a click filtered them by)
+    // the page left lets go of what was only for this visit
     magpie.call(view, "leave");
   }
   view = v;
@@ -23176,11 +23177,7 @@ async function show(v) {
   $("#pageTitle").dataset.en = title;
   $("#pageTitle").textContent = t(title);
   if (mode === "window") {
-    for (const b of $("#nav").querySelectorAll("button[data-view]")) {
-      const on = b.dataset.view === v;
-      b.classList.toggle("on", on);
-      if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
-    }
+    markNav(v);
     if (!sideNav()) { slide($("#nav"), "nav"); navInSight(); }
     else navTopGo($("#nav").querySelector("button[data-view].on"), true);
   }
@@ -23197,10 +23194,9 @@ async function show(v) {
   // a plugin's page loads what it shows; back once it has
   magpie.call(v, "open")?.then?.(back);
   if (v === "providers" && providersBehind) renderProviders();
-  if (v === "providers" || v === "routing" || providersPage(v)) loadProviders().then(back, statusErr);
-  // Routing's accounts show their windows as the Usage page read them
-  // (#1833): what is kept, read in an ordinary way, never an asked read
-  if (v === "routing" && (!quotas || Date.now() - quotasAt > 60e3)) loadQuotas();
+  if (v === "providers" || rtView(v) || providersPage(v)) loadProviders().then(back, statusErr);
+  // Routing's accounts' windows as Usage read them (#1833), never an asked read
+  if (rtView(v) && (!quotas || Date.now() - quotasAt > 60e3)) loadQuotas();
   if (v === "settings") (settingsLoad = loadSettings()).then(back, statusErr);
   if (v === "plugins") window.loadPlugins?.()?.then(back);
   syncTitle();
@@ -23229,8 +23225,7 @@ if (mode === "window") for (const b of $("#nav").querySelectorAll("button[data-v
   b.onpointerleave = (e) => { if (e.buttons & 1) navTopGo(navTopOn(), true); };
   b.onclick = () => { show(b.dataset.view).then((went) => { if (!went) navTopGo(navTopOn(), true); }); b.blur(); };
 }
-// setGatewayMode shows or leaves out gateway mode's pages' tabs; the page
-// open, one of them, gives way to Providers
+// gateway mode's pages' tabs; the page open, one of them, gives way to Providers
 function setGatewayMode(on) {
   gatewayMode = on;
   document.body.classList.toggle("gateway-mode", on);
@@ -23509,6 +23504,17 @@ document.fonts?.ready.then(fitTop);
 // a font picked later (Settings' Font) can still be loading when it's applied
 document.fonts?.addEventListener("loadingdone", fitTop);
 
+// the shown page's tab; Routing's for its groups in the header's row,
+// which has no room for theirs (app.css)
+function markNav(v) {
+  const tab = v === "groups" && !sideNav() ? "routing" : v;
+  for (const b of $("#nav").querySelectorAll("button[data-view]")) {
+    const on = b.dataset.view === tab;
+    b.classList.toggle("on", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  }
+}
+
 // ---- the sidebar ----------------------------------------------------------
 // A window wide enough has its pages down a sidebar, as a Mac app's: in
 // groups, the open page's own tabs under it, Settings at its foot and the
@@ -23554,6 +23560,7 @@ function layoutNav() {
     $("#crumb").after(nav);
     $(".actions").insertBefore(prefs, $("#winclose"));
   }
+  markNav(view);
   navSubsAt = "";
   // the sidebar coming or going isn't a list opening
   navSubs.quiet = true;

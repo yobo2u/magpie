@@ -664,6 +664,8 @@ magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> all    # every account
+magpie gateway-key mcp <id> github fs/read_file   # only these MCP servers and tools
+magpie gateway-key mcp <id> none        # no MCP server (all: every one)
 magpie gateway-key quotas <id> on      # told the quotas of what it may use
 ```
 
@@ -775,6 +777,25 @@ lists, but the key may ask one itself, at `/v1/systemone` or in another
 magpie's list of decision models, only when it names it (or its
 `<provider>/*`). The menu lists the decision models after their provider's
 chat models, each marked as one (Kautism on Discord).
+
+A gateway key can also be held to some **MCP servers and tools** (wakaka
+on Discord): pick them under **MCP servers** in the key row's ⋯ menu (a
+key held to some then shows a badge that opens the same list), or run
+`magpie gateway-key mcp <id> github fs/read_file` (`all` takes the
+restriction off, `none` gives the key no MCP server). An entry is a
+server's name, every tool of it, or `<server>/<tool>`, that tool alone; the
+servers are the Library's (by their names there) and magpie's own:
+`magpie-web-search`, `magpie-vision`, `magpie-image`, `magpie-browser` and
+`magpie-tools`. Every route that reaches a server holds the key to it: the
+MCP hub lists only the servers and tools the key may use and refuses a
+call of any other; `/mcp/<name>` and `/mcp/run/<name>` answer 403 for a
+server the key may not use, leave the tools it may not use out of
+`tools/list` and refuse a `tools/call` of one; magpie's own servers do the
+same, and `/v1/magpie/mcp` lists only those the key may use. A key issued
+under a held key is held to its issuer's list too. `GET /v1/magpie/limit`
+tells a held key its list as `mcp`. A model's own web search, which magpie
+serves through its search when the provider has none, is not an MCP call
+and is not held by this list.
 
 A gateway key can also be held to some **accounts** (#905): the accounts
 and keys its requests may use, picked in the same menu right after their
@@ -1505,7 +1526,10 @@ write kept for 5 minutes at 1.25× input and one kept for an hour at 2× input,
 and its usage says which were which (`cache_creation.ephemeral_5m_input_tokens`
 / `ephemeral_1h_input_tokens`, from the API and from Claude Code's
 transcripts). The fourth number is the 5-minute price; the fifth, when not
-given, is 2× input for a Claude model — Anthropic's rule. Any other model has
+given, is 2× input for a Claude model — Anthropic's rule. Copilot bills a
+cache write at one price however long it is kept (its `copilot_usage` counts a
+1-hour write as the `cache_write` a 5-minute one is), so a model on Copilot has
+no 1-hour price unless you give one, Claude's too. Any other model has
 no 1-hour price unless you give one: a 1-hour write it reports is counted at
 the 5-minute price, and neither `magpie model price` nor the app's boxes show
 a 1-hour price for it. A call recorded
@@ -2049,7 +2073,7 @@ provider or group still set to one of them is tried in its listed order.
 Your own routing groups are the built-in plugin `groups` (Routing groups in
 Plugins › Built-in), which stays on while you have one. The groups magpie
 finds for a model two providers serve don't need it. Turned off, the gateway
-doesn't list or serve a group of your own, and the Routing page has no New
+doesn't list or serve a group of your own, and the Routing groups page has no New
 group button; `magpie groups` still lists them.
 
 **Make first** sets the accounts' order. How much that order counts
@@ -3221,12 +3245,19 @@ extension*: a zip pointed at the page's own address (3430 hands the
 gateway's routes on), with a gateway key named **Magpie Browser** of its
 own, made once and reused while it is on. Unzip it and choose the folder
 with Load unpacked on `chrome://extensions`. An extension already loaded
-takes the address and a gateway key in its popup. The browser that
-connects with the page's Magpie Browser key is the container's own: its
-agents use it as they would one on loopback, and so does a caller of
-`/mcp/magpie/browser` from the host given that same key. A browser that
-connects with another key is that key's alone. A browser connecting from
-outside with no key, or from a web page's origin, is refused as before.
+takes the address and a gateway key in its popup. The Magpie Browser key
+connects the extension and nothing else: it reaches no model, MCP server
+or stats, so a copy of the zip left in Downloads spends nothing. A key a
+magpie from before made for the zip with full access is held so the next
+time the gateway starts. A browser is the container's own only when it
+connects from the container's own computer; the host's Chrome reaches the
+container from the bridge (172.17.0.1), so it is the key's alone, and the
+container's agents don't use it yet (#5529). To use it from the host, give
+the caller of `/mcp/magpie/browser` a key of its own with full access and
+connect the extension with that key. A browser that connects with another
+key is that key's alone. A browser connecting from outside with no key, or
+from a web page's origin, is refused as before. A keyed browser is let go
+once its key is turned off, removed or rotated.
 
 The image has a `HEALTHCHECK`: `magpie healthcheck` exits 0 while the gateway
 answers on `MAGPIE_ADDR`, under `serve` and `web` alike, so `docker ps` shows

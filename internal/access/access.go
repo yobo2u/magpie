@@ -149,6 +149,10 @@ type Key struct {
 	// "<provider>/<account>": a signed-in account by its stable id, a
 	// key by its fingerprint; none for every account, as keys always did.
 	Accounts []string `json:"accounts,omitempty"`
+	// MCP are the MCP servers and tools the key may use (mcp.go):
+	// "<server>", "<server>/<tool>", or NoMCP alone for none; none
+	// listed for every server and tool.
+	MCP []string `json:"mcp,omitempty"`
 	// Quotas lets a key held to a budget, models or accounts be told the
 	// quotas of what it may use (#2216): the cards of the providers whose
 	// every model it may use, of the accounts and keys it may use, names
@@ -160,6 +164,15 @@ type Key struct {
 	// readOnlyRoutes and refuses it every other, every model, MCP and
 	// write route among them. Off, the key may do what its other limits let it.
 	ReadOnly bool `json:"readOnly,omitempty"`
+	// Browser holds the key to connecting the Magpie Browser extension
+	// (GET /v1/magpie/browser/extension) and nothing else: the key the
+	// GUI writes into the extension's zip (gui's browserKey), which lands
+	// in Downloads, where anyone who reads it has it. The gateway refuses
+	// it every other route, every model and MCP server among them
+	// (readOnlyGuard). Such a key is ReadOnly too, so a magpie from before
+	// this field, which reads it as any other key, holds it to reading
+	// stats rather than handing it every model.
+	Browser bool `json:"browser,omitempty"`
 	// Expires is when the key stops working (an issued key, IssueKey);
 	// zero for one that doesn't. Prune removes it a while after.
 	Expires time.Time `json:"expires,omitzero"`
@@ -186,8 +199,17 @@ type Identity struct {
 	// on Discord).
 	AccountModels bool
 	Accounts      []string
-	Quotas        bool
-	ReadOnly      bool
+	// MCP are the MCP servers and tools the key may use (Key.MCP); an
+	// issued key is held to its issuer's too (Issuer.MCP)
+	MCP      []string
+	Quotas   bool
+	ReadOnly bool
+	// Browser: the key may connect the Magpie Browser extension and do
+	// nothing else (Key.Browser).
+	Browser bool
+	// sum is the SHA-256 of the secret the request came with, so a
+	// connection kept open can tell the key was rotated since (Current).
+	sum [32]byte
 	// Expires is when the key stops working, its issuer's expiry if
 	// sooner; zero for never.
 	Expires time.Time
@@ -386,11 +408,17 @@ type Change struct {
 	// Accounts is what "accounts-key" sets (#905); none lets the key use
 	// every account and key.
 	Accounts []string `json:"accounts,omitempty"`
+	// MCP is what "mcp-key" sets: none lets the key use every MCP server
+	// and tool, NoMCP alone none of them.
+	MCP []string `json:"mcp,omitempty"`
 	// Quotas is what "quotas-key" sets (#2216).
 	Quotas bool `json:"quotas,omitempty"`
 	// ReadOnly is what "access-key" sets, and "add-key" gives the new key:
 	// it may read stats and use no model (Key.ReadOnly).
 	ReadOnly bool `json:"readOnly,omitempty"`
+	// Browser is what "add-key" gives the new key: it may connect the
+	// Magpie Browser extension alone (Key.Browser).
+	Browser bool `json:"browser,omitempty"`
 	// Issues is what "issuer-key" sets: the key may issue short-lived
 	// keys under itself (Key.Issues).
 	Issues bool `json:"issues,omitempty"`
@@ -435,7 +463,7 @@ func Update(action string, in Change) (string, error) {
 			}
 			secret = Prefix + token
 		}
-		keys = append(keys, Key{ID: id, Name: name, Secret: secret, ReadOnly: in.ReadOnly})
+		keys = append(keys, Key{ID: id, Name: name, Secret: secret, ReadOnly: in.ReadOnly || in.Browser, Browser: in.Browser})
 	} else {
 		i := slices.IndexFunc(keys, func(k Key) bool { return k.ID == in.Key })
 		if i < 0 {
@@ -545,10 +573,19 @@ func Update(action string, in Change) (string, error) {
 				return "", err
 			}
 			keys[i].Accounts = as
+		case "mcp-key":
+			mcp, err := CleanMCP(in.MCP)
+			if err != nil {
+				return "", err
+			}
+			keys[i].MCP = mcp
 		case "quotas-key":
 			keys[i].Quotas = in.Quotas
 		case "issuer-key":
 			// may issue short-lived keys under itself (POST /v1/magpie/keys)
+			if in.Issues && keys[i].Browser {
+				return "", errors.New("This key is the Magpie Browser extension's, which can't issue keys: let another key of yours issue them")
+			}
 			if in.Issues && (keys[i].Issuer != "" || !keys[i].Expires.IsZero()) {
 				return "", errors.New("An issued key can't issue keys of its own: let a key of yours issue them")
 			}
@@ -559,6 +596,11 @@ func Update(action string, in Change) (string, error) {
 			// no longer use a model
 			if in.ReadOnly && defaultKey {
 				return "", errors.New("The sharing key is the one magpie gives agents that reach it from elsewhere, so it can't be read-only: add a key of its own for reading stats")
+			}
+			// the extension's key is in a zip in Downloads: it connects the
+			// extension and nothing else, whatever access is asked
+			if keys[i].Browser {
+				return "", errors.New("This key is the Magpie Browser extension's: it connects the extension and nothing else. Add another key for models or stats")
 			}
 			keys[i].ReadOnly = in.ReadOnly
 		case "on-key", "off-key":
@@ -584,7 +626,7 @@ func Update(action string, in Change) (string, error) {
 		default:
 			return "", fmt.Errorf("unknown key action %q", action)
 		}
-		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "quotas-key" && action != "access-key" && action != "issuer-key" && action != "move-key" {
+		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "mcp-key" && action != "quotas-key" && action != "access-key" && action != "issuer-key" && action != "move-key" {
 			mirror = &keys[i]
 		}
 	}
@@ -624,6 +666,49 @@ func setLegacyMirror(s *settings.Settings, k Key) error {
 func Authenticate(secret string) (Identity, bool) {
 	who, err := Check(secret)
 	return who, err == nil
+}
+
+// ProveSecret is the enabled gateway key whose sha256 is id (hex), for a
+// magpie's proof that it holds the key (provider.RemoteProvePath): one
+// Authenticate takes, found by constant-time compares over every key, so
+// which one matched, or whether any did, takes no different time. A key
+// turned off, expired or whose issuer no longer lets it in, and a store
+// that can't be read, have none.
+func ProveSecret(id string) (string, bool) {
+	want, err := hex.DecodeString(id)
+	if err != nil || len(want) != sha256.Size {
+		return "", false
+	}
+	mu.Lock()
+	keys, err := load()
+	s := settings.Load()
+	mu.Unlock()
+	if err != nil {
+		return "", false
+	}
+	secrets := make([]string, 0, len(keys)+1)
+	for _, k := range keys {
+		secrets = append(secrets, k.Secret)
+	}
+	// the sharing key an older magpie kept in the settings alone, which
+	// Check takes while the store has none marked
+	if s.LANKey != "" {
+		secrets = append(secrets, s.LANKey)
+	}
+	found := ""
+	for _, secret := range secrets {
+		sum := sha256.Sum256([]byte(secret))
+		if subtle.ConstantTimeCompare(sum[:], want) == 1 && secret != "" && found == "" {
+			found = secret
+		}
+	}
+	if found == "" {
+		return "", false
+	}
+	if _, err := Check(found); err != nil {
+		return "", false
+	}
+	return found, true
 }
 
 // On: the key with this id is one Authenticate takes, in the store and not
