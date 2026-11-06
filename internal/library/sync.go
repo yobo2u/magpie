@@ -495,9 +495,13 @@ type View struct {
 	FoundServers   []Found             `json:"foundServers"`
 	Skills         []SkillView         `json:"skills"`
 	FoundSkills    []FoundSkill        `json:"foundSkills"`
-	// NewSkills are skills a check found its skills' repositories to have
-	// added beside them, to add or set aside
-	NewSkills    []NewSkill        `json:"newSkills"`
+	// NewSkills are skills a check found its skills' repositories, or
+	// the folders they were added from, to have beside them since, to
+	// add or set aside
+	NewSkills []NewSkill `json:"newSkills"`
+	// CheckFolders is whether a check looks in folders the user added
+	// skills from, which the page then offers with no remote skill
+	CheckFolders bool              `json:"checkFolders,omitempty"`
 	Projects     []ProjectView     `json:"projects"`
 	Instructions *InstructionsView `json:"instructions"`
 	Dir          string            `json:"dir"`
@@ -567,9 +571,10 @@ func readView(problems []Problem, glance bool) (*View, error) {
 			return nil, err
 		}
 	}
-	// a plugin's tools, a server of their own (plugin_tools.go): saved,
-	// and given to the agents by a sync of their own
-	if l.adoptPlugins() {
+	// a plugin's tools, a server of their own (plugin_tools.go), and a
+	// Remote magpie's router (bridge_mcp.go): saved, and given to the
+	// agents by a sync of their own
+	if plugins, bridges := l.adoptPlugins(), l.adoptBridges(); plugins || bridges {
 		if err := l.save(); err != nil {
 			return nil, err
 		}
@@ -724,6 +729,7 @@ func readView(problems []Problem, glance bool) (*View, error) {
 		v.FoundServers[i].Icon = serverIcon(l, v.FoundServers[i].Server)
 	}
 	v.NewSkills = newSkills(l)
+	v.CheckFolders = l.addedFromFolders()
 	v.Projects = projectViews(l, problems)
 	v.SkillGroups = l.skillGroups()
 	v.CheckDue = checkDue(l)
@@ -775,6 +781,9 @@ func SaveServer(old string, s Server) (*Result, error) {
 			if p := l.MCP[i].Plugin; p != "" && s.Plugin == "" {
 				s.Plugin, s.Local = p, true
 			}
+			// a Remote magpie's router stays its own while it is at the
+			// provider's address and key (bridge_mcp.go)
+			keptBridge(l.MCP[i], &s)
 			l.MCP = slices.Delete(l.MCP, i, i+1)
 			if old != s.Name {
 				l.renameProjectServers(old, s.Name)
@@ -922,6 +931,10 @@ func removeServer(l *Library, name string) error {
 		return fmt.Errorf("no server called %s", name)
 	}
 	k := serverKey(l.MCP[i])
+	if b := l.MCP[i].Bridge; b != "" {
+		// a Remote magpie's router taken out: its editor's switch is off
+		l.BridgesOn = slices.DeleteFunc(l.BridgesOn, func(id string) bool { return id == b })
+	}
 	l.MCP = slices.Delete(l.MCP, i, i+1)
 	for _, p := range l.Projects {
 		delete(p.Servers, name)

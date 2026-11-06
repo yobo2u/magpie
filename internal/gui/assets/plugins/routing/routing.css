@@ -138,12 +138,29 @@
 .rt-accts li.on em { color: var(--fg); }
 .rt-accts li.on .bar i { background: var(--fg); }
 .rt-accts li.on .dot { background: var(--fg); border-color: var(--fg); }
-.rt-accts li.now .dot { animation: rtlive 1.8s infinite; }
-@keyframes rtlive { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--fg) 40%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+/* A live dot's pulse: a disk 6px wider all round grows from the dot and
+   fades. It moves by transform and opacity, on the compositor: as a
+   box-shadow it repainted the page every frame while requests were in
+   flight, and 64 of them kept a core half busy (unscientific9). A muted
+   dot's disk goes behind it, in a parent that isolates it; a filled one's
+   is the dot's own colour, so it may lie on top. */
+.rt-accts li.now .dot, .rt-livedot.on, :is(.rt-req, .rt-probe).wait .to i, .ps-dst.wait > i { position: relative; }
+.rt-accts li.now .dot::after, .rt-livedot.on::after, :is(.rt-req, .rt-probe).wait .to i::after, .ps-dst.wait > i::after, .rt-steps li.wait::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%; background: color-mix(in srgb, var(--fg) 40%, transparent); opacity: 0; pointer-events: none;
+  animation: rtlive 1.8s infinite;
+}
+.rt-accts li.now .dot::after { inset: -1.5px; animation-name: rtlive-dot; }
+:is(.rt-req, .rt-probe).wait .to, .ps-dst.wait, .rt-steps li.wait { isolation: isolate; }
+:is(.rt-req, .rt-probe).wait .to i::after, .ps-dst.wait > i::after, .rt-steps li.wait::after { z-index: -1; }
+.rt-steps li.wait::after { inset: auto; left: 5px; top: .5em; width: 6px; height: 6px; }
+/* 6px each side: a 6px dot grows to 18px, the 8px account dot to 20px */
+@keyframes rtlive { 0% { transform: scale(1); opacity: 1; } 70%, 100% { transform: scale(3); opacity: 0; } }
+@keyframes rtlive-dot { 0% { transform: scale(1); opacity: 1; } 70%, 100% { transform: scale(2.5); opacity: 0; } }
 .rt-accts li.low em { color: var(--fg-2); }
 .rt-accts li.rest { border-style: dashed; }
 /* a reply still out with no content for 15s: the dot stops pulsing */
-.rt-accts li.quiet .dot { background: var(--amber); border-color: var(--amber); animation: none; }
+.rt-accts li.quiet .dot { background: var(--amber); border-color: var(--amber); }
+.rt-accts li.quiet .dot::after { animation: none; }
 .rt-accts li.rest > :not(.tag) { opacity: .5; }
 .rt-accts li.rest em { color: var(--red); opacity: .85; }
 .rt-accts li.left { border-style: dotted; }
@@ -176,11 +193,15 @@
    lit as a picked request is */
 .rt-ctx-sess { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 8px; margin-top: 12px; }
 .rt-ctx-sess[hidden] { display: none; }
-.rt-ctx-s { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px 10px; font: inherit; font-size: 12px; text-align: left; color: var(--fg-2); background: transparent; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+/* a block is a grid, not a flex column: WebKit up to Safari 17 (macOS 14)
+   puts a flex <button>'s children in a box of its own as wide as the
+   longest line, so a long name ran past its block over the next ones
+   (tz_188 on Discord); a grid button has no such box */
+.rt-ctx-s { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 4px; min-width: 0; padding: 8px 10px; font: inherit; font-size: 12px; text-align: left; color: var(--fg-2); background: transparent; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
 .rt-ctx-s[aria-pressed="true"] { background: var(--card-2); color: var(--fg); }
 .rt-ctx-s .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .rt-ctx-s .sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.rt-ctx-s .ctx-stack { flex: none; display: flex; max-width: none; width: 100%; height: 4px; border-radius: 2px; }
+.rt-ctx-s .ctx-stack { display: flex; max-width: none; width: 100%; height: 4px; border-radius: 2px; }
 .rt-log-head { display: flex; flex-wrap: wrap; align-items: center; row-gap: 2px; font-size: 12px; font-weight: 600; color: var(--fg); }
 .rt-log-head .grow { flex: 1; }
 /* a request's request and response, opened from the story's head */
@@ -204,7 +225,7 @@
 .rt-steps li.aside::before { background: none; border: 1px solid var(--muted); width: 4px; height: 4px; }
 .rt-steps li.ok::before { background: var(--green); }
 .rt-steps li.bad::before { background: var(--red); -webkit-mask: var(--x-mark) center / contain no-repeat; mask: var(--x-mark) center / contain no-repeat; border-radius: 0; transform: scale(1.5); }
-.rt-steps li.wait::before { animation: rtlive 1.8s infinite; }
+
 /* where a try's time went: one stacked bar, magpie's, the network's and
    the vendor's told apart by a swatch, each part named with its time */
 .rt-time { display: grid; gap: 5px; max-width: 560px; }
@@ -221,7 +242,8 @@
 .rt-time .vendor { --rt-time: var(--fg-2); }
 .rt-off { padding: 18px 4px; text-align: center; color: var(--muted); font-size: 13px; }
 @media (prefers-reduced-motion: reduce) {
-  .rt-accts li.now .dot, .rt-wires path.live, .rt-flows path, .rt-sky .pkt.held, .rt-accts li.new, .rt-accts li.hit, .rt-hub.tick, .rt-src.tick, .rt-cap.in, .rt-steps li.wait::before, .masking .pii { animation: none; }
+  .rt-wires path.live, .rt-flows path, .rt-sky .pkt.held, .rt-accts li.new, .rt-accts li.hit, .rt-hub.tick, .rt-src.tick, .rt-cap.in, .masking .pii { animation: none; }
+  .rt-accts li.now .dot::after, .rt-steps li.wait::after { animation: none; }
   .rt-accts li { transition: none; }
 }
 /* The narrow and wide layouts below go by a box's own width, as container
@@ -342,7 +364,7 @@
 :is(.rt-req, .rt-probe).moved .to i { background: var(--accent); }
 :is(.rt-req, .rt-probe).bad .to { color: var(--red); }
 :is(.rt-req, .rt-probe).bad .to i { background: var(--red); -webkit-mask: var(--x-mark) center / contain no-repeat; mask: var(--x-mark) center / contain no-repeat; border-radius: 0; transform: scale(1.5); }
-:is(.rt-req, .rt-probe).wait .to i { background: var(--muted); animation: rtlive 1.8s infinite; }
+:is(.rt-req, .rt-probe).wait .to i { background: var(--muted); }
 /* the reasoning keeps to its own box: what it was asked at is cut first,
    then what it was sent at, never drawn over the numbers beside it (#435) */
 :is(.rt-req, .rt-probe) .to .ef { flex: 0 1 auto; display: flex; min-width: 0; margin-left: -2px; color: var(--muted); }
@@ -525,8 +547,7 @@ button.rt-session { cursor: pointer; }
 .rt-act.rt-keys:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
 .rt-livedot { width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--green); --fg: var(--green); }
 /* it pulses while a request is under way only (#2827) */
-.rt-livedot.on { animation: rtlive 1.8s infinite; }
-@media (prefers-reduced-motion: reduce) { .rt-livedot.on { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .rt-livedot.on::after { animation: none; } }
 /* routing groups, and the providers routing over several of their own */
 .rt-gsec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 16px; }
 .rt-gsec .row-head .note { margin-right: 6px; }
@@ -539,8 +560,13 @@ button.rt-session { cursor: pointer; }
 .rt-group { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 14px; cursor: pointer; transition: background .12s; }
 .rt-group:hover { background: var(--card-2); }
 .rt-group.off { opacity: .6; }
-/* switched off as a whole: dimmed but for its switch, which brings it back */
-.rt-group.disabled > :not(.rt-gon) { opacity: .5; }
+/* switched off as a whole: its switch, its "switched off" tag and its
+   grey logos say so, and its words stay readable (jiabubu on Discord: at
+   half opacity they were too faint to read), the name a step quieter than
+   an on group's and not dimmed again by .off */
+.rt-group.disabled { opacity: 1; }
+.rt-group.disabled .nm b { color: var(--fg-2); font-weight: 500; }
+.rt-group.disabled > .ics, .rt-group.disabled > .rt-ghandle { filter: grayscale(1); opacity: .6; }
 .rt-group .rt-gon { flex: none; transform: scale(.85); }
 .rt-group .ics { display: flex; gap: 3px; flex: none; min-width: 18px; }
 .rt-group .ics .ic { width: 16px; height: 16px; }
@@ -573,6 +599,12 @@ button.rt-session { cursor: pointer; }
 .rt-gedit button.primary.busy { opacity: .75; display: inline-flex; align-items: center; gap: 6px; }
 .rt-gedit button.primary.busy::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 1.6px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .rt-gedit button.primary.busy::before { animation-duration: 2s; } }
+/* what a group's card and its editor say can be selected and copied
+   (jiabubu on Discord): its name and id, its models, its patterns, what
+   is left of its accounts; a drag across them selects, a click still
+   opens the editor (groupRow). Its controls stay controls. */
+.rt-groups:not(.sorting) > .rt-group :is(.nm b, .nm code.mdl, .mem),
+.rt-gedit .fallback:not(.rt-rules) > .fbl:not(.sorting) > .fbrow > .n, .rt-gaccts > .fbrow > .n { user-select: text; -webkit-user-select: text; }
 .rt-group .mem { margin-top: 2px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* a pattern the group finds models by, and how many it matches now */
 .rt-group .mem.pat code, .rt-pats code { font: var(--code-style, normal) 500 11px/1.5 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); color: var(--fg-2); }
@@ -976,7 +1008,7 @@ body.window .rt-gedit > .bar { --vfoot: 8px; }
 .ps-name small { margin-left: 4px; font-size: 10.5px; font-weight: 400; color: var(--muted); }
 .ps-dst > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 .ps-dst.bad > i { background: var(--red); -webkit-mask: var(--x-mark) center / contain no-repeat; mask: var(--x-mark) center / contain no-repeat; border-radius: 0; transform: scale(1.5); }
-.ps-dst.wait > i { background: var(--muted); animation: rtlive 1.8s infinite; }
+.ps-dst.wait > i { background: var(--muted); }
 .ps-hub { position: relative; z-index: 1; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: var(--fg); background: var(--card); box-shadow: inset 0 0 0 1px var(--line), 0 1px 3px rgba(0, 0, 0, .08); }
 .ps-hub svg { width: 24px; height: 24px; }
 .ps-hub.busy { animation: ps-ring 1.8s ease-out infinite; }
@@ -1026,7 +1058,7 @@ body.window .rt-gedit > .bar { --vfoot: 8px; }
 .pr-line { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; }
 .pr-line .pr-to { flex: 1 1 auto; }
 .pr-req .meta { flex: none; max-width: 100%; margin-left: auto; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
-@media (prefers-reduced-motion: reduce) { .pr-req.wait .pr-to > i, .ps-dst.wait > i, .ps-hub.busy, .ps-dot.wait { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .pr-req.wait .pr-to > i, .ps-hub.busy, .ps-dot.wait { animation: none; } .ps-dst.wait > i::after { animation: none; } }
 @supports not (grid-template-columns: subgrid) {
   @media (max-width: 700px) {
     .rt-reqs { --rt-tpl: auto minmax(0, 1fr); }

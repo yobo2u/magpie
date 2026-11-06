@@ -19,6 +19,7 @@ import (
 	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -125,6 +126,9 @@ type providerJSON struct {
 	// may be, being the user's own and not a preset's or a sign-in's
 	InsecureTLS      bool `json:"insecureTLS"`
 	TakesInsecureTLS bool `json:"takesInsecureTLS"`
+	// spoken HTTP/1.1 to, never HTTP/2 (provider.HTTP1); taken where
+	// TakesInsecureTLS is
+	HTTP1 bool `json:"http1"`
 	// asked as usual after a quota refusal or a 429, never set aside for
 	// it (provider.LimitRestOff)
 	LimitRestOff bool `json:"limitRestOff"`
@@ -265,6 +269,9 @@ type providerJSON struct {
 	// routing unless KeepSelf (provider.Provider.SelfAnswered)
 	Self     bool `json:"self,omitempty"`
 	KeepSelf bool `json:"keepSelf,omitempty"`
+	// LibraryMCP: a Remote magpie whose router is a Library server, or
+	// is to be one (library.RemoteMCPOn)
+	LibraryMCP bool `json:"libraryMCP,omitempty"`
 	// CapStop and CapCareful: how its accounts end at their caps
 	// (plugins#349), set on their own with capstop and capcareful
 	CapStop    bool `json:"capStop,omitempty"`
@@ -724,7 +731,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		ID: p.ID, Name: p.Name, Icon: p.Icon, IconFrom: p.IconFrom, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
-		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), LimitRestOff: p.LimitRestOff, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
+		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), HTTP1: p.HTTP1, LimitRestOff: p.LimitRestOff, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: p.PassUserAgent, OwnClient: p.OwnClient(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
 		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate,
@@ -1166,10 +1173,18 @@ func providersState() providersJSON {
 	uses := agentUses(agents, findGroup)
 	desktop := desktopNumbers(uses)
 	have := map[string]bool{}
+	var remoteMCP map[string]bool // read once, at the first Remote magpie
 	for _, p := range provider.All() {
 		// a preset is added once any provider is its, whatever its id
 		have[p.ID], have[p.Preset] = true, true
-		s.Providers = append(s.Providers, providerInfoWith(p, provider.KeptListing(p), uses, desktop))
+		info := providerInfoWith(p, provider.KeptListing(p), uses, desktop)
+		if p.IsRemoteMagpie() {
+			if remoteMCP == nil {
+				remoteMCP = library.RemoteMCPOn()
+			}
+			info.LibraryMCP = remoteMCP[p.ID]
+		}
+		s.Providers = append(s.Providers, info)
 	}
 	// partners first, as the add sheet lists them
 	for _, pa := range provider.Partners() {
@@ -1460,6 +1475,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// host is taken unchecked (#2383); a save that leaves it out
 			// keeps it
 			InsecureTLS *bool `json:"insecureTLS"`
+			// HTTP1 is whether its own hosts are spoken HTTP/1.1 to; a
+			// save that leaves it out keeps it
+			HTTP1 *bool `json:"http1"`
 			// LimitRestOff is whether a quota refusal or a 429 leaves it
 			// asked as usual; a save that leaves it out keeps it
 			LimitRestOff *bool `json:"limitRestOff"`
@@ -1509,6 +1527,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			ClearAccessKey bool    `json:"clearAccessKey"`
 			// From is the id the provider had: another is a rename
 			From string `json:"from"`
+			// LibraryMCP, on a Remote magpie, is its editor's switch: its
+			// router a Library server (library.SetRemoteMCP); left out,
+			// it stays as it is
+			LibraryMCP *bool `json:"libraryMCP"`
 			// CopyOf, with New, is the provider the new one is a copy of
 			// (#268): its key and what else the form doesn't carry are
 			// taken from it when left out
@@ -1847,6 +1869,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if req.InsecureTLS != nil {
 					in.InsecureTLS = *req.InsecureTLS
 				}
+				if req.HTTP1 != nil {
+					in.HTTP1 = *req.HTTP1
+				}
 				if req.LimitRestOff != nil {
 					in.LimitRestOff = *req.LimitRestOff
 				}
@@ -1884,6 +1909,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.InsecureTLS = *req.InsecureTLS
 				} else if old != nil {
 					in.InsecureTLS = old.InsecureTLS
+				}
+				if req.HTTP1 != nil {
+					in.HTTP1 = *req.HTTP1
+				} else if old != nil {
+					in.HTTP1 = old.HTTP1
 				}
 				if req.LimitRestOff != nil {
 					in.LimitRestOff = *req.LimitRestOff
@@ -2120,6 +2150,18 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					return
 				}
 			}
+			// a Remote magpie's router given a server or taken out, before
+			// its list below asks it
+			askHub := false
+			if req.LibraryMCP != nil {
+				if p, err := provider.Find(in.ID); err == nil && p.IsRemoteMagpie() && library.RemoteMCPOn()[in.ID] != *req.LibraryMCP {
+					if _, err := library.SetRemoteMCP(in.ID, *req.LibraryMCP); err != nil {
+						fail(rw, err)
+						return
+					}
+					askHub = *req.LibraryMCP
+				}
+			}
 			provider.ForgetBalances()
 			if old == nil || old.AccessKeyID != in.AccessKeyID || old.SecretAccessKey != in.SecretAccessKey {
 				// the plan's windows are read afresh with the new access key
@@ -2141,6 +2183,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				wg.Go(func() { provider.PrefillNewKeys(ctx, had, in.ID) })
 				if old == nil || old.Key != p.Key {
 					p.Fetch(ctx)
+				} else if askHub {
+					provider.AskRemoteHub(ctx, in.ID)
 				}
 				wg.Wait()
 				cancel()
@@ -2362,7 +2406,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 			saved := *p
 			if req.Typed {
-				q := typed(*p, in, req.Proxy, req.InsecureTLS)
+				q := typed(*p, in, req.Proxy, req.InsecureTLS, req.HTTP1)
 				p = &q
 			}
 			if len(req.Test) > 0 {
@@ -2399,7 +2443,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				p = *saved
 			}
-			p = typed(p, in, req.Proxy, req.InsecureTLS)
+			p = typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1)
 			if strings.TrimSpace(in.Decide) != "" {
 				// a decision API is asked its smallest question, at
 				// POST …/systemone (#647)
@@ -2481,7 +2525,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if p.Name == "" {
 				p.Name = cmp.Or(strings.TrimSpace(in.Name), "the vendor")
 			}
-			p = typed(p, in, req.Proxy, req.InsecureTLS)
+			p = typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1)
 			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 			defer cancel()
 			all, err := p.ListAll(ctx)
@@ -2525,7 +2569,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			defer cancel()
 			ask := *p
 			if req.Typed {
-				ask = typed(*p, in, req.Proxy, req.InsecureTLS)
+				ask = typed(*p, in, req.Proxy, req.InsecureTLS, req.HTTP1)
 			}
 			ms, dropped, err := ask.Refetch(ctx)
 			if err != nil {
@@ -2955,7 +2999,7 @@ var testRuns sync.Map
 // Vertex AI provider's project, location, credentials file and service
 // account are the ones typed, spelled as a Save keeps them, unless no
 // project is.
-func typed(p, in provider.Provider, proxy *string, insecureTLS *bool) provider.Provider {
+func typed(p, in provider.Provider, proxy *string, insecureTLS, http1 *bool) provider.Provider {
 	if k := strings.TrimSpace(in.Key); k != "" && k != p.Key {
 		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight, p.KeyPlan = k, "", "", 0, ""
 	}
@@ -2983,6 +3027,9 @@ func typed(p, in provider.Provider, proxy *string, insecureTLS *bool) provider.P
 	// user's own (TakesInsecureTLS)
 	if insecureTLS != nil {
 		p.InsecureTLS = *insecureTLS
+	}
+	if http1 != nil {
+		p.HTTP1 = *http1
 	}
 	return p
 }

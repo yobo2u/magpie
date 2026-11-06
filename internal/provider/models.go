@@ -424,11 +424,25 @@ func relistPicks(q *Provider, now map[string]bool) bool {
 }
 
 // fetch is Fetch without the picks looked after. A Remote magpie's list
-// also tells whether it is this magpie (noteSelf).
+// also tells whether it is this magpie (noteSelf), and that magpie is
+// asked whether it serves its MCP router (noteRemoteHub).
 func (p Provider) fetch(ctx context.Context) ([]catalog.Model, error) {
 	ms, err := p.fetchList(ctx)
+	if err != nil && p.IsRemoteMagpie() {
+		// one that took another address on its network is asked there
+		// (remote_moved.go)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), seekFor)
+		defer cancel()
+		if q, ok := SeekMoved(sctx, p, err); ok {
+			p, ctx = q, sctx
+			ms, err = p.fetchList(ctx)
+		}
+	}
 	if err == nil {
 		noteSelf(p, ms)
+		if len(ms) > 0 {
+			noteRemoteHub(ctx, p)
+		}
 	}
 	return ms, err
 }
@@ -2726,7 +2740,7 @@ func EntryPricer(st settings.Settings, find func(string) (Group, []Member, bool)
 // entryPricerAt is EntryPricer with a provider's rate window taken at
 // now, or left out for a zero now.
 func entryPricerAt(st settings.Settings, find func(string) (Group, []Member, bool), now time.Time) func(Entry) (catalog.Price, bool) {
-	all := All()
+	all := sharedAll() // priceIn only reads them
 	return func(e Entry) (catalog.Price, bool) {
 		if e.Group == "" {
 			return priceIn(st, all, e.Provider.ID, e.Model, now)
@@ -2765,7 +2779,7 @@ func entryPricerAt(st settings.Settings, find func(string) (Group, []Member, boo
 // each call's window.
 func AgentPricer(st settings.Settings, find func(string) (Group, []Member, bool)) func(Entry) (catalog.Price, bool) {
 	var base time.Time
-	same, all := entryPricerAt(st, find, base), All()
+	same, all := entryPricerAt(st, find, base), sharedAll()
 	return func(e Entry) (catalog.Price, bool) {
 		if pr, ok := same(e); ok || e.Group == "" {
 			return pr, ok
@@ -2775,6 +2789,35 @@ func AgentPricer(st settings.Settings, find func(string) (Group, []Member, bool)
 			return catalog.Price{}, false
 		}
 		return priceIn(st, all, ms[0].Provider.ID, ms[0].Model, base)
+	}
+}
+
+// FoundOnce is find answering each group once: an agent's list asked a
+// group's members for its compaction, its price twice and its protocols
+// and tiers twice, each walking the group's members and resolving each
+// (~8 MB in 2 minutes of an idle magpie's list rebuilds). What it gives
+// is shared between the calls: only for reading.
+func FoundOnce(find func(string) (Group, []Member, bool)) func(string) (Group, []Member, bool) {
+	type found struct {
+		g  Group
+		ms []Member
+		ok bool
+	}
+	var (
+		mu sync.Mutex
+		of = map[string]found{}
+	)
+	return func(id string) (Group, []Member, bool) {
+		mu.Lock()
+		f, ok := of[id]
+		mu.Unlock()
+		if !ok {
+			f.g, f.ms, f.ok = find(id)
+			mu.Lock()
+			of[id] = f
+			mu.Unlock()
+		}
+		return f.g, f.ms, f.ok
 	}
 }
 
@@ -2949,6 +2992,10 @@ type Entry struct {
 	// told it whole rather than magpie's default working window
 	// (CompactFor, #1809).
 	WindowSet bool `json:"-"`
+	// MaxContext is the most a prompt may hold when asked for, above
+	// Context, as the provider's list says it (catalog.Model's: a Codex
+	// entry's max_context_window, which Codex is handed and may work to)
+	MaxContext int `json:"-"`
 	// Output is the most tokens a reply may hold, when known (a group's:
 	// the least of its members')
 	Output int `json:"output,omitempty"`
@@ -3241,7 +3288,7 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 	// an agent's list showed the whole magpie/<provider>/<model> (#955)
 	name := cmp.Or(m.Name, m.ID)
 	e := Entry{ID: p.ID + "/" + m.ID, Model: m.ID, Family: p.Family, Name: name, Efforts: effortsOf(m), Provider: p,
-		Images: images, ImageInput: imageInput, Context: ctx, WindowSet: p.ContextOf(m.ID) > 0, Output: output, OutputSet: outputOf(s, p.ID, m.ID) > 0, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers, Released: m.Released,
+		Images: images, ImageInput: imageInput, Context: ctx, WindowSet: p.ContextOf(m.ID) > 0, MaxContext: m.MaxContext, Output: output, OutputSet: outputOf(s, p.ID, m.ID) > 0, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers, Released: m.Released,
 		Inputs: m.InputModalities, Outputs: m.OutputModalities, Codex: m.Codex,
 		AlwaysThinks: m.AlwaysThinks, DynamicTools: m.DynamicTools, DefaultEffort: m.DefaultEffort}
 	if lv, ok := catalog.CodexLevels(m.Codex); ok {
@@ -3396,8 +3443,8 @@ func resolveIn(entries []Entry, id string) (Provider, string, bool) {
 	if pid, model, ok := strings.Cut(id, "/"); ok {
 		// the providers a request holds (All): an agent's value of a
 		// model not listed lands here
-		if p := lookIn(All(), pid); p != nil && p.On() && !p.ServesNone() {
-			return *p, model, true
+		if p := lookIn(sharedAll(), pid); p != nil && p.On() && !p.ServesNone() {
+			return p.clone(), model, true
 		}
 	}
 	for i := range entries {

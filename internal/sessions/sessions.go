@@ -156,6 +156,16 @@ type Session struct {
 	// Convs are the ids magpie's gateway keys the session's requests by
 	// when they carry no session id of their own (dshConvs)
 	Convs []string `json:"-"`
+	// ResponseIDs are the ids of the replies the session's own requests
+	// got, as the gateway wrote them on its routes and the agent kept them
+	// with the reply (dsh's replay state): a fork's inherited replies are
+	// its source's, and are not counted here (Route.ResponseID)
+	ResponseIDs []string `json:"-"`
+	// ForkOf is the session a dsh fork was seeded from (its header's
+	// parentSession, isSeeded): the fork's requests open as that one's do,
+	// so a reply id that names the fork is taken over the opening only for
+	// a fork of the opening's session (gui's ownerOf)
+	ForkOf string `json:"-"`
 	// Copies are the ids of the sessions that are copies of its
 	// conversation, not listed apart from it (ccCopies)
 	Copies []string `json:"-"`
@@ -215,9 +225,14 @@ type state struct {
 	Custom                string            `json:"custom,omitempty"` // the name the user gave it
 	First                 string            `json:"first,omitempty"`  // the first message, when no prompt looked typed
 	Convs                 []string          `json:"convs,omitempty"`  // the gateway's ids for its requests (dshConvs)
-	Start                 time.Time         `json:"start"`
-	Last                  time.Time         `json:"last"`
-	Models                named[Tokens]     `json:"models,omitempty"`
+	// ResponseIDs are the ids of the replies its own requests got, as the
+	// gateway wrote them on its routes and the agent kept them with the
+	// reply (dsh's replay state): they name a request after the fact, where
+	// a conversation id is only its opening (Route.ResponseID)
+	ResponseIDs []string      `json:"response_ids,omitempty"`
+	Start       time.Time     `json:"start"`
+	Last        time.Time     `json:"last"`
+	Models      named[Tokens] `json:"models,omitempty"`
 	// Days is Models again, split by the local date each message was
 	// written on: a session that runs past midnight counts on both days.
 	Days named[*day] `json:"days,omitempty"`
@@ -378,6 +393,7 @@ func (s *state) clone() *state {
 		c.Total = &t
 	}
 	c.Convs = slices.Clone(s.Convs)
+	c.ResponseIDs = slices.Clone(s.ResponseIDs)
 	c.CodexSpawnNames = maps.Clone(s.CodexSpawnNames)
 	c.CodexSpawnConflicts = maps.Clone(s.CodexSpawnConflicts)
 	c.CodexAgentIDs = maps.Clone(s.CodexAgentIDs)
@@ -1143,7 +1159,10 @@ const cacheVersion = 29
 //
 // codex 2: only a fork's copies are; its own calls after them are its own,
 // whatever their numbers.
-var parseVersions = map[string]int{"codex": 3, "zcode": 1}
+//
+// dsh 1: the ids of the replies its own requests got (ResponseIDs), for
+// the routes that carry no session id and an opening a fork copies.
+var parseVersions = map[string]int{"codex": 3, "zcode": 1, "dsh": 1}
 
 type cacheFile struct {
 	Version int    `json:"version"`
@@ -1853,6 +1872,10 @@ func assembleListed(fs []file, price func(string) *catalog.Price, codexTitle fun
 				s.App = "claude-desktop"
 			}
 			s.Convs = append(s.Convs, st.Convs...)
+			s.ResponseIDs = append(s.ResponseIDs, st.ResponseIDs...)
+			if d := st.Dsh; d != nil && d.Head.IsSeeded && d.Head.DelegationDepth == 0 {
+				s.ForkOf = d.Head.ParentSession
+			}
 		}
 		if s.Agent == "codex" && st.CodexNickname != "" {
 			s.Nickname = st.CodexNickname
@@ -2499,6 +2522,12 @@ func untagged(s string) string { return title(tag.ReplaceAllString(s, " ")) }
 // as far as it keeps, and one past: a pasted file as a prompt went through
 // a regexp and into runes whole, 0.45 GB of a cold start's first 2 minutes.
 func title(s string) string {
+	t, _ := titleCut(s)
+	return t
+}
+
+// titleCut is title(s), and whether words were left past what it kept.
+func titleCut(s string) (string, bool) {
 	const most = 160
 	s = strings.TrimLeftFunc(s, unicode.IsSpace)
 	b := make([]byte, 0, min(len(s), 4*most))
@@ -2516,10 +2545,10 @@ func title(s string) string {
 		}
 	}
 	if strings.IndexFunc(s[i:], func(r rune) bool { return !unicode.IsSpace(r) }) < 0 {
-		return strings.TrimRightFunc(string(b), unicode.IsSpace)
+		return strings.TrimRightFunc(string(b), unicode.IsSpace), false
 	}
 	// as []rune made it: each byte not UTF-8 one U+FFFD
-	return strings.TrimSpace(string([]rune(string(b)))) + "…"
+	return strings.TrimSpace(string([]rune(string(b)))) + "…", true
 }
 
 // ---- pricing ----------------------------------------------------------------

@@ -3499,6 +3499,7 @@ function routingPage(part) {
       case "claude-tier": return t("{agent} asked for {model} by Claude's full id; magpie served it on {to}, the model set for that tier.", v);
       case "stand-in": return t("{agent} asked for {model}, which magpie doesn't serve; magpie served it on {to}, the model its config names.", v);
       case "codex-turn": return t("{agent} asked for {model} for a call of its own, which magpie doesn't serve; magpie served it on {to}, the model its last turn was answered on.", v);
+      case "codex-follow": return t("{agent} asked for {model}, one of its own default models, for its memories, and its config names no model for them; magpie served it on {to}, the model of its conversation.", v);
       case "privacy": return t("Masking would have changed this request, so magpie sent it as written to {to}, the model set for that in Settings › Privacy.", v);
       default: return t("magpie served it on {to} in place of {model}.", v);
     }
@@ -6456,7 +6457,16 @@ function routingPage(part) {
     const edit = el("button", "text", t("Edit"));
     edit.onclick = (e) => { e.stopPropagation(); open(); };
     const open = () => openGroupEditor(g);
-    row.onclick = open;
+    // words dragged across on the card are being selected to copy
+    // (jiabubu on Discord), not a click that opens the editor; a click
+    // with something else selected still opens it
+    let selAtDown = "";
+    row.onpointerdown = () => { selAtDown = String(getSelection() || ""); };
+    row.onclick = () => {
+      const s = getSelection();
+      if (s && !s.isCollapsed && row.contains(s.focusNode) && String(s) !== selAtDown) return;
+      open();
+    };
     row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(ics, g); };
     row.append(ics, main, tags, edit);
     // a group of the user's switches off as a whole, kept as it is (PAMI

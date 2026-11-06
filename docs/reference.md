@@ -542,6 +542,13 @@ id to avoid a 403. Embeddings, rerank and speech-to-text requests use the remote
 APIs, and its exposed retrieval models are kept when fetching its list.
 These remain in agent model lists as on the remote; being listed does not
 mean an embedding or rerank model can hold a conversation.
+When the shared magpie's computer comes back at another address on the same
+network (a router handing it a new IP after a restart), the other computers
+find it by themselves: one that can't connect looks on its own networks for
+the magpie that answers its key, saves the new address and goes on. This
+needs an IP address on a private network; a name (`a-pc.local`) or a
+Tailscale address is followed as it is. Over the internet, use Tailscale's
+stable address or name, or a public URL in front of the shared magpie.
 The remote must serve the requested API and model, and allow the supplied
 key to use them. Responses uses HTTP, including SSE, rather than WebSocket.
 An older remote without decision-model discovery still serves its existing
@@ -649,6 +656,7 @@ magpie gateway-key limit <id> list     # each limit, used, left and reset
 magpie gateway-key limit <id> 10d --tokens 5m   # every 10 days, from now
 magpie gateway-key limit <id> 5h --tokens 200k  # every 5 hours, from now
 magpie gateway-key limit <id> add week --cost 20   # one more limit; all must pass
+magpie gateway-key limit <id> add month --cost 20 --model openai/*   # a limit of only OpenAI's models
 magpie gateway-key limit <id> remove 2 # take off the 2nd limit
 magpie gateway-key limit <id> reset    # count its usage from 0 again (reset 2: only the 2nd)
 magpie gateway-key limit <id> off      # no limit
@@ -712,6 +720,25 @@ one as a Remote magpie provider shows each of its keys' limits on its
 Usage page this way (#1547). Requests from
 this computer that send no gateway key are not limited; a gateway key used
 from this computer is.
+
+A limit can count **only some models** (zola_xynb on X): pick them under
+**Models** in the limit's editor, or `--model` (again, or a comma list) on
+`magpie gateway-key limit`, as `<provider>/<model>` or `<provider>/*`, such
+as $20 a month on `openai/*` beside $50 a month on the whole key. Such a
+limit counts only the calls those models answered, by the provider and
+model in the usage log. Once it is spent, a request naming one of them is
+refused with the same 429 (it names the models, and sets no
+`X-Magpie-Limit-Reset`, so a magpie using this one as a remote rests only
+the model), and a routing group, a model's fallbacks, `count_tokens`,
+embeddings, images, videos, the decision groups and magpie's own calls for
+the key leave its models out and go on to the others, from the next
+request on, midway through a conversation too. Its spent models stay in
+the key's model lists. A limit without models is the whole key's, as every
+limit before this was; two limits of the same window can share it only
+when they count different models. A request through a group holds no
+reservation in a model's limit, so requests sent at once through groups
+can go over it by about a call each. A magpie from before this reads such
+a limit, if it is a key's first, as the whole key's.
 
 A key's holder can also open **`/me`** in a browser at the address they
 reach the gateway at (for example `http://192.168.1.10:3999/me`), type
@@ -3188,6 +3215,19 @@ does the same in a terminal: open the link it prints, then paste the address
 the browser ended on. Keys, sign-ins and plugins live in the volume, so a
 restart, or a new container on the same volume, keeps them.
 
+Magpie Browser's extension can't be loaded from the container's folders, so
+in the browser UI the Library's Magpie Browser sheet offers *Download the
+extension*: a zip pointed at the page's own address (3430 hands the
+gateway's routes on), with a gateway key named **Magpie Browser** of its
+own, made once and reused while it is on. Unzip it and choose the folder
+with Load unpacked on `chrome://extensions`. An extension already loaded
+takes the address and a gateway key in its popup. The browser that
+connects with the page's Magpie Browser key is the container's own: its
+agents use it as they would one on loopback, and so does a caller of
+`/mcp/magpie/browser` from the host given that same key. A browser that
+connects with another key is that key's alone. A browser connecting from
+outside with no key, or from a web page's origin, is refused as before.
+
 The image has a `HEALTHCHECK`: `magpie healthcheck` exits 0 while the gateway
 answers on `MAGPIE_ADDR`, under `serve` and `web` alike, so `docker ps` shows
 the container as healthy (Compose: `depends_on: condition: service_healthy`)
@@ -3254,6 +3294,13 @@ bind it only to the NAS interface or VPN address) and recreate the
 container. For Internet access, prefer a
 VPN such as Tailscale or WireGuard; a reverse proxy or tunnel forwarding to
 Magpie over loopback needs a gateway key from its clients, as the network does.
+
+The image's tags: `latest` is the newest release, and magpie releases
+several times a day. `daily` is the newest release as of 20:00 UTC, moved
+once a day (`.github/workflows/docker-daily.yml`), for Renovate or
+Watchtower to update at most daily (with Renovate, pin its digest);
+`stable` is the desktop app's Stable channel, one a week. `0.1.N` is one
+release, `0.1` the newest of its line, and `edge` every change on `main`.
 
 ### Developing
 

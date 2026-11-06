@@ -41,6 +41,19 @@ three.
 
 ## Constraints and failure behavior
 
+### First opening of an agent's Details
+
+In the main window, `expandLink` in
+[`app.js`](../../internal/gui/assets/app.js) reads an agent's own settings
+and loads its Long conversations controls before drawing and measuring its
+opened row. While these are loading, Details shows Loading and is disabled.
+A failed read keeps the row closed, reports the error and allows retry.
+A later agent click or leaving Agents supersedes the pending opening.
+Once prepared, the row slides to its full height; reduced motion opens it
+at once. Later openings reuse the settings and controls already loaded.
+`agent-details-ready.test.cjs` holds both responses and checks the final
+animation frame against the natural height in both engines and five languages.
+
 ### Allowance card refreshes
 
 A card refresh applies only the requested account from the API's full
@@ -315,6 +328,15 @@ No account is named in it, and each account stays below it as it was.
 There is no switch: it is additive, and the figure follows used or left
 with the rest. See `usage-merge.test.cjs` (the merge) and
 `usage-all-accounts.test.cjs` (the three places).
+
+On the Usage card and in the panel, a click on the strip or its chevron
+(`.quota-all-fold`, the accounts' own ⌄ with `aria-expanded`) folds that
+provider's accounts away under it, open by default (justfreefall on X).
+It is remembered by provider for the window and the panel alike
+(`magpie.usageAllFolded`, `quotaAllFolded` in `quotaall.js`). Folded, the
+card's "Show … accounts" button keeps its room but is hidden and inert, so
+the strip stays where it was. A menu bar cell asking for one of the
+accounts unfolds them (`focusQuotaCard`). See `usage-all-fold.test.cjs`.
 
 ### The Sessions page's folders
 
@@ -919,6 +941,32 @@ and the old one quitting only after its stream) and
 [`handover_test.go`](../../internal/gateway/handover_test.go), the
 socket passing in [`handoff_test.go`](../../internal/handoff/handoff_test.go),
 and `update-wait.test.cjs`.
+
+### Where Windows installs magpie
+
+There is no installer: the Windows exe opened from Downloads, the Desktop
+or a temp folder installs itself (`update.Settle`, called from `gui.Run`).
+The first time, with nothing installed, it asks where in Windows' task
+dialog (`installDialog` in
+[`installdir_windows.go`](../../internal/gui/installdir_windows.go)): the
+folder, Install, Change… and Cancel, in the tray's language. Change… opens
+the folder picker, and a folder picked gets `magpie` added unless it is
+named that already (`update.InstallDir`). The default is
+`%LOCALAPPDATA%\Programs\magpie`; another folder is recorded at
+`HKCU\Software\magpie` `InstallLocation`, so the next exe downloaded
+replaces the copy there without asking (feng_21795_78266 on Discord).
+A folder only an administrator can write to (Program Files, Windows) or
+one downloads land in is refused in the dialog (`update.Installable`), not
+elevated: magpie is installed for the user alone (HKCU's Run, the user's
+PATH) and updates itself without elevation, so an admin folder would
+stop its updates. Cancel runs the exe where it is. The shortcut, App
+Paths, autostart, the `magpie://` scheme, PATH and self-update all take
+the running exe's folder, so they follow the choice. Uninstall forgets
+the record (`update.ForgetInstallDir`) and leaves the program where it
+is, as before. See `TestSettleInstallsWhereTheUserChose`,
+`TestSettleOffersTheChosenFolderAgain`, `TestInstallableRefuses` in
+[`install_test.go`](../../internal/update/install_test.go) and
+`TestInstallWordsEveryLanguage`.
 
 ## Verification
 

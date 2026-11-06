@@ -87,6 +87,9 @@ type Options struct {
 
 	// found are the spans Model found, by text, for one request's texts
 	found map[string][]Found
+	// args is masking a tool call's arguments (MaskJSON): the model's
+	// one-word name there is never taken for an app's (thingNamed)
+	args bool
 	// sent is masking for a vendor (Mask, MaskJSON): a text masked
 	// before on Route has the model's finds and the known values it had
 	// then (sentSpans)
@@ -577,7 +580,16 @@ func realEmail(v string) bool {
 	if !mailHost(v[:at], host) {
 		return false
 	}
-	if fileHost(host) || docFiles[host] || !mailTLD(host[strings.LastIndexByte(host, '.')+1:]) {
+	if fileHost(host) {
+		// the end of a file's name: an address before its extension
+		// (alice.smith@acme.com.pdf, export-rina.k@fastmail.com.png) is
+		// someone's all the same; a scale or a word (@2x.jpg, @final.pdf)
+		// is no domain
+		if host = fileStem(host); !strings.Contains(host, ".") || fileHost(host) || !mailHost(v[:at], host) {
+			return false
+		}
+	}
+	if docFiles[host] || !mailTLD(host[strings.LastIndexByte(host, '.')+1:]) {
 		return false
 	}
 	for _, fake := range []string{"example.com", "example.org", "example.net", "localhost", ".test", ".invalid", ".example"} {
@@ -674,6 +686,18 @@ func fileHost(host string) bool {
 	dot := strings.LastIndexByte(host, '.')
 	ext := host[dot+1:]
 	return fileExt[ext] || dot > 0 && scaleExt[ext] && scaleRe.MatchString(host[:dot])
+}
+
+// fileStem is host with the file extensions at its end taken off
+// (acme.com.tar.gz is acme.com), for a host fileHost took for a file's.
+func fileStem(host string) string {
+	for {
+		dot := strings.LastIndexByte(host, '.')
+		if dot < 0 || !fileExt[host[dot+1:]] {
+			return host
+		}
+		host = host[:dot]
+	}
 }
 
 func chineseID(v string) bool {

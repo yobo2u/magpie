@@ -1237,16 +1237,11 @@
         : t("{value}: {tokens} more tokens over the range (+{pct})", { value: show(p.value), tokens: fmtK(extra(p)), pct: pct(extra(p) / low) });
       plot.append(dot);
     };
-    // the advice's value first, then the setting now, then the range's two
-    // ends: a value that sits too close to one before it is left off, so two
-    // labels are never drawn over each other (#1549, Ti800: 170K, the
-    // leanest, one step from the axis's 160K, read as "1170K")
+    // the advice's value, the setting now, the range's ends: one too close
+    // to one before is left off, so labels never overlap (#1549, Ti800)
     const along = (p) => pts.indexOf(p) / (pts.length - 1);
-    // the tags over the dots the same way: "Leanest" first, then the setting
-    // now, then the costliest; one beside a tag that matters more and at
-    // about its height keeps its dot and tooltip but not its tag, so a
-    // setting one step from the advice doesn't print its "+3%" over
-    // "Leanest" (#1549)
+    // the tags the same way: Leanest, the setting now, the costliest; one
+    // near a tag that matters more keeps its dot, not its tag (#1549)
     const tagged = [];
     const tag = (p, label) => {
       if (tagged.some((k) => Math.abs(along(k) - along(p)) < TICK_GAP && Math.abs(Y(k) - Y(p)) < 20)) return "";
@@ -1277,9 +1272,10 @@
   }
 
   function adviceRow(agent, a) {
-    const r = a.compact || a.ttl;
-    const ttl = !!a.ttl;
-    const show = (v) => ttl ? ttlName(v) : fmtK(+v);
+    // few: put in by tune, too few calls to advise on; kept for Undo (linkaww)
+    const r = a.compact || a.ttl || { current: a.setting.value, best: a.setting.value, cost: 0, low: 0 };
+    const ttl = a.knob != "compact";
+    const show = (v) => ttl ? (v ? ttlName(v) : t("Default")) : fmtK(+v);
     const cur = ttl ? r.current : r.current, best = r.best;
     const same = String(cur) === String(best);
     const saves = r.cost > 0 ? (r.cost - r.low) / r.cost : 0;
@@ -1326,7 +1322,8 @@
 
     const why = el("p", "ctx-tune-why");
     const f = r.facts || {};
-    if (a.compact) {
+    if (a.few) why.textContent = t("Not enough calls in this range to tune on");
+    else if (a.compact) {
       why.textContent = f.compacts
         ? t("Your conversations grow {growth} a call; a compaction leaves {after}, and reading back what it dropped costs {rework}. {n} compactions in the range.", { growth: fmtK(f.growth), after: fmtK(f.after), rework: fmtK(f.rework), n: f.compacts })
         : t("Your conversations grow {growth} a call, and none was compacted in the range.", { growth: fmtK(f.growth) });
@@ -1363,6 +1360,7 @@
       : el("span", "ctx-chip info", "");
     verdict.append(el("i"), lean ? t("Not the leanest: {range} spends the fewest tokens", { range: bandName })
       : applied ? t("In use") : same ? t("Already the leanest for how you work") : t("{pct} fewer tokens · {tokens} over the range", { pct: pct(saves), tokens: fmtK(Math.round(r.cost - r.low)) }));
+    verdict.hidden = !!a.few && !applied;
     foot.append(verdict, el("span", "grow"));
     const note = el("div", "ctx-tune-src");
     title.after(note);
@@ -1393,24 +1391,19 @@
       undo.onclick = () => send("undo");
       foot.append(undo);
     }
-    if (!same && !applied && !held) {
-      const go = el("button", "text primary", t("Use {value}", { value: show(best) }));
+    const use = (v, tt) => {
+      const go = el("button", "text primary", t("Use {value}", { value: show(v) }));
       go.type = "button";
       go.disabled = tuneBusy === key;
-      if (set.value && !set.ours) go.dataset.tt = t("Replaces your {value}; Undo puts it back", { value: show(set.value) });
-      go.onclick = () => send("apply", best);
+      if (tt) go.dataset.tt = tt;
+      go.onclick = () => send("apply", v);
       foot.append(go);
-    }
-    if (lean && !held) {
-      const go = el("button", "text primary", t("Use {value}", { value: show(lean.value) }));
-      go.type = "button";
-      go.disabled = tuneBusy === key;
-      go.dataset.tt = set.value && !set.ours
-        ? t("Replaces your {value}; Undo puts it back", { value: show(set.value) })
-        : t("Fewer tokens, but more compactions to wait on");
-      go.onclick = () => send("apply", lean.value);
-      foot.append(go);
-    }
+    };
+    const yours = set.value && !set.ours && t("Replaces your {value}; Undo puts it back", { value: show(set.value) });
+    if (!same && !applied && !held) use(best, yours);
+    // an hour no Undo puts back, too few calls to weigh (linkaww)
+    if (a.few && ttl && cur === "1h" && !held && !set.ours) use("5m", yours);
+    if (lean && !held) use(lean.value, yours || t("Fewer tokens, but more compactions to wait on"));
     // a window of the reader's own (#1860), from the same replay: each
     // value's tokens against the setting now, which the reader picks away
     // from (hayden4608 on Discord: against the leanest, every line read as
@@ -1476,8 +1469,8 @@
     const name = el("div", "ctx-who-box");
     name.append(who, el("div", "ctx-who-sub", count(ag.calls, "1 call", "{n} calls")));
     head.append(name, el("span", "grow"));
-    const total = ag.advice.reduce((s, a) => { const r = a.compact || a.ttl; return s + Math.max(0, r.cost - r.low); }, 0);
-    const all = ag.advice.reduce((s, a) => s + (a.compact || a.ttl).cost, 0);
+    const total = ag.advice.reduce((s, a) => { const r = a.compact || a.ttl || {}; return s + Math.max(0, r.cost - r.low || 0); }, 0);
+    const all = ag.advice.reduce((s, a) => s + ((a.compact || a.ttl)?.cost || 0), 0);
     // a share that rounds to nothing is no promise
     if (all > 0 && total / all >= 0.01) head.append(el("span", "ctx-tune-total", t("Up to {pct} fewer", { pct: pct(total / all) })));
     card.append(head);

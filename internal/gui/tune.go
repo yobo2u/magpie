@@ -41,6 +41,10 @@ type tuneAdvice struct {
 	// Async is Codex's background compaction at the advice, its foreground
 	// limit kept as the backstop; nil where it can't help
 	Async *tuneAsync `json:"async,omitempty"`
+	// Few: a setting tune put in, or Claude Code's cache as it is here,
+	// kept on the card with nothing to advise (too few calls in the
+	// range), so its Undo, or its way back to 5 minutes, is still there
+	Few bool `json:"few,omitempty"`
 }
 
 // tuneAsync is the advice as Codex's background compaction takes it: a
@@ -110,7 +114,19 @@ func adviseOf(by map[string][]tune.Call, days int, home string) tuneState {
 	out := tuneState{Days: days, Agents: []tuneAgent{}}
 	for _, name := range []string{"claude", "codex"} {
 		calls := by[name]
-		if len(calls) == 0 {
+		kept := agent.TuneKept(home, name)
+		if name == "claude" {
+			// the cache this computer's Claude Code keeps, with or without
+			// calls read here, its way back to 5 minutes with it
+			here := agent.TuneCacheHere(home)
+			for _, k := range kept {
+				if !slices.ContainsFunc(here, func(o agent.TuneKnob) bool { return o.Knob == k.Knob && o.Model == k.Model }) {
+					here = append(here, k)
+				}
+			}
+			kept = here
+		}
+		if len(calls) == 0 && len(kept) == 0 {
 			continue
 		}
 		ta := tuneAgent{Agent: name, Calls: len(calls), Advice: []tuneAdvice{}}
@@ -190,6 +206,14 @@ func adviseOf(by map[string][]tune.Call, days int, home string) tuneState {
 					ad.Async = &tuneAsync{Percent: pct, Value: v, Window: r.Window, Setting: as, Held: agent.CodexAsyncHeldHere(home)}
 				}
 				ta.Advice = append(ta.Advice, ad)
+			}
+		}
+		// what tune put in stays on the card, Undo with it, when the range
+		// has too few calls to advise on it (linkaww on Discord), and so
+		// does Claude Code's cache as it is here
+		for _, k := range kept {
+			if !slices.ContainsFunc(ta.Advice, func(a tuneAdvice) bool { return a.Knob == k.Knob && a.Model == k.Model }) {
+				ta.Advice = append(ta.Advice, tuneAdvice{Knob: k.Knob, Model: k.Model, Setting: k.Setting, Few: true})
 			}
 		}
 		out.Agents = append(out.Agents, ta)

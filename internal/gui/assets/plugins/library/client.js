@@ -139,6 +139,8 @@ magpie.plugin("library", (ctx) => {
   function browse(u) { api("open", { url: u }).catch((e) => status(e.message, "err")); }
   function reveal(p) { api("library/reveal", { path: p }).catch((e) => status(e.message, "err")); }
 
+  const bridgedWhy = () => t("Added from a Remote magpie with this computer's key for it, so it stays on this computer");
+
   // A switch: on or off, nothing between.
   function toggle(on, label, onChange) {
     const s = el("button", "lib-switch" + (on ? " on" : ""));
@@ -2130,7 +2132,7 @@ magpie.plugin("library", (ctx) => {
     if (s.signIn?.dead) nm.append(tag(t("Sign-in ran out"), "warn", t("Open it to sign in again")));
     else if (s.signIn?.signedIn) nm.append(tag(t("Signed in"), "lib-signed", t("The agents given it use magpie's sign-in")));
     // kept to this computer: sync carries it nowhere (huhuy72219405 on X)
-    if (s.local) nm.append(tag(t("Not synced"), "lib-local", t("Sync never carries it to your other computers")));
+    if (s.local) nm.append(tag(t("Not synced"), "lib-local", s.bridge ? bridgedWhy() : t("Sync never carries it to your other computers")));
     // out of the hub, each agent's own entry (#4382): said only while the hub is on
     if (lib.mcpHub && s.hub === "direct") nm.append(tag(t("Not through the router"), "lib-direct", t("Each agent is given its own entry for it, as with the MCP router off")));
     // its status beside the name, not in it: the name is still the name
@@ -2919,7 +2921,16 @@ magpie.plugin("library", (ctx) => {
     // kept here, so the switch shows and saves its opposite.
     const drawHere = () => hereBox.replaceChildren(toggle(!d.local, t("Sync to your other computers"), (on) => { d.local = !on; drawHere(); }));
     drawHere();
-    ed.append(...field(t("Sync to your other computers"), hereBox, t("Off keeps it on this computer: sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place")));
+    // a Remote magpie's server holds this computer's key for it and goes
+    // with it, so it is never synced: the switch says so, off and held,
+    // where it showed on and went back off once saved (treeman_26897)
+    const bridged = !!d.bridge;
+    if (bridged) {
+      const sw = hereBox.firstChild;
+      sw.setAttribute("aria-disabled", "true");
+      sw.onclick = (e) => e.stopPropagation();
+    }
+    ed.append(...field(t("Sync to your other computers"), hereBox, bridged ? bridgedWhy() : t("Off keeps it on this computer: sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place")));
     // with the hub on, a server can stay each agent's own entry (#4382,
     // cuipengcx90): one that reads its project from the folder it starts
     // in, or keeps a session's state. Shown while the hub is on, and for a
@@ -3603,9 +3614,11 @@ magpie.plugin("library", (ctx) => {
       const kept = lib.skills.filter((s) => s.shared);
       if (kept.length > 1) rh.append(handOverButton(kept));
       if (lib.skills.length > 1) rh.append(removeEveryButton("skills"));
-      if (lib.skills.some((s) => s.kind === "github" || s.kind === "git")) {
+      if (lib.checkFolders || lib.skills.some((s) => s.kind === "github" || s.kind === "git")) {
         const c = button(checking ? t("Checking…") : t("Check for updates"), "lib-updall", () => checkSkills());
-        c.title = lib.skills.some((s) => s.kind === "git")
+        c.title = lib.checkFolders
+          ? t("Look in the repositories and folders your skills came from for changes and new skills")
+          : lib.skills.some((s) => s.kind === "git")
           ? t("Ask the repositories your skills came from which skills changed since they were installed")
           : t("Ask GitHub which skills changed since they were installed");
         c.disabled = checking;
@@ -3707,7 +3720,7 @@ magpie.plugin("library", (ctx) => {
   function renderNewSkills(body) {
     const list = lib.newSkills;
     const rh = el("div", "row-head lib-newhead");
-    rh.append(el("span", "label", t("Also in their repositories")), el("span", "grow"), el("span", "note", t("on GitHub beside skills you have, not in the library yet")));
+    rh.append(el("span", "label", t("Also in their repositories")), el("span", "grow"));
     if (list.length > 1) {
       const ids = list.map((n) => n.id);
       const ign = button(t("Ignore all"), "lib-updall", () => change("skills/ignore-new", { names: ids }, t("{n} skills set aside", { n: ids.length })));
@@ -3736,10 +3749,20 @@ magpie.plugin("library", (ctx) => {
     sub.title = n.description || "";
     who.append(sub);
     const src = el("div", "lib-src");
-    const a = el("a", "lib-srclink", n.repo + "/" + n.path);
-    a.href = n.id;
-    a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); browse(n.id); };
-    src.append(a);
+    if (n.kind === "folder") {
+      // a folder the user added skills from: shown where it is
+      src.append(pathLink(n.id));
+    } else if (n.kind === "git" && !/^https?:\/\//.test(n.id)) {
+      // an SSH address (git@host:path) or a file:// one: no page to open
+      const a = el("span", "lib-srclink", n.id);
+      a.title = n.id;
+      src.append(a);
+    } else {
+      const a = el("a", "lib-srclink", n.kind === "git" ? n.id.replace(/^https?:\/\//, "") : n.repo + "/" + n.path);
+      a.href = n.id;
+      a.onclick = (e) => { e.preventDefault(); e.stopPropagation(); browse(n.id); };
+      src.append(a);
+    }
     who.append(src);
     const have = el("div", "lib-have");
     // one find without its list of agents doesn't take the page down (#1217)
@@ -6423,21 +6446,56 @@ magpie.plugin("library", (ctx) => {
     const box = el("div", "mk-browser");
     const state = el("div", "mk-browser-state");
     const steps = el("ol", "mk-browser-steps");
+    let away = false;
     const go = button(t("Set up the extension…"), "action", async () => {
       go.disabled = true;
       try {
-        draw(await api("library/browser/setup", {}));
-        steps.hidden = false;
+        if (away) await download();
+        else {
+          draw(await api("library/browser/setup", {}));
+          steps.hidden = false;
+        }
       } catch (e) { status(e.message, "err"); }
       go.disabled = false;
     });
+    // magpie's folders are out of this browser's reach (another computer,
+    // or magpie in a container): the extension comes as a zip, pointed at
+    // this page's address with a gateway key of its own
+    const download = async () => {
+      const r = await fetch("/api/library/browser/extension", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ at: location.origin }),
+      });
+      if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+      const url = URL.createObjectURL(await r.blob());
+      const a = el("a");
+      a.href = url;
+      a.download = "Magpie Browser Extension.zip";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      steps.hidden = false;
+    };
     const draw = (b) => {
+      away = !!b.away;
       state.replaceChildren();
       const dot = el("span", "mk-browser-dot" + (b.connected ? " on" : ""));
       state.append(dot, el("span", "", b.connected
         ? t("Connected to your browser") + (b.extension ? " · " + b.extension : "")
+        : away ? t("Not connected: download the extension and load it in your browser")
         : b.written ? t("Not connected: load the folder below in your browser, and keep that browser open") : t("Not set up: set up the extension in Chrome, Edge, Arc, Brave or another Chromium browser")));
-      go.textContent = b.written ? t("Show the extension folder") : t("Set up the extension…");
+      go.textContent = away ? t("Download the extension") : b.written ? t("Show the extension folder") : t("Set up the extension…");
+      if (away) {
+        steps.replaceChildren(
+          el("li", "", t("Unzip the download.")),
+          el("li", "", t("Open chrome://extensions (edge://extensions in Edge) in the browser you use every day.")),
+          el("li", "", t("Turn on Developer mode.")),
+          el("li", "", t("Click Load unpacked and choose the unzipped Magpie Browser Extension folder.")),
+        );
+        folder.hidden = true;
+        if (b.connected) steps.hidden = true;
+        return;
+      }
       steps.replaceChildren(
         el("li", "", t("Open chrome://extensions (edge://extensions in Edge) in the browser you use every day.")),
         el("li", "", t("Turn on Developer mode.")),
