@@ -2138,7 +2138,9 @@ magpie.plugin("library", (ctx) => {
     if (s.signIn?.dead) nm.append(tag(t("Sign-in ran out"), "warn", t("Open it to sign in again")));
     else if (s.signIn?.signedIn) nm.append(tag(t("Signed in"), "lib-signed", t("The agents given it use magpie's sign-in")));
     // kept to this computer: sync carries it nowhere (huhuy72219405 on X)
-    if (s.local) nm.append(tag(t("Not synced"), "lib-local", s.bridge ? bridgedWhy() : t("Sync never carries it to your other computers")));
+    // a plugin's tools say whose they are, where they are turned off too
+    if (s.plugin) nm.append(tag(t("Plugin"), "lib-local lib-plugin", t("{plugin}'s tools. Plugins can hide them from every agent, keeping the plugin; sync never carries them to your other computers", { plugin: s.plugin })));
+    else if (s.local) nm.append(tag(t("Not synced"), "lib-local", s.bridge ? bridgedWhy() : t("Sync never carries it to your other computers")));
     // out of the hub, each agent's own entry (#4382): said only while the hub is on
     if (lib.mcpHub && s.hub === "direct") nm.append(tag(t("Not through the router"), "lib-direct", t("Each agent is given its own entry for it, as with the MCP router off")));
     // its status beside the name, not in it: the name is still the name
@@ -3187,7 +3189,24 @@ magpie.plugin("library", (ctx) => {
     ["session-start", t("When a session starts")],
   ];
   const HOOK_TOOLS = () => [["", t("Any tool")], ["shell", t("Shell commands")], ["edit", t("File edits")]];
+  // the starts a session-start hook can be narrowed to (#5604, NEKO-CwC),
+  // in Claude Code's words for them, which library.HookStarts keeps
+  const HOOK_STARTS = () => [
+    ["", t("Any start")],
+    ["startup", t("A fresh session")],
+    ["resume", t("A resumed session")],
+    ["clear", t("After /clear")],
+    ["compact", t("After the context is compacted")],
+    ["fork", t("A forked session")],
+    ["startup|resume|clear|compact", t("Any start but a fork")],
+  ];
+  const STARTS = ["startup", "resume", "clear", "compact", "fork"];
+  // a matcher of starts in library.HookStarts' order, as each agent's
+  // view lists the ones it takes
+  const startsOf = (m) => STARTS.filter((s) => m.split("|").includes(s)).join("|");
   const toolEvent = (ev) => ev === "after-tool" || ev === "before-tool";
+  // the choices an event can be narrowed by, or null
+  const narrowsOf = (ev) => toolEvent(ev) ? HOOK_TOOLS() : ev === "session-start" ? HOOK_STARTS() : null;
   const hookAgentOf = (id) => (lib.hookAgents || []).find((x) => x.id === id);
   // the agents the tab shows a chip for: every one shown, those magpie
   // can't give a hook greyed, saying why
@@ -3198,6 +3217,13 @@ magpie.plugin("library", (ctx) => {
     if (!ha || ha.no) return ha?.wsl ? t("magpie gives hooks only to agents on this computer, not yet to {agent} in WSL", { agent: a.name }) : t("{agent} has no hooks magpie can write", { agent: a.name });
     const own = h.event?.includes(":") && h.event.split(":")[0];
     if (own && own !== a.id) return t("{event} is {agent}'s own event: only it can run this hook", { event: h.event.slice(own.length + 1), agent: nameOf(own) });
+    // narrowed to starts this agent can't single out: never widened to
+    // every start, nor written to match none (hooks.go, startMatcher)
+    if (h.event === "session-start" && h.matcher && !(ha.starts || []).includes(startsOf(h.matcher))) {
+      if (!ha.startSources?.length) return t("{agent} runs a session-start hook at every start: it can't be narrowed", { agent: a.name });
+      if (!h.matcher.split("|").some((s) => ha.startSources.includes(s))) return t("{agent} never starts a session that way", { agent: a.name });
+      return t("{agent} can't tell those starts apart from its others", { agent: a.name });
+    }
     return "";
   };
   function hookEventLabel(h) {
@@ -3207,7 +3233,7 @@ magpie.plugin("library", (ctx) => {
   }
   function hookLine(h) {
     let s = hookEventLabel(h);
-    if (h.matcher) s += " · " + (h.event.includes(":") ? h.matcher : HOOK_TOOLS().find(([v]) => v === h.matcher)?.[1] || h.matcher);
+    if (h.matcher) s += " · " + (h.event.includes(":") ? h.matcher : (narrowsOf(h.event) || []).find(([v]) => v === h.matcher)?.[1] || h.matcher);
     return s;
   }
 
@@ -3311,8 +3337,8 @@ magpie.plugin("library", (ctx) => {
       openProtoMenu(evBtn, opts, d.event, (v) => {
         d.event = v;
         if (v.includes(":")) d.agents = [v.split(":")[0]];
-        else if (!toolEvent(v)) d.matcher = "";
-        if (v.includes(":") || !HOOK_TOOLS().some(([m]) => m === d.matcher)) d.matcher = "";
+        // a tool kept from one tool event to the other; nothing else
+        if (v.includes(":") || !(narrowsOf(v) || []).some(([m]) => m === d.matcher)) d.matcher = "";
         draw();
       }, "When it runs", "", "left", false, "Find an event");
     };
@@ -3340,17 +3366,23 @@ magpie.plugin("library", (ctx) => {
         const m = field2(d.matcher, t("every tool"), (v) => { d.matcher = v.trim(); });
         m.classList.add("mono", "lib-hookmatcher");
         slot.append(...field(t("Matcher"), m, t("The agent's own matcher, as its hooks file has it; empty for all")));
-      } else if (toolEvent(d.event)) {
-        const mb = el("button", "sess-pick lib-menu lib-hooktool");
+      } else if (narrowsOf(d.event)) {
+        const tools = toolEvent(d.event);
+        const opts = narrowsOf(d.event);
+        const mb = el("button", "sess-pick lib-menu " + (tools ? "lib-hooktool" : "lib-hookstart"));
         mb.type = "button";
         mb.setAttribute("aria-haspopup", "menu");
         mb.setAttribute("aria-expanded", "false");
-        mb.append(el("span", "", HOOK_TOOLS().find(([v]) => v === d.matcher)?.[1] || ""), svg(CHEV, 11, 1.6));
+        // one written by hand into library.json shows as it is
+        mb.append(el("span", "", opts.find(([v]) => v === d.matcher)?.[1] || d.matcher), svg(CHEV, 11, 1.6));
+        const title = tools ? "For which tools" : "At which starts";
         mb.onclick = (e) => {
           e.stopPropagation();
-          openProtoMenu(mb, HOOK_TOOLS().map(([v, n]) => ({ v, name: n, literalName: true, note: "" })), d.matcher, (v) => { d.matcher = v; draw(); }, "For which tools");
+          // an agent that can't run it at just those greys, saying why,
+          // and is left out when it is saved
+          openProtoMenu(mb, opts.map(([v, n]) => ({ v, name: n, literalName: true, note: "" })), d.matcher, (v) => { d.matcher = v; draw(); }, title);
         };
-        slot.append(...field(t("For which tools"), mb, t("Each agent's own names for them")));
+        slot.append(...field(t(title), mb, t("Each agent's own names for them")));
       }
       drawAgents();
     }

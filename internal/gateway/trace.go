@@ -273,7 +273,7 @@ type NestedRule struct {
 
 // groupRef is the trace's g, with its models ms.
 func groupRef(g provider.Group, ms []provider.Member) *GroupRef {
-	ref := &GroupRef{ID: g.ID, Ref: g.Ref(), Name: g.Name, Routing: g.Routing, Affinity: g.Affinity, Auto: g.Auto, Sink: sinks(g.Sink, g.Routing)}
+	ref := &GroupRef{ID: g.ID, Ref: g.Ref(), Name: g.Name, Routing: g.Routing, Affinity: g.Affinity, Auto: g.Auto, Sink: sinks(g.Sinks(), g.Routing)}
 	seen := map[string]bool{}
 	for _, m := range ms {
 		ref.Members = append(ref.Members, m.Spelled())
@@ -337,8 +337,16 @@ type Weighed struct {
 	Unit   string  `json:"unit,omitempty"`
 	// Balance is a prepaid wallet's left in Unit (left.bal, #3950): the
 	// Routing page tells the figure, not a share
-	Balance  *float64          `json:"balance,omitempty"`
-	Renews   []time.Time       `json:"renews,omitempty"`   // when those windows renew, the biggest first
+	Balance *float64    `json:"balance,omitempty"`
+	Renews  []time.Time `json:"renews,omitempty"` // when those windows renew, the biggest first
+	// Soon is Renews as Smart sorted by them (left.soon,
+	// Allowance.Renewal): a credit pack's end where it comes before its
+	// window's reset, an auto-used reset, a window not started taken to
+	// run its span from now. Lapse is when the soonest credits left are
+	// lost (left.lapse), Smart's tie-break: the Routing page tells the
+	// order by these, the keys it was sorted by (#5646)
+	Soon     []time.Time       `json:"soon,omitempty"`
+	Lapse    *time.Time        `json:"lapse,omitempty"`
 	Pace     float64           `json:"pace,omitempty"`     // remaining allowance per hour until its window resets
 	Due      *time.Time        `json:"due,omitempty"`      // when the allowance window used for pace resets
 	Tokens   float64           `json:"tokens,omitempty"`   // least used: tokens it served lately
@@ -364,6 +372,11 @@ type Weighed struct {
 	// "expiry" when it is when credits in them expire, sooner than they
 	// renew (Allowance.Pace)
 	DueBy string `json:"dueBy,omitempty"`
+	// Unreached: how many of Renews' windows, the biggest first, Smart
+	// passes over, as what they have left can't be used up before they
+	// renew unless the next one's is used first: the next one ranks it
+	// (left.unreached, #5639)
+	Unreached int `json:"unreached,omitempty"`
 	// Restarts: when that reset starts them again, set when it is sooner
 	// than its biggest window renews — Smart goes by it then (#718)
 	Restarts *time.Time `json:"restarts,omitempty"`
@@ -448,7 +461,10 @@ type Try struct {
 	Fixed string `json:"fixed,omitempty"`
 	// RuleEffort: the reasoning the group's rule asks the member for
 	// (Rule.UseEffort, #2633), which Effort is whatever was asked
-	RuleEffort string    `json:"ruleEffort,omitempty"`
+	RuleEffort string `json:"ruleEffort,omitempty"`
+	// MappedFrom: the level asked for, which the group's member it went
+	// to sends Effort in place of (Group.EffortMaps)
+	MappedFrom string    `json:"mappedFrom,omitempty"`
 	Fast       bool      `json:"fast,omitempty"` // sent in its vendor's fast mode, as the group's member it went to is
 	Start      time.Time `json:"start"`
 	Done       bool      `json:"done"`
@@ -584,6 +600,11 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 	}
 	if l, ok := wg.lefts[c.allowanceKey()]; ok {
 		w.Known, w.Used, w.Renews, w.Pace, w.Credits, w.CreditsFirst = true, l.used, l.renews, l.pace, l.credits, l.first
+		w.Unreached, w.Soon = l.unreached, l.soon
+		if !l.lapse.IsZero() {
+			lp := l.lapse
+			w.Lapse = &lp
+		}
 		w.WeekLow = l.weekLow && keepsWeek(p.Routing)
 		if !l.fullest.IsZero() {
 			ur := l.fullest

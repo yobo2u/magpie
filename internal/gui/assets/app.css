@@ -298,7 +298,7 @@ body.panel .seg { display: none; }
   color: var(--accent); background: var(--accent-soft);
   box-shadow: inset 0 0 0 .5px color-mix(in srgb, var(--accent) 35%, transparent);
   transition: background .15s, color .15s, transform .12s var(--ease), opacity .15s;
-  animation: update-in .45s var(--ease);
+  animation: update-in .3s var(--ease-out);
 }
 .update[hidden] { display: none; }
 .update:hover { background: var(--accent); color: var(--accent-fg); }
@@ -479,7 +479,7 @@ body.side-nav :is(#nav button[data-view], #prefs, .side-gw):active:not(.on) { ba
 /* the selection: one shape, sliding from row to row, setting off as the row
    is pressed (app.js navSubGlide) and most of the way there in a tenth of a
    second, so it is under the finger, not catching up with it */
-.nav-hl { position: absolute; z-index: 0; top: 0; left: 8px; right: 0; height: 26px; border-radius: 6px; background: color-mix(in srgb, var(--fg) 6.5%, transparent); pointer-events: none; will-change: transform; transition: transform .3s cubic-bezier(.25, .9, .3, 1), height .3s cubic-bezier(.25, .9, .3, 1); }
+.nav-hl { position: absolute; z-index: 0; top: 0; left: 8px; right: 0; height: 26px; border-radius: 6px; background: color-mix(in srgb, var(--fg) 6.5%, transparent); pointer-events: none; will-change: transform; transition: transform .24s var(--ease-out), height .24s var(--ease-out); }
 .nav-hl.still { transition: none; }
 @media (prefers-reduced-motion: reduce) { .nav-hl { transition: none; } }
 /* beside the sidebar a page whose head holds only its tools has them in the
@@ -527,7 +527,7 @@ body.side-nav :is(#usageTab, #view-library .lib-tabs, #view-plugins .lib-tabs, #
 /* the sidebar's button (app.js toggleSideNav), in the title bar where a Mac
    app has it: the drawing's left pane filled while the sidebar shows */
 .side-toggle { flex: none; }
-.side-toggle .st-pane { fill: currentColor; opacity: .32; transition: opacity .3s var(--ease); }
+.side-toggle .st-pane { fill: currentColor; opacity: .32; transition: opacity .2s var(--ease); }
 body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .side-toggle .st-pane { transition: none; } }
 /* the two layouts trade places as one motion (app.js navMorph): the sidebar
@@ -540,7 +540,7 @@ body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
    the spring the lists open on it left at speed, a twelfth of the way gone
    in the first frame, and a dropped one there (WebView2's, most) read as a
    jerk, then crept for a quarter second more (wangye1644294 on X) */
-:root { --morph-t: .32s; --morph-ease: cubic-bezier(.42, 0, .58, 1); }
+:root { --morph-t: .32s; --morph-ease: cubic-bezier(.77, 0, .175, 1); }
 .nav-morph #side { view-transition-name: side; }
 .nav-morph .brand { view-transition-name: brand; }
 .nav-morph #sideToggle { view-transition-name: side-toggle; }
@@ -621,11 +621,13 @@ body.window :is(#view-agents, #view-sessions, #view-providers, #view-routing, #v
    show where the reader is in them with a thin thumb, on the Mac too
    (PAMI on Discord: no page had a scrollbar) — the WebView draws the
    Mac's overlay one only while a trackpad scrolls, and a mouse never;
-   the heatmap's weeks that scroll sideways in their card too */
-body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll)::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; } /* across as thin as at the side (#1623) */
-body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll)::-webkit-scrollbar-thumb { background: var(--faint); border: 2px solid transparent; border-radius: 8px; background-clip: padding-box; }
-body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll)::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
-body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll)::-webkit-scrollbar-corner { background: transparent; }
+   the heatmap's weeks that scroll sideways in their card too, and a menu
+   or picker longer than its box, where a mouse got the system's thick dark
+   bar instead (the owner, Settings' Search API menu) */
+body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll, .pop, .pop ul)::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; } /* across as thin as at the side (#1623) */
+body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll, .pop, .pop ul)::-webkit-scrollbar-thumb { background: var(--faint); border: 2px solid transparent; border-radius: 8px; background-clip: padding-box; }
+body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll, .pop, .pop ul)::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+body.mac :is(.view, .modal .dialog, .modal .editor.framed > .ebody, .heat-scroll, .pop, .pop ul)::-webkit-scrollbar-corner { background: transparent; }
 /* WebKit lays a framed editor's grid out at the full width and then lets
    the 8px bar take its right edge, so a body that scrolled ran 8px wide
    and scrolled sideways; the bar's room is always kept, out of the right
@@ -654,18 +656,18 @@ body.window .row .ic { width: 22px; height: 22px; }
 .agent-more { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; border: 0; border-top: 1px solid var(--line-2); background: none; font: inherit; font-size: 12px; color: var(--muted); padding: 9px; cursor: pointer; transition: color .2s, background-color .2s; }
 .agent-more:hover { color: var(--fg); background: var(--card-2); }
 .agent-more span { display: inline-flex; }
-.agent-more .chev { transition: transform .5s cubic-bezier(.22, 1, .36, 1); }
+.agent-more .chev { transition: transform .26s var(--ease-out); }
 .agent-more[aria-expanded="true"] .chev { transform: rotate(180deg); }
 /* the folded agents unroll like a scroll: the height opens on a long ease-out,
    each row settles in a beat after the one above, and the unrolling edge is
    soft while it moves. Rolling up is quicker, bottom row first. */
-.agent-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .42s cubic-bezier(.4, 0, .2, 1); }
-.agent-fold.open { grid-template-rows: 1fr; transition-duration: .62s; transition-timing-function: cubic-bezier(.22, 1, .36, 1); }
+.agent-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .26s var(--ease-out); }
+.agent-fold.open { grid-template-rows: 1fr; transition-duration: .34s; }
 .agent-fold-inner { min-height: 0; overflow: hidden; }
 .agent-fold-inner > .row:first-child { border-top: 1px solid var(--line-2); }
 .agent-fold.moving .agent-fold-inner { -webkit-mask-image: linear-gradient(#000 calc(100% - 32px), transparent); mask-image: linear-gradient(#000 calc(100% - 32px), transparent); }
-.agent-fold .row { opacity: 0; transform: translateY(-10px) scale(.985); transform-origin: 50% 0; transition: opacity .22s ease, transform .32s cubic-bezier(.4, 0, .2, 1); transition-delay: calc((var(--n) - 1 - var(--i)) * 22ms); }
-.agent-fold.open .row { opacity: 1; transform: none; transition: opacity .42s ease, transform .56s cubic-bezier(.22, 1, .36, 1); transition-delay: calc(70ms + var(--i) * 48ms); }
+.agent-fold .row { opacity: 0; transform: translateY(-10px) scale(.985); transform-origin: 50% 0; transition: opacity .14s ease, transform .2s var(--ease-out); transition-delay: calc((var(--n) - 1 - var(--i)) * 22ms); }
+.agent-fold.open .row { opacity: 1; transform: none; transition: opacity .24s ease, transform .32s var(--ease-out); transition-delay: calc(30ms + var(--i) * 24ms); }
 
 /* the logo is the row's handle: drag it to move the row, and a click opens
    the row's menu (Move up, Move down, Hide). It stays the logo under the
@@ -773,7 +775,7 @@ body.window .row.agent .who .ag-cli { flex: 0 1 auto; overflow: hidden; }
 .ag-install-head { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted); padding: 4px 2px; cursor: pointer; transition: color .2s; }
 .ag-install-head:hover { color: var(--fg); }
 .ag-install-head span { display: inline-flex; }
-.ag-install-head .chev { transition: transform .3s cubic-bezier(.22, 1, .36, 1); }
+.ag-install-head .chev { transition: transform .22s var(--ease-out); }
 .ag-install-head[aria-expanded="true"] .chev { transform: rotate(180deg); }
 .ag-install-head:focus-visible { outline: 1.5px solid var(--fg-2); outline-offset: 1px; border-radius: 4px; }
 .ag-install-note { margin: 4px 2px 8px; font-size: 12px; line-height: 1.5; color: var(--muted); }
@@ -818,17 +820,17 @@ body.panel .ag-fix.ag-restart:hover { filter: none; background: color-mix(in srg
 body.window .agent-fold-cap { padding: 10px 14px 3px; }
 .agent-fold-cap + .row { border-top: 0; }
 .agent-fold .agent-fold-cap { opacity: 0; transition: opacity .22s ease; }
-.agent-fold.open .agent-fold-cap { opacity: 1; transition: opacity .42s ease; transition-delay: calc(70ms + var(--i) * 48ms); }
+.agent-fold.open .agent-fold-cap { opacity: 1; transition: opacity .24s ease; transition-delay: calc(30ms + var(--i) * 24ms); }
 /* the ones hidden by hand, last, behind a disclosure of their own that is
    shut until opened (a Finder sidebar section's): put away reads as put
    away, not as pinned under the agents in use */
 .agent-hid-line { display: flex; align-items: center; gap: 4px; width: 100%; margin: 0; padding-bottom: 8px; border-left: 0; border-right: 0; border-bottom: 0; background: none; font-family: inherit; text-align: start; cursor: pointer; }
 .agent-hid-line:hover { color: var(--fg-2); }
 .agent-hid-line:focus-visible { outline: 1.5px solid var(--fg-2); outline-offset: -2px; }
-.agent-hid-line .chev { display: inline-flex; transform: rotate(-90deg); transition: transform .3s cubic-bezier(.22, 1, .36, 1); }
+.agent-hid-line .chev { display: inline-flex; transform: rotate(-90deg); transition: transform .22s var(--ease-out); }
 .agent-hid-line[aria-expanded="true"] .chev { transform: none; }
-.agent-hid-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .42s cubic-bezier(.4, 0, .2, 1); }
-.agent-hid-fold.open { grid-template-rows: 1fr; transition-duration: .62s; transition-timing-function: cubic-bezier(.22, 1, .36, 1); }
+.agent-hid-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .26s var(--ease-out); }
+.agent-hid-fold.open { grid-template-rows: 1fr; transition-duration: .34s; }
 .agent-hid-inner { min-height: 0; overflow: hidden; }
 /* while a row is dragged the others slide out of its way */
 #agents.sorting { user-select: none; -webkit-user-select: none; }
@@ -1057,7 +1059,7 @@ body.window .field.solo { grid-column: auto; }
 .credit-days .cd-note { margin-top: 4px; font-size: 10px; color: var(--muted); }
 /* what was left over time (#651): a line a window, an even burn dashed, now
    upright; the range (or Off) is picked once, in the allowances' head */
-.quota-head .quota-trend { margin-right: 8px; }
+#view-usage .row-head.quota-head { gap: 8px; }
 .quota-curve { margin-top: 10px; }
 .quota-curve .qc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 10.5px; color: var(--muted); }
 .quota-curve .qc-range { font-size: 10px; color: var(--muted); }
@@ -1177,17 +1179,17 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 /* Inherited text supplies the inline baseline; the icon shares its centered cell. */
 .quota-refresh::before { content: "\00a0"; grid-area: 1 / 1; }
 .quota-refresh svg { grid-area: 1 / 1; }
-.subscription-card:hover .quota-refresh, .pq-card:hover .quota-refresh, .quota-refresh.busy, .quota-refresh.kept, .quota-refresh.reading { width: 14px; margin: 0 -2px 0 3px; opacity: 1; }
+.subscription-card:hover .quota-refresh, .pq-card:hover .quota-refresh, .quota-refresh.busy, .quota-refresh.kept, .quota-refresh.reading, #subscriptionUsage.reading .quota-refresh { width: 14px; margin: 0 -2px 0 3px; opacity: 1; }
 /* apart: Safari before 15.4 drops a whole selector list with :focus-visible in it */
 .quota-refresh:focus-visible { width: 14px; margin: 0 -2px 0 3px; opacity: 1; }
 .quota-refresh:hover { color: var(--fg); background: var(--pill-hover); }
 .quota-refresh.busy { cursor: default; }
-.quota-refresh.busy svg > *, .quota-refresh.reading svg > * { transform-box: view-box; transform-origin: 50% 50%; }
+.quota-refresh.busy svg > *, .quota-refresh.reading svg > *, #subscriptionUsage.reading .quota-refresh svg > * { transform-box: view-box; transform-origin: 50% 50%; }
 /* the other place's copy of a control that is turning (the tray panel's and the
    Usage page's draw the same account) turns by itself, as does a card kept
    from the last read while it is read again */
-.quota-refresh.spun svg > *, .quota-refresh.reading svg > * { animation: spin .8s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .quota-refresh.spun svg > *, .quota-refresh.reading svg > * { animation: none; } }
+.quota-refresh.spun svg > *, .quota-refresh.reading svg > *, #subscriptionUsage.reading .quota-refresh:not(.busy) svg > * { animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .quota-refresh.spun svg > *, .quota-refresh.reading svg > *, #subscriptionUsage.reading .quota-refresh:not(.busy) svg > * { animation: none; } }
 @media (hover: none) { .quota-refresh { width: 14px; margin: 0 -2px 0 3px; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .quota-refresh { transition: none; } }
 .skeleton { display: block; border-radius: 5px; background: linear-gradient(90deg, var(--skel, var(--pill)) 25%, var(--skel-hi, var(--pill-hover)) 45%, var(--skel, var(--pill)) 65%); background-size: 240% 100%; animation: skeleton-shift 1.4s ease-in-out infinite; }
@@ -1868,7 +1870,7 @@ body.panel .row.agent .ag-handle { width: 20px; height: 20px; margin: 0; }
 body.panel .row.agent .ic { width: 18px; height: 18px; }
 body.panel .row.agent .who { display: flex; align-items: center; gap: 6px; min-width: 0; }
 body.panel .row.agent > .ag-sum { justify-self: end; }
-body.panel .row.agent { transition: background-color .3s ease; }
+body.panel .row.agent { transition: background-color .16s ease; }
 body.panel .row.agent.open { background: var(--card-2); }
 .ag-sum { display: grid; grid-template-columns: auto 12px 10px; align-items: center; gap: 10px; min-width: 0; max-width: 100%; font-size: 12px; color: var(--muted); }
 .ag-sum .v { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
@@ -1878,18 +1880,18 @@ body.panel .row.agent.open { background: var(--card-2); }
    frame by frame), the words easing aside on the row's spring; the logo
    sits against them, fading and growing in a beat behind, and goes
    first on the way out. The clip is padded past the discs' rings. */
-.ag-sum .mi { display: flex; justify-content: flex-end; align-items: center; flex: none; width: 0; padding: 2px; margin: -2px -2px -2px -2px; overflow: hidden; transition: width .36s var(--row-spring), margin-right .36s var(--row-spring); }
+.ag-sum .mi { display: flex; justify-content: flex-end; align-items: center; flex: none; width: 0; padding: 2px; margin: -2px -2px -2px -2px; overflow: hidden; transition: width .22s var(--row-spring), margin-right .22s var(--row-spring); }
 .ag-sum .mi-in { display: flex; align-items: center; flex: none; width: max-content; opacity: 0; transform: scale(.6); transform-origin: 100% 50%; transition: opacity .14s ease, transform .3s var(--row-spring); }
 .row.agent .ag-sum .mi .ic { width: 14px; height: 14px; }
 .row.agent .ag-sum .mi .ic-stack .disc { width: 16px; height: 16px; }
 .row.agent .ag-sum .mi .ic-stack .disc > .ic { width: 10px !important; height: 10px !important; }
-.row.agent:hover .ag-sum .mi { width: calc(var(--w, 16px) + 4px); margin-right: 4px; transition: width .46s var(--row-spring), margin-right .46s var(--row-spring); }
-.row.agent:hover .ag-sum .mi-in { opacity: 1; transform: none; transition: opacity .28s ease .08s, transform .52s var(--row-spring) .04s; }
+.row.agent:hover .ag-sum .mi { width: calc(var(--w, 16px) + 4px); margin-right: 4px; transition: width .26s var(--row-spring), margin-right .26s var(--row-spring); }
+.row.agent:hover .ag-sum .mi-in { opacity: 1; transform: none; transition: opacity .18s ease .04s, transform .28s var(--row-spring) .02s; }
 @media (prefers-reduced-motion: reduce) { .ag-sum .mi, .ag-sum .mi-in, .row.agent:hover .ag-sum .mi, .row.agent:hover .ag-sum .mi-in { transition: none; } }
 #addSheet { scroll-margin-top: 12px; }
 .ag-sum .v.empty { color: var(--muted); }
-.ag-sum .chev { display: inline-flex; width: 10px; color: var(--faint); transform: rotate(-90deg); transition: transform .4s var(--row-spring); }
-.row.agent.open .ag-sum .chev { transition-duration: .48s; }
+.ag-sum .chev { display: inline-flex; width: 10px; color: var(--faint); transform: rotate(-90deg); transition: transform .26s var(--row-spring); }
+.row.agent.open .ag-sum .chev { transition-duration: .32s; }
 .row.agent.open .ag-sum .chev { transform: none; }
 .eff { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 10px; }
 .eff i { width: 2.5px; border-radius: 1px; background: var(--faint); opacity: .45; }
@@ -1902,10 +1904,10 @@ body.panel .row.agent.open { background: var(--card-2); }
    inside comes down a few px into place as it clears; closing, it lifts
    and is gone before the height is, so nothing is left to smear */
 body.panel { --row-spring: cubic-bezier(.25, .3, .1, 1); }
-.ag-open { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .4s var(--row-spring), visibility 0s .4s; }
-.row.agent.open .ag-open { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .48s var(--row-spring); }
-.ag-body { opacity: 0; transform: translateY(-6px); transition: opacity .16s ease, transform .4s var(--row-spring); }
-.row.agent.open .ag-body { opacity: 1; transform: none; transition: opacity .3s ease .06s, transform .48s var(--row-spring); }
+.ag-open { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows .26s var(--row-spring), visibility 0s .26s; }
+.row.agent.open .ag-open { grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows .32s var(--row-spring); }
+.ag-body { opacity: 0; transform: translateY(-6px); transition: opacity .12s ease, transform .26s var(--row-spring); }
+.row.agent.open .ag-body { opacity: 1; transform: none; transition: opacity .2s ease .04s, transform .32s var(--row-spring); }
 .ag-in { min-height: 0; overflow: hidden; }
 /* the room over the lines is inside what opens: a shut row is 36px, no more */
 .ag-body { display: flex; flex-direction: column; gap: 8px; padding: 9px 0 12px 30px; transform-origin: 50% 0; }
@@ -1954,7 +1956,7 @@ body.panel .profiles.open {
   background: var(--pop-bg); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
   border: 1px solid var(--line); border-radius: 11px; box-shadow: var(--shadow);
   transform-origin: 24px bottom; --pop-dy: 6px;
-  animation: pop-fade .18s ease-out, pop-in .42s cubic-bezier(.16, 1, .3, 1);
+  animation: pop-fade .14s ease-out, pop-in .24s var(--ease-out);
 }
 @media (prefers-reduced-motion: reduce) { body.panel .profiles.open { animation: pop-fade .12s ease-out; } }
 body.panel .profiles > .label { display: block; flex: 1 1 100%; padding: 0 2px; }
@@ -2166,12 +2168,12 @@ body.panel .foot { min-height: 0; padding: 5px 8px 7px 14px; border-top: 1px sol
 .text.primary:hover { filter: brightness(1.08); }
 .text.danger:hover { color: var(--red); background: var(--red-soft); }
 /* a partner listed since the add sheet last showed them (markNewPartners) */
-#addProvider.has-new::after { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 0 0 5px; border-radius: 50%; background: var(--accent); vertical-align: 6px; box-shadow: 0 0 0 0 var(--accent); animation: new-dot-in .4s cubic-bezier(.3, 1.6, .5, 1), new-dot-ring 2.4s ease-out .4s 2; }
-@keyframes new-dot-in { from { transform: scale(0); } }
+#addProvider.has-new::after { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 0 0 5px; border-radius: 50%; background: var(--accent); vertical-align: 6px; box-shadow: 0 0 0 0 var(--accent); animation: new-dot-in .3s cubic-bezier(.3, 1.6, .5, 1), new-dot-ring 2.4s ease-out .3s 2; }
+@keyframes new-dot-in { from { opacity: 0; transform: scale(.5); } }
 @keyframes new-dot-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
 /* and on the tile of each partner new when the sheet showed it, until it is opened (partnerTile) */
 .tile .new-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-.tile .new-dot.in { animation: new-dot-in .4s cubic-bezier(.3, 1.6, .5, 1), new-dot-ring 2.4s ease-out .4s 1; }
+.tile .new-dot.in { animation: new-dot-in .3s cubic-bezier(.3, 1.6, .5, 1), new-dot-ring 2.4s ease-out .3s 1; }
 @media (prefers-reduced-motion: reduce) { #addProvider.has-new::after, .tile .new-dot.in { animation: none; } }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 6px; min-height: 12px; }
 .chip {
@@ -2242,7 +2244,7 @@ body.window .foot .status:not(:empty):not(.lift) { position: fixed; left: 50%; b
    on the row under it (the Plugins page's Install at the window's foot)
    lands on the row. An error or warning stays selectable, to be copied. */
 body.window .foot .status:not(.err):not(.warn) { pointer-events: none; }
-.status { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .3s; }
+.status { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .2s; }
 .status.ok { color: var(--green); }
 .status.err { color: var(--red); }
 .status.warn { color: var(--amber); }
@@ -2280,13 +2282,13 @@ body .foot .status.lift { white-space: normal; overflow-wrap: anywhere; text-ove
      answer and a long soft settle with no bounce, the way iOS's menus come;
      it shows at once and fades out ahead of its motion on the way out */
   transform-origin: var(--ox, 24px) top;
-  animation: pop-fade .18s ease-out, pop-in .42s cubic-bezier(.16, 1, .3, 1);
+  animation: pop-fade .14s ease-out, pop-in .24s var(--ease-out);
 }
 .pop.up { transform-origin: var(--ox, 24px) bottom; --pop-dy: 6px; }
 @keyframes pop-fade { from { opacity: 0; } }
 @keyframes pop-in { from { transform: translateY(var(--pop-dy, -6px)) scale(.94); } }
 /* a closed picker's likeness going: it sinks back toward the button */
-.pop.leaving { pointer-events: none; animation: pop-out .22s cubic-bezier(.4, 0, .7, .2) forwards; }
+.pop.leaving { pointer-events: none; animation: pop-out .15s var(--ease-out) forwards; }
 @keyframes pop-out { to { opacity: 0; transform: translateY(calc(var(--pop-dy, -6px) * .6)) scale(.96); } }
 @media (prefers-reduced-motion: reduce) { .pop { animation: pop-fade .12s ease-out; } .pop.leaving { animation: none; } }
 .pop .search { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line-2); color: var(--faint); }
@@ -2297,7 +2299,7 @@ body .foot .status.lift { white-space: normal; overflow-wrap: anywhere; text-ove
 #pickerRail { position: relative; width: 43px; padding: 6px 5px; border-right: 1px solid var(--line-2); display: flex; flex-direction: column; align-items: center; gap: 3px; flex: none; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
 /* it draws its own thumb (.rail-thumb) */
 #pickerRail::-webkit-scrollbar { width: 0; height: 0; }
-.rail-thumb { position: absolute; z-index: 0; top: 0; left: 5px; width: 31px; height: 31px; border-radius: 8px; opacity: 0; background: var(--sel); box-shadow: inset 0 0 0 1px var(--line-2), 0 1px 2px rgba(0, 0, 0, .06); pointer-events: none; transition: transform 260ms cubic-bezier(.22, 1, .36, 1), opacity 100ms ease-out; will-change: transform; }
+.rail-thumb { position: absolute; z-index: 0; top: 0; left: 5px; width: 31px; height: 31px; border-radius: 8px; opacity: 0; background: var(--sel); box-shadow: inset 0 0 0 1px var(--line-2), 0 1px 2px rgba(0, 0, 0, .06); pointer-events: none; transition: transform 220ms var(--ease-out), opacity 100ms ease-out; will-change: transform; }
 .rail-item { position: relative; z-index: 1; width: 31px; height: 31px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); flex: none; transition: color 150ms ease-out, transform 150ms cubic-bezier(.25, 1, .5, 1); }
 .rail-item:hover { color: var(--fg); background: color-mix(in srgb, var(--pill) 68%, transparent); }
 .rail-item:active { transform: scale(.94); }
@@ -2558,7 +2560,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 /* Change key (#1869) looks like the copy button beside it, but isn't one */
 .copy, .key-edit { width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); flex: none; transition: background .12s, color .12s; }
 .copy:hover, .key-edit:hover { background: var(--pill-hover); color: var(--fg); }
-.copy.done { color: var(--green); background: var(--green-soft); animation: copy-pop .36s var(--ease); }
+.copy.done { color: var(--green); background: var(--green-soft); animation: copy-pop .26s var(--ease-out); }
 @keyframes copy-pop { 0% { transform: scale(.55); } 55% { transform: scale(1.16); } 100% { transform: scale(1); } }
 /* the snippet's language, and beside it the shell it is for (#1514);
    a narrow window puts the shell on a row of its own */
@@ -2781,8 +2783,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 /* an account signed out (#1363) shows its Remove without a hover: it is
    one of the two ways out of that state, beside Sign in again */
 .acc.signed-out .text.quiet { opacity: 1; }
-.acc.new { animation: sub-in .5s cubic-bezier(.2, .8, .2, 1); }
-.acc.new .dot { animation: copy-pop .45s cubic-bezier(.2, .8, .2, 1); }
+.acc.new { animation: sub-in .3s var(--ease-out); }
+.acc.new .dot { animation: copy-pop .3s var(--ease-out); }
 @keyframes sub-in { from { opacity: 0; transform: translateY(-4px); background: var(--pill-hover); } }
 .acc.add { width: 100%; color: var(--fg-2); background: none; border: 0 solid var(--line-2); cursor: default; }
 .acc + .acc.add { border-top-width: 1px; }
@@ -2875,13 +2877,13 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .alane-in { width: 64px; }
 /* a key's spend cap (sparkling_lemur_62868 on Discord): as the limit
    pill, and marked when the key is held at it */
-.acc .aspend { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; font: inherit; font-size: 11px; color: var(--muted); border: 0; border-radius: 5px; background: none; box-shadow: inset 0 0 0 1px var(--line); white-space: nowrap; cursor: default; opacity: 0; transition: opacity .15s, background .12s, color .12s; font-variant-numeric: tabular-nums; }
-.acc:hover .aspend, .acc.held .aspend, .acc .aspend.open, .acc .aspend.set { opacity: 1; }
-.acc .aspend:focus-visible { opacity: 1; }
-.acc .aspend.set { color: var(--fg); background: var(--pill-hover); box-shadow: none; }
-.acc .aspend.at-cap { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
-.acc .aspend:hover, .acc .aspend.open { color: var(--fg); background: var(--pill-hover); }
-.acc .aspend-in { width: 72px; }
+.acc :is(.aspend, .abal) { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 7px; font: inherit; font-size: 11px; color: var(--muted); border: 0; border-radius: 5px; background: none; box-shadow: inset 0 0 0 1px var(--line); white-space: nowrap; cursor: default; opacity: 0; transition: opacity .15s, background .12s, color .12s; font-variant-numeric: tabular-nums; }
+.acc:hover :is(.aspend, .abal), .acc.held :is(.aspend, .abal), .acc :is(.aspend, .abal).open, .acc :is(.aspend, .abal).set { opacity: 1; }
+.acc :is(.aspend, .abal):focus-visible { opacity: 1; }
+.acc :is(.aspend, .abal).set { color: var(--fg); background: var(--pill-hover); box-shadow: none; }
+.acc :is(.aspend, .abal).at-cap { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+.acc :is(.aspend, .abal):hover, .acc :is(.aspend, .abal).open { color: var(--fg); background: var(--pill-hover); }
+.acc :is(.aspend-in, .abal-in) { width: 72px; }
 .acc .acap-held { color: var(--fg); }
 /* held for magpie's requests, not the agent signed in to it: a warning */
 .acc .acap-held.acap-direct { color: var(--amber); }
@@ -2942,9 +2944,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .accts.keys .acc[data-account-id] { flex-wrap: wrap; row-gap: 3px; }
 .accts.keys .acc > .n { flex: 1000 1 4.5em; max-width: max-content; min-width: 0; }
 .accts.keys .acc .plan { flex: 1000 1 3em; max-width: max-content; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.accts.keys .acc > :is(.amodels, .proto, .alane, .aspend), .accts.keys .key-acts > .text.quiet { flex-shrink: 0; white-space: nowrap; }
-.accts.keys .acc > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set)), .accts.keys .key-acts > .text.quiet { overflow: hidden; }
-.accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set)):not(.open):not(:focus-visible),
+.accts.keys .acc > :is(.amodels, .proto, .alane, .aspend, .abal), .accts.keys .key-acts > .text.quiet { flex-shrink: 0; white-space: nowrap; }
+.accts.keys .acc > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set), .abal:not(.set)), .accts.keys .key-acts > .text.quiet { overflow: hidden; }
+.accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set), .abal:not(.set)):not(.open):not(:focus-visible),
 .accts.keys .acc:not(:hover):not(.held) .key-acts > .text.quiet:not(:focus-visible) { min-width: 0; max-width: 0; padding-left: 0; padding-right: 0; box-shadow: none; }
 /* and hidden, the gap beside it too */
 .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set)):not(.open):not(:focus-visible) { margin-left: -9px; }
@@ -2952,17 +2954,17 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 /* the limit pill unset on a key's row is quiet text, as the row's other
    hover-only controls: no padding to keep, and hidden it takes back the
    gap before it too (#892) */
-.accts.keys .acc > :is(.alane, .aspend):not(.set):not(.open):not(:focus-visible) { padding: 0; box-shadow: none; background: none; }
-.accts.keys .acc:not(:hover):not(.held) > :is(.alane, .aspend):not(.set):not(.open):not(:focus-visible) { margin-left: -9px; }
+.accts.keys .acc > :is(.alane, .aspend, .abal):not(.set):not(.open):not(:focus-visible) { padding: 0; box-shadow: none; background: none; }
+.accts.keys .acc:not(:hover):not(.held) > :is(.alane, .aspend, .abal):not(.set):not(.open):not(:focus-visible) { margin-left: -9px; }
 /* Safari before 15.4 has no :focus-visible and drops the rules above
    whole: there a focused control stays out on :focus instead */
 @supports not selector(:focus-visible) {
-  .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set)):not(.open):not(:focus),
+  .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set), .alane:not(.set), .aspend:not(.set), .abal:not(.set)):not(.open):not(:focus),
   .accts.keys .acc:not(:hover):not(.held) .key-acts > .text.quiet:not(:focus) { min-width: 0; max-width: 0; padding-left: 0; padding-right: 0; box-shadow: none; }
   .accts.keys .acc:not(:hover):not(.held) > :is(.amodels:not(.set), .proto:not(.set)):not(.open):not(:focus) { margin-left: -9px; }
   .accts.keys .acc:not(:hover):not(.held) .key-acts > .text.quiet:not(:focus) { margin-right: -9px; }
-  .accts.keys .acc > :is(.alane, .aspend):not(.set):not(.open):not(:focus) { padding: 0; box-shadow: none; background: none; }
-  .accts.keys .acc:not(:hover):not(.held) > :is(.alane, .aspend):not(.set):not(.open):not(:focus) { margin-left: -9px; }
+  .accts.keys .acc > :is(.alane, .aspend, .abal):not(.set):not(.open):not(:focus) { padding: 0; box-shadow: none; background: none; }
+  .accts.keys .acc:not(:hover):not(.held) > :is(.alane, .aspend, .abal):not(.set):not(.open):not(:focus) { margin-left: -9px; }
 }
 .accts.keys .acc > .key-acts { flex: none; display: flex; align-items: center; gap: 9px; margin-left: auto; }
 .accts.keys .acc .using, .accts.keys .key-acts > .text:not(.quiet) { flex: none; white-space: nowrap; }
@@ -3431,7 +3433,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
    starts where the fields do (--ed-at), no padding before it. */
 .editor .more summary { font-size: 12px; line-height: 18px; color: var(--fg-2); list-style: none; display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; margin-left: var(--ed-at, 86px); border-radius: 4px; cursor: pointer; transition: color .12s; }
 .editor .more summary::-webkit-details-marker { display: none; }
-.editor .more summary::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--muted); transition: transform .42s cubic-bezier(.32, .72, 0, 1), background-color .12s;
+.editor .more summary::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--muted); transition: transform .24s var(--ease-out), background-color .12s;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3.6 1.6 7 5 3.6 8.4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
           mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3.6 1.6 7 5 3.6 8.4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
 .editor .more[open]:not(.closing) summary::before { transform: rotate(90deg); }
@@ -3889,19 +3891,32 @@ input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; m
 /* a search API's base URL (#1580): on a line of its own under the key */
 .prefs .row.search-add .val.rule-add { flex-wrap: wrap; row-gap: 6px; }
 .prefs .row.search-add input.words.search-url { flex: 1 1 100%; }
-/* a search API's key, shown: selectable, and broken anywhere rather than widening the row */
-.search-api .sub.revealed { font-family: var(--code-font, var(--code)); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-:where(html[data-fonts]) .search-api .sub.revealed { font-style: var(--code-style, inherit); font-weight: var(--code-weight, inherit); font-stretch: var(--code-stretch, 100%); }
-/* a search API's keys and what each has used of its limit */
-/* how its searches pick a key, and Check again: wrapped, right-aligned, on a
-   narrow window in a long language rather than past its edge */
+/* a search API's keys (辰林鸭~ on Discord), listed as a provider's are:
+   how its searches pick one and Check again wrapped and right-aligned on a
+   narrow window in a long language rather than past its edge; each key's
+   rest and what it has used on a line under it */
 .row.pref.search-keys .val { flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.search-quota { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; font-size: 12px; min-width: 0; }
-.search-quota .quota-key { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
-.search-quota code { font-family: var(--code-font, var(--code)); color: var(--muted); }
-.search-quota .faint { color: var(--muted); overflow-wrap: anywhere; }
-.search-quota .err { color: var(--red); overflow-wrap: anywhere; }
-.search-quota .warn { color: var(--amber); }
+.row.pref.search-keys .who { min-width: 0; }
+.search-key-list { margin-top: 8px; }
+.search-key-list > .acc { position: relative; flex-wrap: wrap; row-gap: 2px; cursor: default; }
+.search-key-list > .acc code.n { font-family: var(--code-font, var(--code)); font-weight: 400; color: var(--fg-2); }
+.search-key-list > .acc code.revealed { white-space: normal; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; cursor: text; }
+.search-key-list > .acc.off code.n { opacity: .55; }
+.search-key-list > .acc .key-state { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 10px; padding-left: 25px; font-size: 11.5px; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.search-key-list .key-state .warn { color: var(--amber); }
+.search-key-list .key-state .err { color: var(--red); }
+.search-key-list .key-quota { display: contents; }
+.search-key-list > .acc.adding { display: flex; align-items: center; gap: 6px; }
+.search-key-list > .acc.adding input { flex: 1 1 12em; min-width: 0; }
+.search-key-list.reorderable > .acc:not(.add, .adding) { cursor: grab; touch-action: pan-y; }
+.search-key-list.reorderable > .acc:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.search-key-list > .acc > .grip { position: absolute; left: 2px; top: 19px; translate: 0 -50%; width: 6px; height: 11px; background: radial-gradient(circle, var(--muted) .9px, transparent 1.2px) 0 0 / 3px 3.75px; opacity: 0; transition: opacity .15s; pointer-events: none; }
+.search-key-list > .acc:is(:hover, .dragging) > .grip { opacity: 1; }
+.search-key-list > .acc:focus-visible > .grip { opacity: 1; }
+@media (hover: none) { .search-key-list > .acc > .grip { opacity: 1; } }
+.search-key-list.sorting { user-select: none; -webkit-user-select: none; }
+.search-key-list.sorting > .acc { transition: transform .16s cubic-bezier(.22, 1, .36, 1); cursor: grabbing; }
+.search-key-list.sorting > .acc.dragging { z-index: 2; background: var(--card-2); box-shadow: 0 0 0 1px var(--line); transition: none; }
 .prefs .val.rule-add .segs { margin-left: 0; }
 /* a search API and its keys' row, dragged as one into the order they are
    asked in (#2286); its grip shows only under the pointer, and one
@@ -4031,7 +4046,7 @@ input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; m
    One easing everywhere (iOS-ish: quick start, soft landing), short
    durations, small distances. Pressing gives a little, pages settle in,
    dialogs lift. */
-:root { --ease: cubic-bezier(.2, .8, .2, 1); }
+:root { --ease: cubic-bezier(.2, .8, .2, 1); --ease-out: cubic-bezier(.23, 1, .32, 1); }
 .text, .icon, .tile, .achip, .mchip, .use, .link {
   transition-property: background, background-color, color, border-color, box-shadow, filter, opacity, transform;
   transition-duration: .16s; transition-timing-function: var(--ease);
@@ -4047,7 +4062,7 @@ input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; m
 
 /* the theme crossfades instead of snapping */
 html.theming, html.theming *, html.theming *::before, html.theming *::after {
-  transition: background-color .35s var(--ease), background .35s var(--ease), color .35s var(--ease), border-color .35s var(--ease), box-shadow .35s var(--ease) !important;
+  transition: background-color .25s var(--ease), background .25s var(--ease), color .25s var(--ease), border-color .25s var(--ease), box-shadow .25s var(--ease) !important;
 }
 
 /* Confirmation uses the top layer so an open editor remains intact underneath. */
@@ -4282,10 +4297,10 @@ body.panel .modal { padding: 16px 12px; }
   body.web .acc > .grow + * { margin-left: auto; }
   /* nothing hovers on a phone: what a row shows on hover is shown, and a
      key's row gives it back the room it folds away till a hover (#841) */
-  body.web .acc :is(.text.quiet, .proto, .amodels, .alane, .aspend) { opacity: 1; }
+  body.web .acc :is(.text.quiet, .proto, .amodels, .alane, .aspend, .abal) { opacity: 1; }
   body.web .acc .acc-more { opacity: 1; }
-  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend), body.web .accts.keys .key-acts > .text.quiet { max-width: none !important; padding: 0 7px !important; flex-shrink: 0 !important; }
-  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend):not(.set) { margin-left: 0 !important; }
+  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend, .abal), body.web .accts.keys .key-acts > .text.quiet { max-width: none !important; padding: 0 7px !important; flex-shrink: 0 !important; }
+  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend, .abal):not(.set) { margin-left: 0 !important; }
   body.web .accts.keys .key-acts > .text.quiet { margin-right: 0 !important; }
   body.web #gatewayKeys .acc > .key-quotas { max-width: none !important; padding: 0 7px !important; margin-left: 0 !important; flex-shrink: 0; }
   body.web #gatewayKeys .acc > .key-quotas:not(.set) { box-shadow: inset 0 0 0 1px var(--line) !important; }
@@ -4349,6 +4364,15 @@ body.panel .modal { padding: 16px 12px; }
 .prefs .row.pref.auto-backup .who { flex: 1 1 200px; }
 .prefs .row.pref.auto-backup .sub { white-space: normal; }
 .prefs .row.pref.auto-backup .val { margin-left: auto; max-width: 100%; }
+/* Versions folds the list of versions away (chen2652): its name and the
+   line under it open it, a chevron after the name turned down while open */
+.prefs .row.pref.auto-backup .who.auto-backup-folds { cursor: pointer; }
+.auto-backup-fold { display: inline-flex; align-items: center; gap: 4px; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.auto-backup-fold .chev { display: inline-flex; color: var(--faint); transition: transform .15s ease-out, color .12s; }
+.auto-backup-folds:hover .auto-backup-fold .chev { color: var(--muted); }
+.auto-backup-fold[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.auto-backup-fold:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { .auto-backup-fold .chev { transition: none; } }
 
 /* the usual context windows under the field, one click each (#120) */
 .cxpicks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
@@ -4404,7 +4428,7 @@ body.panel .modal { padding: 16px 12px; }
 .sess-indexing:not(.known) .si-pct { display: none; }
 .si-line { margin-top: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .si-tip { font-size: 11.5px; color: var(--faint, var(--muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.si-tip.in { animation: si-tip .6s ease-out; }
+.si-tip.in { animation: si-tip .3s var(--ease-out); }
 @keyframes si-tip { from { opacity: 0; transform: translateY(3px); } }
 .si-field { position: relative; align-self: stretch; min-width: 0;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%, #000 94%, transparent);
@@ -4477,7 +4501,7 @@ body.panel .modal { padding: 16px 12px; }
 /* how often the Usage page reads its numbers again, and a way to read them now */
 .usage-refresh { display: inline-flex; align-items: center; gap: 2px; margin-right: 10px; }
 .usage-refresh .icon { width: 24px; height: 24px; }
-.usage-refresh .icon.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
+.usage-refresh .icon.busy svg > *, .usage-refresh .icon.reading svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
 .usage-refresh .sess-pick { height: 24px; }
 .led-rank .rk .rk-b { overflow-wrap: anywhere; }
 

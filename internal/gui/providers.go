@@ -193,7 +193,10 @@ type providerJSON struct {
 	// Balance URL, and its field (provider.BalanceFound)
 	BalanceFound      string `json:"balanceFound,omitempty"`
 	BalanceFoundField string `json:"balanceFoundField,omitempty"`
-	ModelsURL         string `json:"modelsURL,omitempty"`
+	// its keys may have a balance typed by hand, their vendor telling
+	// none (provider.TakesOwnBalance)
+	TakesOwnBalance bool   `json:"takesOwnBalance,omitempty"`
+	ModelsURL       string `json:"modelsURL,omitempty"`
 	// an account-wide balance token (provider.BalanceToken): whether the
 	// vendor takes one, and whether one is saved; never the token itself
 	BalanceToken struct {
@@ -280,6 +283,9 @@ type providerJSON struct {
 	// LibraryMCP: a Remote magpie whose router is a Library server, or
 	// is to be one (library.RemoteMCPOn)
 	LibraryMCP bool `json:"libraryMCP,omitempty"`
+	// RemoteUpdate: a Remote magpie's word on its last ask to follow
+	// this magpie's version (remoteUpdateNote)
+	RemoteUpdate *remoteUpdateJSON `json:"remoteUpdate,omitempty"`
 	// CapStop and CapCareful: how its accounts end at their caps
 	// (plugins#349), set on their own with capstop and capcareful
 	CapStop    bool `json:"capStop,omitempty"`
@@ -549,6 +555,9 @@ type gatewayJSON struct {
 	// PublicURL is MAGPIE_PUBLIC_URL when it is among LANURLs: Connect
 	// starts there until the user picks an address (#1551)
 	PublicURL string `json:"publicURL,omitempty"`
+	// PublicKind is gateway.URLKind's of PublicURL, which Connect and
+	// the list above it name it by
+	PublicKind string `json:"publicKind,omitempty"`
 	// LANPublic are those of LANURLs at an internet address, which anyone
 	// online reaches, not only this network
 	LANPublic []string `json:"lanPublic,omitempty"`
@@ -852,6 +861,16 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 			ks.Reset = &reset
 		}
 		out.KeyList[i].Spend = ks
+	}
+	// and one with a balance typed, what is left of it (the card on the
+	// Usage page shows the same, provider.ownBalanceCard)
+	out.TakesOwnBalance = p.TakesOwnBalance()
+	for i, k := range out.KeyList {
+		b, ok := p.KeyOwnBalance(k.ID)
+		if !ok {
+			continue
+		}
+		out.KeyList[i].Balance = &provider.BalanceEstimate{Set: b.USD, At: b.At, Spent: usage.KeySpent(k.ID, b.At)}
 	}
 	if !out.Key.Set && p.Ready() {
 		out.Key.Optional = true
@@ -1191,6 +1210,7 @@ func providersState() providersJSON {
 				remoteMCP = library.RemoteMCPOn()
 			}
 			info.LibraryMCP = remoteMCP[p.ID]
+			info.RemoteUpdate = remoteUpdateNote(p.ID, time.Now())
 		}
 		s.Providers = append(s.Providers, info)
 	}
@@ -1212,7 +1232,7 @@ func providersState() providersJSON {
 		s.Gateway.LANPublic = gateway.PublicURLs(s.Gateway.LANURLs)
 		s.Gateway.Container, s.Gateway.ContainerHost = gateway.ContainerAddrs(), gateway.ContainerHostURL()
 		if u := gateway.PublicURL(); slices.Contains(s.Gateway.LANURLs, u) {
-			s.Gateway.PublicURL = u
+			s.Gateway.PublicURL, s.Gateway.PublicKind = u, gateway.URLKind(u)
 		}
 	}
 	for _, e := range cat {
@@ -1631,6 +1651,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// (its id), in USD a day, a month or in all; none, or an
 			// amount of 0, takes it off
 			Spend *provider.SpendCap `json:"spend"`
+			// Balance, for keyownbalance: the balance in USD typed for the
+			// key Account (its id), counted from now; none takes it off
+			Balance *float64 `json:"balance"`
 			// Alias, for accountname: the account's name of the user's
 			// own, "" to take it off (#1515)
 			Alias string `json:"alias"`
@@ -2035,8 +2058,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.AccountCaps, in.AccountWindowCaps = old.AccountCaps, old.AccountWindowCaps
 					in.AccountConcurrency = old.AccountConcurrency
 					in.AccountWeights = old.AccountWeights
-					in.AccountNames = old.AccountNames // with accountname
-					in.KeySpendCaps = old.KeySpendCaps // with keyspendcap
+					in.AccountNames = old.AccountNames     // with accountname
+					in.KeySpendCaps = old.KeySpendCaps     // with keyspendcap
+					in.KeyOwnBalances = old.KeyOwnBalances // with keyownbalance
 				}
 				// the image models unticked in its editor likewise: []
 				// shows them all (321sssrt on X)
@@ -2320,6 +2344,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				c = &provider.SpendCap{USD: req.Spend.USD, Period: req.Spend.Period}
 			}
 			if err := provider.SetKeySpendCap(in.ID, req.Account, c); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "keyownbalance":
+			if err := provider.SetKeyOwnBalance(in.ID, req.Account, req.Balance); err != nil {
 				fail(rw, err)
 				return
 			}

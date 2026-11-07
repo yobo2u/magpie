@@ -572,6 +572,13 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.serveSystemOneBody(w, r, body)
+}
+
+// serveSystemOneBody answers a System One request read: from
+// /v1/systemone, or one /v1/decisions was translated to
+// (decisions_systemone.go).
+func (s *Server) serveSystemOneBody(w http.ResponseWriter, r *http.Request, body []byte) {
 	var q struct {
 		Model string `json:"model"`
 	}
@@ -595,6 +602,12 @@ func (s *Server) serveSystemOne(w http.ResponseWriter, r *http.Request) {
 	}
 	p, model, err := provider.RouteDecider(q.Model)
 	if err != nil {
+		// no decision model by that name, but one OpenAI's Decisions
+		// API serves: asked there, the request and its answer
+		// translated (decisions_systemone.go)
+		if st := provider.DecideRouteStatus(err); st == http.StatusNotFound && s.systemOneByDecisions(w, r, body, q.Model) {
+			return
+		}
 		writeError(w, provider.Chat, provider.DecideRouteStatus(err), err.Error())
 		return
 	}
@@ -889,4 +902,39 @@ func agentEffort(proto provider.Protocol, body []byte) string {
 		return requestEffort(proto, body)
 	}
 	return strings.ToLower(strings.TrimSpace(bodyEffort(proto, body)))
+}
+
+// askedLevel is the reasoning level a request asks for (agentEffort),
+// and "none" for an Anthropic one that turns thinking off: a member's
+// EffortMaps may send it a level all the same.
+func askedLevel(proto provider.Protocol, body []byte) string {
+	if e := agentEffort(proto, body); e != "" || proto != provider.Anthropic {
+		return e
+	}
+	var v struct {
+		Thinking *struct {
+			Type string `json:"type"`
+		} `json:"thinking"`
+	}
+	if decodeJSON(body, &v) == nil && v.Thinking != nil && v.Thinking.Type == "disabled" {
+		return "none"
+	}
+	return ""
+}
+
+// mappedLevel is the level a member's map sends in place of in, and
+// whether it names one. Codex's ultra is max with agents of its own, so
+// a map from max takes it too.
+func mappedLevel(to map[string]string, in string) (string, bool) {
+	if in == "" {
+		return "", false
+	}
+	if l, ok := to[in]; ok {
+		return l, true
+	}
+	if in == "ultra" {
+		l, ok := to["max"]
+		return l, ok
+	}
+	return "", false
 }

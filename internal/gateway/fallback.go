@@ -59,6 +59,10 @@ type candidate struct {
 	// (Member.Levels, "provider/model:low+high"): what the agent asks is
 	// sent at the nearest of them. nil for one fixed or following the group.
 	levels []string
+	// effortMap is, for a member following the group, the level it sends
+	// in place of the one asked for (Member.EffortMap); nil sends it as
+	// asked
+	effortMap map[string]string
 	// fast is set on a member the group sends in its vendor's fast mode
 	// (Group.Fast); ultra on an agent's fast pick sent Ultrafast (#1954)
 	fast, ultra bool
@@ -586,7 +590,7 @@ func planFallbackGroup(g provider.Group, ms []provider.Member, from provider.Pro
 	var asides []candidate
 	var wAsides []Weighed
 	out := planLevel(g, ms, 0, from, pl, &asides, &wAsides, []provider.Group{g})
-	if sinks(g.Sink, g.Routing) {
+	if sinks(g.Sinks(), g.Routing) {
 		var order []Weighed
 		out, order = sinkPlanned(out, pl.order[at:])
 		pl.order = append(pl.order[:at], order...)
@@ -621,7 +625,7 @@ func (s *Server) planGroup(g provider.Group, ms []provider.Member, from provider
 	var asides []candidate
 	var wAsides []Weighed
 	out := planLevel(g, ms, 0, from, &pl, &asides, &wAsides, nil)
-	if sinks(g.Sink, g.Routing) {
+	if sinks(g.Sinks(), g.Routing) {
 		out, pl.order = sinkPlanned(out, pl.order)
 	}
 	out, pl.order = append(out, asides...), append(pl.order, wAsides...)
@@ -648,10 +652,11 @@ func placed(ms []provider.Member, cs []candidate) {
 }
 
 // innerFirstToken is the FirstToken of the innermost group m is in
-// (m.Via, the outermost first) that sets one, 0 for none.
+// (m.Via, the outermost first) that sets one, 0 for none:
+// provider.FirstTokenWait counts as set, so an inner Wait waits.
 func innerFirstToken(m provider.Member) int {
 	for i := len(m.Via) - 1; i >= 0; i-- {
-		if m.Via[i].FirstToken > 0 {
+		if m.Via[i].FirstToken != 0 {
 			return m.Via[i].FirstToken
 		}
 	}
@@ -698,7 +703,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 		// the same model at another effort is another member's
 		for _, l := range [][]candidate{cs, aside, left, barred} {
 			for i := range l {
-				l[i].effort, l[i].levels, l[i].fast = m.Effort, m.Levels, m.Fast
+				l[i].effort, l[i].levels, l[i].effortMap, l[i].fast = m.Effort, m.Levels, m.EffortMap, m.Fast
 				l[i].firstToken = innerFirstToken(m)
 				l[i].patience = innerPatience(m)
 				if len(m.Path) > 0 {
@@ -871,7 +876,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 // (#576) and rules, and its Sink was left unread, only the group the
 // agent asked for sinking.
 func sinkOwn(sub provider.Group, cs []candidate, order []Weighed) ([]candidate, []Weighed) {
-	if !sinks(sub.Sink, sub.Routing) {
+	if !sinks(sub.Sinks(), sub.Routing) {
 		return cs, order
 	}
 	return sinkPlanned(cs, order)
@@ -2152,6 +2157,19 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 // the agent has the error at once.
 var wallCodes = map[string]bool{"user_model_rate_limited": true}
 
+// zcodeRateWall is ZCode's account-wide 429, the same bucket as
+// wallCodes' (#5406, erlinerd): rested and retried, the 429 came back, and
+// two further accounts sat there while magpie kept asking (yetone on two
+// Discord reports, v0.1.3216). It is matched by the ZCode plugin's own
+// naming of the refusal, the vendor's three-part label `[1302][<its
+// words>][<its request id>]`, its words whole — the shape the two log
+// lines of #5406 show — never by the bare code: Zhipu's own API answers
+// 1302 for a concurrency or minute limit ("并发数过高", "您的账户已达到速率限制"
+// with no label), which a moment does clear, and a GLM key asked again
+// in place stays so. The words and the id together are the label's own,
+// not words anywhere in the body a prompt may quote.
+var zcodeRateWall = regexp.MustCompile(`\[1302\]\[您的账户已达到速率限制[^\]]*\]\[[0-9a-fA-F]{16,}\]`)
+
 // walled says whether body is a refusal whose error.code is one of
 // wallCodes: the code where the vendor puts it, not the words anywhere in
 // the body (a prompt or a message quoting it).
@@ -2161,11 +2179,14 @@ func walled(body []byte) bool {
 			Code json.RawMessage `json:"code"`
 		} `json:"error"`
 	}
-	if json.Unmarshal(body, &e) != nil {
+	if err := json.Unmarshal(body, &e); err != nil {
 		return false
 	}
 	var code string
-	return json.Unmarshal(e.Error.Code, &code) == nil && wallCodes[code]
+	if json.Unmarshal(e.Error.Code, &code) == nil && wallCodes[code] {
+		return true
+	}
+	return zcodeRateWall.Match(wordsOf(body))
 }
 
 // withRoom is, of the candidates left, those another member than c's may
