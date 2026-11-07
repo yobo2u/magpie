@@ -6339,11 +6339,8 @@ function providerHandle(p, row) {
   return b;
 }
 
-// The ids of the providers that are on, in their order, and of those a
-// search shows. While searching, a provider moves among the ones shown:
-// Alt+↑ puts it just above the one shown above it, a drop puts it where the
-// row dropped on was; the ones hidden keep their order among themselves.
-// Move to Top and Move to Bottom go to the top or the bottom of them all.
+// The providers on, in order, and those a search shows: while searching, one
+// moves among those shown; the hidden keep their order.
 const onProviderIds = () => providers.providers.filter((x) => !x.off).map((x) => x.id);
 const shownProviderIds = () => [...$("#providers").children].filter((r) => r.classList.contains("provider") && !r.hidden).map((r) => r.dataset.id);
 const shownToOn = (id) => (id ? onProviderIds().indexOf(id) : -1);
@@ -6353,9 +6350,8 @@ function stepProvider(id, by, keyboard) {
   arrangeProvider(id, shownToOn(shown[i + by]), keyboard);
 }
 
-// openProviderMenu: a provider row's right-click, the quick way through a
-// long list (#1614): Move to Top and Move to Bottom beside one step up or
-// down, each with its keys.
+// openProviderMenu: a row's right-click (#1614), and Use first, which Smart
+// tries first (hzh_1119 on Discord)
 function openProviderMenu(anchor, p) {
   if (!anchor) return;
   const again = agentMenu?.anchor === anchor;
@@ -6369,18 +6365,14 @@ function openProviderMenu(anchor, p) {
     { name: "Move up", icon: MOVE_UP, key: ALT + "↑", off: k <= 0, run: () => stepProvider(p.id, -1) },
     { name: "Move down", icon: MOVE_DOWN, key: ALT + "↓", off: k < 0 || k >= shown.length - 1, run: () => stepProvider(p.id, 1) },
     { name: "Move to bottom", icon: MOVE_BOTTOM, key: ALT + SHIFT + "↓", off: i === on.length - 1, run: () => arrangeProvider(p.id, on.length - 1) },
+    { name: "Use first", icon: p.useFirst ? CHECK : "", sep: !0, run: () => accountAction("provider/usefirst", { id: p.id, useFirst: !p.useFirst }, t(p.useFirst ? "{name} takes its turn with the others" : "{name} is used first", { name: p.name })) },
     ...magpie.actions?.("provider", { provider: { id: p.id, name: p.name } }) || [],
   ]);
 }
 
-// Providers' search (#1614, ququdu: "供应商很多，然后经常需要翻找"): the
-// words typed keep the rows that say them all, on and off alike, matched on
-// the row's own text and on what it doesn't show: its id, preset, addresses,
-// each account's user and plan, and the keys' names. The words it doesn't
-// say are one model's it serves, separators aside ("opus 5.5" finds
-// claude-opus-5-5), named under the row (frankdeng, Neo). The ones turned
-// off show unfolded while searching. Escape or clearing the box brings back
-// every row, the fold as it was.
+// Providers' search (#1614): the rows saying every word, on and off, by their
+// text, ids, addresses, users and keys; a word they don't say is a model's
+// they serve, named under the row (frankdeng, Neo).
 let pvQuery = "";
 function providerText(p, row) {
   const a = p.account;
@@ -17945,10 +17937,10 @@ function autoResetTitle(on) {
 
 // How long before a reset runs out it is used (codexResetLead; the owner, 10-30):
 // half an hour unless set or out of range, as the gateway reads it. RESET_LEADS in minutes.
-const RESET_LEADS = [5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
+const RESET_LEADS = [3, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
 function resetLeadMinutes(s = state?.settings) {
   const m = s?.codexResetLead;
-  return Number.isInteger(m) && m >= 5 && m <= 1440 ? m : 30;
+  return Number.isInteger(m) && m >= 3 && m <= 1440 ? m : 30;
 }
 function resetLeadWords(m) {
   return m < 60 || m % 60 ? t("{n} min", { n: m }) : t("{n} h", { n: m / 60 });
@@ -23846,13 +23838,8 @@ function navSubGlide(box, row) {
   hl.style.transform = `translateY(${row.offsetTop}px)`;
   hl.style.height = row.offsetHeight + "px";
 }
-// The open page's row beside the sidebar is marked by one shape too
-// (.nav-top-hl), which moves to the row picked on a spring, as iOS moves a
-// selection: quick off the mark, settling softly with the least overshoot.
-// Being physics, not a timed curve, it is never thrown: a press that
-// changes its mind turns it with the speed it has, and it follows its row
-// while a list above folds away, landing where the row ends up rather
-// than where it was when the press came.
+// the open page's row is marked by one shape too (.nav-top-hl), sent on a
+// spring; a press that changes its mind turns it with the speed it has
 var NAV_SPRING = { response: 0.42, damping: 0.84 }; // seconds, fraction: SwiftUI's terms
 var navTop = { row: null, y: 0, h: 0, vy: 0, vh: 0, at: 0, raf: 0, seen: false };
 const navTopOn = () => $("#nav")?.querySelector("button[data-view].on") || null;
@@ -23863,8 +23850,7 @@ function navTopHl() {
     hl = el("i", "nav-top-hl");
     hl.hidden = true;
     nav.append(hl);
-    // the rows moved at rest (the window, the language, a page left out):
-    // the shape stays on its row
+    // the rows moved at rest: the shape stays on its row
     new ResizeObserver(() => { if (!navTop.raf && navTop.row && !hl.hidden) navTopPut(hl, navTop.row); }).observe(nav);
   }
   return hl;
@@ -23883,9 +23869,7 @@ function navTopGo(row, glide) {
   const nav = $("#nav"), hl = navTopHl();
   const to = sideNav() && row && !row.hidden && row.offsetParent ? row : null;
   nav.classList.toggle("hl-on", !!to);
-  // the same row, the shape still: the rows moved under it, not a pick, so
-  // it stays on its row. And one not on screen yet (the window opening on
-  // the page it was left on) is put there, not sent
+  // the same row at rest, or the window opening: put there, not sent
   if (to && ((to === navTop.row && !navTop.raf) || !navTop.seen)) glide = false;
   navTop.row = to;
   if (!to) { cancelAnimationFrame(navTop.raf); navTop.raf = 0; hl.hidden = true; return; }
@@ -23902,13 +23886,23 @@ function navTopGo(row, glide) {
   }
   if (!navTop.raf) { navTop.at = performance.now(); navTop.raf = requestAnimationFrame(navTopStep); }
 }
+// where row comes to rest once a list above it has folded (小李 on Discord)
+function navTopLands(row) {
+  let y = row.offsetTop;
+  for (const b of row.parentElement.querySelectorAll(":scope > .nav-sub.leaving")) {
+    if (!(b.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+    const cs = getComputedStyle(b);
+    y -= b.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+  }
+  return y;
+}
 function navTopStep(now) {
   const nav = $("#nav"), hl = nav?.querySelector(":scope > .nav-top-hl"), row = navTop.row;
   if (!hl || !row?.isConnected) { navTop.raf = 0; return; }
   const dt = Math.min(1 / 30, Math.max(0, (now - navTop.at) / 1000));
   navTop.at = now;
   const k = (2 * Math.PI / NAV_SPRING.response) ** 2, c = 4 * Math.PI * NAV_SPRING.damping / NAV_SPRING.response;
-  const ty = row.offsetTop, th = row.offsetHeight;
+  const ty = navTopLands(row), th = row.offsetHeight;
   // a few small steps a frame keep the spring true at any frame rate
   for (let i = 0, d = dt / 4; i < 4; i++) {
     navTop.vy += (k * (ty - navTop.y) - c * navTop.vy) * d;

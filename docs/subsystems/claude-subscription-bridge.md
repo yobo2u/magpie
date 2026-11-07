@@ -272,10 +272,26 @@ reader (`run.onCall`). Not shown from the transcript within `callFirst`
 it), the call is a reply of its own: a message with that one `tool_use`
 (Claude Code makes its MCP calls one at a time, a message's parallel
 calls too). The first message written after such a call is the one that
-made it. Its rows are left out (`lateID`), and its usage is told with the
+made it. Its rows are left out (`lateID`), and its usage is billed with the
 next reply. A call in that message that wasn't made yet becomes its own
 reply when it is made (`written`). A reply told this way has no words or
 thinking: the model's text before its call is lost to the client.
+
+A reply that more than one message makes (a late message, Claude Code's
+own ToolSearch or WebSearch, a cut stream's retry) tells its client the
+last message's input, cache writes and cache reads, and every message's
+output (`Usage.after`). Claude Code reads the last reply's three as how
+full the conversation is, and each message re-sent what the one before
+it had: summed, a reply after a ToolSearch read 1,154,857 cached tokens
+for a 577k conversation and Claude Code compacted early (sleepy_shibe on
+Discord). The earlier messages' prompts go in `Usage.Deferred`, billed in
+the ledger and never told. The translated route's tries (the empty reply
+asked again, a loop's re-ask, a cut reply's continuation) and web search
+rounds tell theirs the same way (#5115). A later message's prompt counts
+replace the earlier's, a zero too (`Usage.restart`), so a field the later
+one reads nothing in is not left at the earlier's (`TestClaudeOwnCallReplyTellsLastPrompt`,
+`TestClaudeTUILateMessagePromptNotTold`, `TestRetriedReplyTellsLastPrompt`,
+`TestLaterTryZeroCacheReadNotTold`).
 
 The user's own `~/.claude.json` and `~/.claude` are never written by
 magpie (Claude Code writes them, as when it records its onboarding done,
@@ -451,8 +467,25 @@ A refused request never ran, so it isn't the editor's last request
 (`noteClaudeRun`). The model test's and warm-up's "hi" (`askClaude`) goes
 through the helper too (`askClaudeTUI`), in stream-json, and its stdin is
 closed at the first result. Reading the plan's allowance (`/usage`,
-`claudeUsageTUI`) types `/usage` in the interactive mode too: the helper
-is told `{"type":"command","command":"/usage"}`, types it, waits for the
+`claudeUsage`) never starts the interactive mode, on or off: it runs
+`claude -p /usage` (`claudeUsageArgs`, #5582). The interactive Claude
+Code 2.1.316 sends a model request as it starts, before anything is
+typed (`probeQuotaStatus`: haiku, `max_tokens` 1, content "quota"),
+unless `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set, which also
+keeps `/usage` from loading ("Failed to load usage data"). That request
+counts, so on an idle account it started the five-hour window: from
+v0.1.2635 to the fix, magpie's reads at its start and as a window ended
+opened the user's window with warm-up off (recorded behind a proxy that
+answers everything itself). `-p` sends that request only when
+interactive, so its `/usage` asks the usage endpoint alone
+(`/api/oauth/usage`), and for a subscription's sign-in (the
+`user:profile` scope) prints the plan's windows as the lines
+`provider.parseClaudeUsage` reads. Only a sign-in without that scope (a
+setup-token, which magpie never reads, or an API key) gets the session's
+cost instead. `TestClaudeUsageStartsNoInteractiveRun` holds it.
+
+The helper still takes a typed `/usage`, and nothing of magpie's sends it
+now: it is told `{"type":"command","command":"/usage"}`, types it, waits for the
 panel's windows ("NN% used", `commandSettle` still) and closes it with
 Esc. A panel with no window (its words saying why) is taken as drawn only
 once its Settings tabs show and nothing is loading (`usageDrawn`), still
@@ -463,8 +496,7 @@ With no panel by `commandWait`, the result is an error saying what was
 last drawn (`TestShimWaitsPastTheBanner`, `TestUsageDrawn`). Its result (`local_command: "usage"`) says each window as -p's lines
 do, "Current session: 99% used · resets 7pm (Asia/Shanghai)" (`usageText`,
 tested on the bytes Claude Code 2.1.316 drew, `testdata/usage-2.1.316.bin`),
-for `provider.parseClaudeUsage`. Claude Code 2.1.316's `-p /usage`
-printed only the session's cost there, no window, in a real run.
+for `provider.parseClaudeUsage`.
 The helper reads the screen as a terminal shows it (`grid`,
 [`screen.go`](../../internal/claudetui/screen.go), 200 by 50, the size
 the pseudo-terminal and Windows' pseudo console are made, from one
@@ -502,7 +534,7 @@ koohoko5924 on Discord, a Claude Enterprise account, on panels built from
 until …") are failures as "Failed to load usage data" is
 (`TestShimToldWhyUsageFailed`).
 
-These one-off interactive runs (`askClaudeTUI`, `claudeUsageTUI`) work in
+These one-off interactive runs (`askClaudeTUI`) work in
 magpie's shared work folder (`oneOffDir`: `claudeWorkDir`, a fresh temp
 folder only when it can't be made), where the helper may answer the trust
 question, so a config directory holds one trusted entry for it instead of
@@ -535,7 +567,7 @@ waiting for it" (`oneOffErr`), and the card says the reason
 tooltip. A question about trust left unanswered at the deadline is named
 with its folder ("Claude Code asked whether to trust <folder>, not answered
 in the 16.8s …"), where it said "showed no prompt" before (#4830). A failed
-run also goes to app.log (`logOneOff`: "claude: a /usage read of saved
+run also goes to app.log (`logOneOff`: "claude: a test on haiku of saved
 account <dir> failed: …"), with the helper's whole reason, which the card
 clips to 300 bytes, on one line: the home folder and any
 `/Users/<name>` or `C:\Users\<name>` become `~`, secrets go through
