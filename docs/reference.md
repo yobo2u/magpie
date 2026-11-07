@@ -151,6 +151,7 @@ line; agents connected to magpie lose it when it quits.
 | NewMax       | `newmax.db` (SQLite, the row `app` of its `settings` table) in `$NEWMAX_USER_DATA_DIR`, else `~/.newmax` (every OS) | provider (a `magpie-gateway` entry in its `providers` and `providerOrder`, magpie's models in its model picker; the rest of the row kept byte for byte; refused while NewMax runs, as it writes its settings back whenever one changes) |
 | LiveAgent    | `config.json` (JSONC, K-brain's) in `$LIVEAGENT_HOME`, else `$K_BRAIN_HOME`, else the folder `~/.liveagent/data-dir.json` points to, else `~/.liveagent` (every OS) | provider (`magpie`, `magpie-responses` and `magpie-anthropic` entries in its `providers`, each model on the one of the API it is served on natively: Chat Completions and Responses at the gateway's `/v1` as OpenAI providers whose request format the user can switch in LiveAgent and magpie keeps, Anthropic Messages at its root; magpie's models in its model picker; a default still K-brain's own demo model becomes magpie's first; refused while LiveAgent or its `k-brain` backend runs, as it writes its settings back whenever one changes) |
 | T3 Code      | `~/.t3/userdata/settings.json` (`$T3CODE_HOME/userdata`) | provider (a `magpie` provider instance on Claude Code, magpie's models as its custom models; a `magpie-codex` instance on Codex, whose `launchArgs` are Codex's own `-c` overrides to magpie and a `magpie-codex-models.json` catalog beside the settings. The harness is picked in T3's model picker) |
+| OpenMausBot  | `~/.openmausbot/config.json` (`$OMB_DATA_DIR`) | provider (a `magpie` engine in `instances`: OpenMausBot's own Claude endpoint shape, Claude Code with `ANTHROPIC_BASE_URL` at the gateway and magpie's models as its `endpointModels`, in its own `CLAUDE_CONFIG_DIR` under `providers/magpie`. With no `instances` saved, OpenMausBot's default engines are written beside it. OpenMausBot reads it when it starts) |
 | OpenHanako   | `~/.hanako/provider-catalog.json` + `agents/<id>/config.yaml` (`$HANA_HOME`; its local API while it runs) | model (the primary agent's; magpie's models as a provider) |
 | AtomCode     | `~/.atomcode/config.toml` (`$ATOMCODE_HOME`) | model, effort (a `magpie` provider account, one model table per catalog model as its own sign-in writes) |
 | Snow CLI     | `~/.snow/profiles/magpie.json` (`$SNOW_CONFIG_DIR`), made the active profile and copied to `config.json` | model (the user's other profiles' models too; Snow App takes the profile in with "Sync Snow CLI API config") |
@@ -377,18 +378,19 @@ agent's; any other of yours is always sent. The beta of the agent's own
 sign-in (`oauth-2025-04-20`, which Claude Code signed in to claude.ai asks)
 never goes, as the sign-in never does; one you set yourself does.
 
-Requests go to a vendor with magpie's own User-Agent (`magpie/<version>`).
-A coding plan that serves only the agents it names knows them by theirs:
-`magpie provider set <id> user-agent=agent` (the editor's "Send the
-agent's own User-Agent") sends a key+URL provider the User-Agent the agent
-sent magpie, as it sent it, on every API (chat, Anthropic, Responses,
-Gemini, count_tokens, embeddings, images, videos). A request the agent
-sent without one, and magpie's own (its classifier's, the image tool's),
-still go as magpie. A `header.User-Agent` you set wins over both.
-`user-agent=magpie` turns it off again; off is the default. A signed-in
-account, a plugin's and a vendor whose own client magpie goes as
-(OpenCode, Cline, Kilo, another magpie) keep the User-Agent their sign-in
-sends, and don't take it.
+A key+URL provider is sent the User-Agent the agent sent magpie, as it
+sent it, on every API (chat, Anthropic, Responses, Gemini, count_tokens,
+embeddings, images, videos): a coding plan that serves only the agents it
+names knows them by it, and a gateway of your own behind magpie sees which
+agent asked. Through another computer's magpie (Remote magpie) the vendor
+at the far end gets the agent's too. A request the agent sent without one,
+and magpie's own (its classifier's, the image tool's, model lists), go with
+magpie's (`magpie/<version>`). A `header.User-Agent` you set wins over
+both. `magpie provider set <id> user-agent=magpie` (the editor's "Send the
+agent's own User-Agent" unticked) sends magpie's in its place;
+`user-agent=agent` is the default again. A signed-in account, a plugin's
+and a vendor whose own client magpie goes as (OpenCode, Cline, Kilo) keep
+the User-Agent their sign-in sends, and don't take it.
 
 `magpie usage` (and `--csv`) takes `today`, `7d`, `30d` or `all`, each from a
 local midnight, or a window ending now: `--last 24h` (any Go duration, `90m`)
@@ -1037,6 +1039,22 @@ embeddings have no route here.
 ```sh
 curl localhost:3425/v1/rerank -H "Authorization: Bearer $MAGPIE_KEY" \
   -d '{"model":"voyage/rerank-3","query":"what eats seeds","documents":["a magpie","a stone"],"top_k":1}'
+```
+
+### Decisions
+
+`/v1/decisions` (also without `/v1`) is OpenAI's Decisions API: a model
+(`gpt-6-luna`), an `input` every question shares (text, images, a
+conversation), and `questions`, each answered with a probability, a choice
+or a score. It takes the gateway's key, as chat does, and is sent as given,
+only `model` changed, to an OpenAI API key, to Azure OpenAI (at
+`/openai/v1/decisions`, the model your deployment's name) or to another
+magpie. Any other provider is refused with a 400 that says so. Only input
+tokens are counted, cached ones apart.
+
+```sh
+curl localhost:3425/v1/decisions -H "Authorization: Bearer $MAGPIE_KEY" \
+  -d '{"model":"gpt-6-luna","input":"The parcel arrived torn open.","questions":[{"type":"predicate","name":"damaged","instructions":"Was the parcel damaged?"}]}'
 ```
 
 ### Google Vertex AI

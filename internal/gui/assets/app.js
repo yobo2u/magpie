@@ -7989,7 +7989,7 @@ function advancedSet(d, p) {
     !!d.proxyMode || Object.values(d.accountProxies || {}).some((x) => x?.mode) ||
     [d.concurrency, d.maxAccounts, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!d.rateWindows?.length ||
-    !!(d.searches || d.authHeader || d.passUserAgent || d.unredacted || d.countFree || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.http1 || d.imageFilesOff || d.passErrors) ||
+    !!(d.searches || d.authHeader || d.passUserAgent === false || d.unredacted || d.countFree || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.http1 || d.imageFilesOff || d.passErrors) ||
     !!d.fallback?.length || !!p?.balanceToken?.set;
 }
 function priceRateError(ed) {
@@ -9182,7 +9182,7 @@ function baseAPIOf(p) {
 
 // draftOf is a saved provider as its editor's form holds it.
 function draftOf(p) {
-  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), passHeaders: (p.passHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], hiddenVideomakers: [...(p.hiddenVideomakers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, http1: !!p.http1, limitRestOff: !!p.limitRestOff, passErrors: !!p.passErrors, imageFilesOff: !!p.imageFilesOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: !!p.passUserAgent, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
+  return { id: p.id, name: p.name, preset: p.preset, chat: p.chat, responses: p.responses, anthropic: p.anthropic, gemini: p.gemini || "", catalog: p.catalog, decide: p.decide || "", key: "", api: baseAPIOf(p), chosen: pickedOf(p), none: !!p.noModels, best: !!p.bestInFamily, extra: [], headers: headerRows(p.headers), extraBody: extraBodyText(p.extraBody), replyHeaders: (p.replyHeaders || []).join(", "), passHeaders: (p.passHeaders || []).join(", "), icon: p.icon || "", iconFrom: p.iconFrom || "", fallback: [...(p.fallback || [])], unlisted: !!p.unlisted, hiddenDrawers: [...(p.hiddenDrawers || [])], hiddenVideomakers: [...(p.hiddenVideomakers || [])], searches: !!p.searches, unredacted: !!p.unredacted, countFree: !!p.countFree, insecureTLS: !!p.insecureTLS, http1: !!p.http1, limitRestOff: !!p.limitRestOff, passErrors: !!p.passErrors, imageFilesOff: !!p.imageFilesOff, nativeCompaction: !!p.nativeCompaction, passUserAgent: p.passUserAgent !== false, pinUpstream: !!p.pinUpstream, authHeader: p.authHeader || "", balanceURL: p.balanceURL || "", balancePath: p.balancePath || "", balanceMethod: p.balanceMethod || "", modelsURL: p.modelsURL || "", contexts: contextsText(p.contexts), outputs: contextsText(p.outputs), compacts: contextsText(p.compacts), keysUrl: p.keysUrl || "", ...proxyDraft(p), ...concurrencyDraft(p), rateWindows: (p.rateWindows || []).map((w) => ({ ...w })) };
 }
 
 // duplicateProvider opens the Add form on a copy of p, its key p's unless another is pasted (#268).
@@ -9426,12 +9426,13 @@ function drawEditor(p, presetID) {
     ed.append(...field("Base URL", urlWrap));
   }
 
-  // Cline's DeepSeek and GLM models pinned to their makers' APIs (sdytman, ARNO on Discord)
+  // Cline's DeepSeek and GLM models pinned to their makers' APIs (sdytman, ARNO on Discord);
+  // since 11-06 Cline refuses the pin for all but glm-5.3-flash (#5442), as the note says
   const upstreamField = () => {
     const [ptk, pcb] = tick(t("DeepSeek and GLM models only from their makers' own APIs"), !!draft.pinUpstream);
     ptk.classList.add("pin-upstream");
     pcb.onchange = () => { draft.pinUpstream = pcb.checked; };
-    return field(t("Upstream"), ptk, t("Cline serves a model from any host its gateway picks; pinned, a request for a DeepSeek model goes only to DeepSeek and one for a GLM model only to Z.ai, which keeps its prompt cache, and fails when that API can't take it"));
+    return field(t("Upstream"), ptk, t("Since 2026-11-06 Cline refuses a pinned DeepSeek or GLM request with 403, so magpie sends them unpinned and Cline picks the host; only glm-5.3-flash still asks Z.ai"));
   };
 
   // the settings few need, under Advanced: open when one is set, or as left here
@@ -9765,9 +9766,9 @@ function drawEditor(p, presetID) {
   // the agent's User-Agent (#1851); an account or ownClient keeps its own
   const uaPassable = () => !p?.account && !(p ? p.ownClient : pr?.ownClient);
   if (uaPassable()) {
-    const [utk, ucb] = tick(t("Send the agent's own User-Agent"), !!draft.passUserAgent);
+    const [utk, ucb] = tick(t("Send the agent's own User-Agent"), draft.passUserAgent !== false);
     ucb.onchange = () => { draft.passUserAgent = ucb.checked; };
-    advIn.append(...field(t("User-Agent"), utk, t("For a plan that serves only the coding agents it names: each request goes with the User-Agent the agent sent (pi, OpenCode, Claude Code…), not magpie's. Requests magpie makes itself, and ones the agent sent without one, still go as magpie. A User-Agent set in Headers above always wins.")));
+    advIn.append(...field(t("User-Agent"), utk, t("Off, every request goes as magpie. A User-Agent set in Headers above always wins.")));
   }
 
   const addressOf = (k) => (draft[k] ?? (isNew && pr ? pr[k] : "")) || "";
@@ -10165,7 +10166,7 @@ function drawEditor(p, presetID) {
     if (p?.takesImageFiles) body.imageFilesOff = !!draft.imageFilesOff;
     if (p ? p.takesPassErrors : custom) body.passErrors = !!draft.passErrors;
     if (!decideOnly(p || pr)) body.nativeCompaction = !!draft.nativeCompaction && carriesCompaction();
-    body.passUserAgent = !!draft.passUserAgent && uaPassable();
+    if (uaPassable()) body.passUserAgent = draft.passUserAgent !== false;
     const cx = parseContexts(draft.contexts || "");
     if (cx.error) return contextError(ed, cx.error);
     body.contexts = cx.map;
@@ -11140,6 +11141,8 @@ const servedIds = (p) => draft.chosen.length ? draft.chosen : draft.none || draf
 
 // modelsOpen: models let out to full height (#833). MCHIPS_MAX: .mchips' max-height
 let modelsOpen = false;
+// whether a provider's chips were last tall enough to fold, by its id
+const foldNeeded = {};
 // unpickedShown: the editor showing unpicked models under Picked only (yyddbds)
 let unpickedShown = null;
 // picksLeft: picks set aside, given back when Picked only is clicked again (yyddbds)
@@ -11297,13 +11300,19 @@ function renderModels(p) {
     fold.setAttribute("aria-expanded", modelsOpen);
     foldLabel.textContent = t(modelsOpen ? "Collapse the list" : "Expand the list");
     fold.title = t(modelsOpen ? "Hold the models to a few lines again" : "Show every model at once, not in a small box to scroll");
-    // laid out first: the editor is put on the page after it is drawn.
     // Held, the box is MCHIPS_LINES tall (app.css .mchips); open, it is as
     // tall as its chips, which must be more than that to fold
-    requestAnimationFrame(() => {
+    const measure = () => {
+      if (!chips.isConnected) return;
       const most = Math.min(MCHIPS_MAX, innerHeight * 0.4);
-      fold.hidden = !(chips.scrollHeight > (modelsOpen ? most : chips.clientHeight) + 1);
-    });
+      fold.hidden = !(foldNeeded[p.id] = chips.scrollHeight > (modelsOpen ? most : chips.clientHeight) + 1);
+    };
+    // put on the page in this same task: measured there, till then as the
+    // last one was, or a redraw (Fetch models again, indexyz) showed the
+    // fold a frame and the dialog, holding the press, moved by it
+    fold.hidden = !foldNeeded[p.id];
+    if (chips.isConnected) measure();
+    else queueMicrotask(() => chips.isConnected ? measure() : requestAnimationFrame(measure));
   };
   const draw = () => {
     if (agentMenu && chips.contains(agentMenu.anchor)) closeAgentMenu();
