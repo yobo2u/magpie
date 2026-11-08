@@ -33,7 +33,7 @@ const providerUsage = `usage:
   magpie provider <id>                    show one provider and its models
   magpie provider add <preset> <key>      add a preset vendor   e.g. magpie provider add deepseek sk-…
                                           again, it adds another (deepseek-2); k=v pairs too: id, name, header.X-Foo
-  magpie provider add <name> k=v…         add a custom vendor   k: url, anthropic, responses, gemini, decide, key, models, catalog, icon, header.X-Foo, balance, balance.path, balance.method, balance.token, models.url, search, user-agent,
+  magpie provider add <name> k=v…         add a custom vendor   k: url, anthropic, responses, gemini, decide, key, models, catalog, icon, header.X-Foo, balance, balance.path, balance.method, balance.token, models.url, list, search, user-agent,
                                           access.key, access.secret (a Volcengine access key, or a Tencent Cloud SecretId and SecretKey, for its plan's windows)
   magpie provider set <id> k=v…           change a provider's settings, with the same k=v pairs as add;
                                           codex=as-sent sends Codex's Responses requests as Codex sent them
@@ -98,9 +98,10 @@ const providerUsage = `usage:
                                           how much an API key may spend, in USD as the Usage page prices its calls,
                                           a day (the default), a month or in all from now: at it, routing takes the
                                           key for used up and goes on to the other keys and the fallbacks
-  magpie provider key-balance <id> [key [usd|off]]
-                                          the balance on an API key whose vendor tells none, typed from its own page:
-                                          the Usage page shows it less what magpie prices the key's calls at since
+  magpie provider key-balance <id> [key [usd|¥cny|off] [--refill monthly[:day]|weekly[:mon…sun]|off]]
+                                          the balance on an API key whose vendor tells none, typed from its own page
+                                          in USD or in yuan (¥100): the Usage page shows it less what magpie prices the
+                                          key's calls at since; with --refill it is whole again each month or week
   magpie provider account-weight <id> [account [n|default]]
                                           a subscription account's share of the requests with routing=weight:
                                           one weighing 3 takes three for each one weighing 1 takes (default 1)
@@ -153,6 +154,8 @@ const providerUsage = `usage:
                                    (a System One API, POST …/systemone: it routes groups, its models are never an agent's)
        magpie provider add anthropic sk-… id=anthropic-ws2 name="Anthropic WS2" header.anthropic-workspace-id=wrkspc_…
        magpie provider set my-relay models.url=https://relay.example.com/api/models catalog=
+       magpie provider set volcengine list=off models=ep-20261108-abcde
+                                   (its model list is never asked for: only the models given by id are served)
        magpie provider set my-relay search=yes
                                    (the relay answers Claude Code's WebSearch and Codex's web_search itself:
                                     those go to it as sent, not through magpie's own search)
@@ -831,7 +834,9 @@ func announce(id string) error {
 	fmt.Println(green.Render("✓"), "added", saved.Name, muted.Render("("+saved.ID+")"))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if ms, err := saved.Fetch(ctx); err == nil {
+	if saved.ListsOff() {
+		// its list is never asked for: the models given by id are its
+	} else if ms, err := saved.Fetch(ctx); err == nil {
 		fmt.Println(green.Render("✓"), len(ms), "models from", fetchedFrom(*saved))
 	} else if !saved.DecideOnly() {
 		// the URLs asked and what they said; the base stays as given
@@ -1141,6 +1146,17 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			p.SecretAccessKey = v
 		case "models.url":
 			p.ModelsURL = v
+		case "list":
+			// off: the vendor's model list is never asked for, and only
+			// the models given by id are served (axelburks on Discord)
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "off", "no":
+				p.ListOff = true
+			case "on", "yes", "":
+				p.ListOff = false
+			default:
+				return fmt.Errorf("list=on|off, not %q", v)
+			}
 		case "codex":
 			// as-sent: Codex's requests go to it as Codex sent them, for
 			// a relay that checks they are Codex's own (#1758)

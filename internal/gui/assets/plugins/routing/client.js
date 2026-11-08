@@ -54,7 +54,7 @@ function routingPage(part) {
   if (!box) return;
   // the groups' way in where the header's row has no tab for them (markNav)
   const toGroups = $("#rtToGroups");
-  if (toGroups) toGroups.onclick = () => window.show("groups");
+  if (toGroups) toGroups.onclick = async () => { if (await window.show("groups")) openedFrom(toGroups); };
   const NS = "http://www.w3.org/2000/svg";
   const still = calm;
   const shown = () => !$("#view-routing").hidden && !document.hidden;
@@ -1109,6 +1109,7 @@ function routingPage(part) {
       case "session": return t("Kept on {who}: it answered this conversation before, and affinity keeps a session with one account.", { who: last });
       case "turn": return t("Kept on {who}: {agent} is handing back tool results within turn {n}, and moving now would lose what the vendor cached of it.", { who: last, agent: agentName(r.agent), n: a.turn });
       case "cache": return t("Kept on {who}: {d} ago the vendor read {r} tokens of this conversation from its cache and wrote {w} to it; anyone else would be sent them afresh and paid in full.", { who: last, r: tokens(a.cacheRead || 0), w: tokens(a.cacheWrite || 0), d: ago });
+      case "lead": return t("Put on {first}, where this session's {model} is: one session goes on one account.", { first: who(r.order[0]), model: a.leadModel || "" });
       case "strict": return a.main ? t("{who}, a fallback, answered this conversation last. The provider's own {first} is ready again, but Stays is Strict, which never moves a conversation, so it stays on the fallback; new conversations go to {first}.", { who: last, first: who(a.main) }) : null;
       case "new-turn": return routing === "rotate"
         ? t("Turn {n} begins: in turn, it goes to the one after {who}, which answered the last turn — {next}.", { n: a.turn, who: last, next: who(r.order[0]) })
@@ -2791,6 +2792,8 @@ function routingPage(part) {
     // the page put itself back where the reader last left it
     const asked = window.scrollOnPurpose?.(e), opens = gView().hidden;
     if (opens && !(await window.show("groups"))) return;
+    // from Routing: its toolbar leads back to the request (gBack)
+    if (opens && e.target.closest?.("#view-routing")) openedFrom(e.target.closest(".rt-go"));
     if (asked) {
       readerScrolls(1000);
       row.scrollIntoView({ block: "center", behavior: opens || still() ? "auto" : "smooth" });
@@ -5705,6 +5708,38 @@ function routingPage(part) {
   const gsec = el("div", "rt-gsec");
   const gHead = el("div", "row-head"), gList = el("div", "list rt-groups");
   const pHead = el("div", "row-head"), pList = el("div", "list rt-pools");
+  // the way back up to Routing, at the toolbar's leading edge as a Mac
+  // app's back button (unscientific9 on Discord: a request's group opened
+  // this page and nothing led back). Shown where the page was opened from
+  // Routing (gFrom: a request's group, Routing's own "Routing groups ›"),
+  // and always where the header has no tab of its own for it, Routing's
+  // tab standing for both (markNav); beside the sidebar, opened from its
+  // own tab, it is a page of its own and has none (routing.css). Escape
+  // does the same while nothing on the page is open to take it
+  let gFrom = null;
+  const gBack = el("button", "text rt-gback");
+  gBack.type = "button";
+  gBack.append("‹ ", el("span", "", t("Routing")));
+  gBack.onclick = () => groupsBack();
+  gHead.append(gBack);
+  async function groupsBack() {
+    const from = gFrom;
+    if (!(await window.show("routing"))) return;
+    // the request the reader came from, still on the page, has the keyboard
+    if (from?.isConnected) from.focus({ preventScroll: true });
+  }
+  const openedFrom = (from) => { gFrom = from || true; gView()?.classList.add("rt-gfrom"); };
+  new MutationObserver(() => {
+    if (!gView().hidden) return;
+    gFrom = null;
+    gView().classList.remove("rt-gfrom");
+  }).observe(gView(), { attributes: true, attributeFilter: ["hidden"] });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented || e.repeat || !gShown() || !gBack.getClientRects().length) return;
+    if (gEdit || gImport || gSel || !$("#modal")?.hidden || e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    e.preventDefault();
+    groupsBack();
+  });
   // whether magpie finds groups on its own, by the list it fills (蓝猫 on
   // Discord: they could only be removed one at a time)
   const gFound = el("div", "rt-gfound");
@@ -6154,7 +6189,8 @@ function routingPage(part) {
     newBtn.append(svg(PLUS, 11, 1.8), el("span", "", t("New group")));
     newBtn.title = t("Make a routing group of any models you like — agents pick it as one model");
     newBtn.onclick = () => newGroup();
-    const head = [];
+    gBack.lastChild.textContent = t("Routing"); // in the language now
+    const head = [gBack];
     if (all.length > 1 || gQ.value) {
       gQ.placeholder = t("Filter groups and models");
       gQ.setAttribute("aria-label", gQ.placeholder);
