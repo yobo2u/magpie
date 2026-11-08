@@ -1820,8 +1820,9 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// counted as the HEIC photos in it will be sent (heic.go)
-	body = heicAsJPEG(provider.Anthropic, body)
+	// counted as the HEIC photos in it will be sent (heic.go), their
+	// base64 read as it will be sent (base64_input.go)
+	body = heicAsJPEG(provider.Anthropic, stdBase64Body(provider.Anthropic, body))
 	var err error
 	var model string
 	body, model, err = requestModel(body)
@@ -2215,6 +2216,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// a client's "off" is magpie's none, for every route and check below
 	// that reads the body's effort (plugins#334)
 	body = offAsNone(from, body)
+	// inline base64 goes in the standard alphabet, padded, which every
+	// vendor reads, on every route below and for every check that reads
+	// an image's bytes (base64_input.go, #5697)
+	body = stdBase64Body(from, body)
 	// a HEIC photo goes as JPEG (or PNG), which every vendor takes, on
 	// every route below (heic.go)
 	body = heicAsJPEG(from, body)
@@ -2822,8 +2827,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if from == provider.Responses {
 		if cp, ok := checkpointOf(body); ok {
 			checkpoint = &cp
-			var left bool
-			if cands, pl, left = checkpointReaders(cands, pl, cp); !left {
+			kept, keptPl, left := checkpointReaders(cands, pl, cp)
+			if !left && compactionAside(call.Kind, asked) {
+				// a call beside the conversation (an approval's review, a
+				// memory, a subagent) on a model its writer doesn't serve:
+				// asked without the seal, which no other can read (echo_ts:
+				// a Copilot compaction sent to codex-auto-review, refused
+				// as invalid_encrypted_content every review). The
+				// conversation's own turns are still held to the writer
+				if b, ok := withoutCompaction(body); ok {
+					body, checkpoint, left = b, nil, true
+					kept, keptPl = cands, pl
+					if p, ok := withoutCompaction(plain); ok {
+						plain = p
+					}
+				}
+			}
+			cands, pl = kept, keptPl
+			if !left {
 				call.Status, call.Error = 400, "native compaction sealed elsewhere"
 				writeError(w, from, 400, checkpointError(call.Model, cp))
 				turnedAway()
@@ -3116,7 +3137,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		capture.tools = tools
 	}
 	tierAsked := bodyTier(from, body) // the service tier the client asked for (#1784)
-	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pinnedName(pin), Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, Moved: moved, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: pl.order, Left: append(slices.Clip(pl.left), smallW...)})
+	tr := s.trace.beginFor(r, Route{turn: turn, dirOf: dirOf(from, plain), tools: tools, imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pinnedName(pin), Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), LastConvs: dshLastConvs(call.Agent, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Tier: tierAsked, Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Compaction: compactionWho(checkpoint), Subagent: subagent, Moved: moved, SubagentEffort: subagentEffort, Sub: subOf(r.Header), SubagentID: subagentID, Affinity: shown, Order: pl.order, Left: append(slices.Clip(pl.left), smallW...)})
 	if watched != nil {
 		watched.routeID = tr.ID
 	}
@@ -3616,16 +3637,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if mapped != "none" {
 				mapped = fitLevel(mapped, c.p.Efforts(c.model))
 			}
-			attemptBody = withFixedEffort(from, attemptBody, mapped)
+			attemptBody = withModelEffort(from, attemptBody, c.model, mapped)
 		} else if ruled != "" {
 			// asked even of a request that asked for no reasoning, as a
 			// member fixed at an effort is; already fitted to its levels
-			attemptBody = withFixedEffort(from, attemptBody, ruled)
+			attemptBody = withModelEffort(from, attemptBody, c.model, ruled)
 		} else if fixed != "" {
 			// a member fixed at an effort is asked for it, at the level its
 			// model has nearest, whatever the agent asked or the turn's
 			// pick: even a request that asked for no reasoning
-			attemptBody = withFixedEffort(from, attemptBody, fitLevel(fixed, c.p.Efforts(c.model)))
+			attemptBody = withModelEffort(from, attemptBody, c.model, fitLevel(fixed, c.p.Efforts(c.model)))
 		} else if effort != "" {
 			// the level this model has nearest to the one picked; one whose
 			// levels aren't known isn't asked for more than high, which
@@ -6715,7 +6736,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			if offEffort(e) {
 				s.markUnfit(p.ID, offRefused(model), proto)
 			}
-			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(withFixedEffort(proto, body, onEffort(p, model))), r.Header); err != nil {
+			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(withModelEffort(proto, body, model, onEffort(p, model))), r.Header); err != nil {
 				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 			}
 		}
@@ -9497,6 +9518,104 @@ func conversationID(in http.Header, body []byte) string {
 		w.Flush()
 	}
 	return "magpie-" + hex.EncodeToString(h.Sum(nil)[:12])
+}
+
+// dshLastConvs are the ids of the user messages a dsh request's turn
+// carries, newest first: the run of user messages its newest one ends,
+// at most four (sessions' dshTurnKept), each hashed as sessions' TurnConvs
+// spell it (dshConvs' first, the message with its text alone). A fork
+// copies its source's opening, so the opening names both; the turn's own
+// messages, which the branch's file has before the request goes out, are
+// what tell a request still answering which one it is of (Route.LastConvs,
+// gui's ownerLast). The typed message is not always the newest: dsh sends
+// its runtime context after it, the same in every session of a folder. nil
+// for another agent, or a newest message that isn't text alone.
+func dshLastConvs(agent string, body []byte) []string {
+	if agent != "dsh" {
+		return nil
+	}
+	var m struct {
+		Messages json.RawMessage `json:"messages"`
+	}
+	if decodeJSONView(body, &m) != nil {
+		return nil
+	}
+	items := elementsOf(m.Messages)
+	var out []string
+	for i := len(items) - 1; i >= 0 && len(out) < 4; i-- {
+		// read by its members, not decoded: a long run of tool steps is
+		// passed over on the way to the turn's messages
+		user, content := false, []byte(nil)
+		if it := items[i]; len(it) > 0 && it[0] == '{' {
+			eachMember(it, func(k, v []byte) bool {
+				switch {
+				case keyIs(k, "role"):
+					user = string(v) == `"user"`
+				case keyIs(k, "content"):
+					content = v
+				}
+				return true
+			})
+		}
+		if !user {
+			if out != nil {
+				break // the run of the turn's user messages ends here
+			}
+			continue
+		}
+		t, ok := oneTextPart(content)
+		if !ok {
+			c := trimJSON(content)
+			if out == nil && toolResultsOnly(c) {
+				continue // Messages' answer to a tool call, the turn's step
+			}
+			if len(c) == 0 || c[0] != '"' {
+				if out != nil {
+					break
+				}
+				return nil
+			}
+			t = c
+		}
+		sum := sha256.Sum256(joinBytes(`{"role":"user","content":`, t, `}`))
+		out = append(out, "magpie-"+hex.EncodeToString(sum[:12]))
+	}
+	return out
+}
+
+// toolResultsOnly says content, a user message's, is a list of
+// tool_result parts and nothing else: the Messages API's answer to a tool
+// call, which a turn's later steps end on.
+func toolResultsOnly(content []byte) bool {
+	if len(content) == 0 || content[0] != '[' {
+		return false
+	}
+	n, ok := 0, true
+	eachElement(content, func(el []byte) bool {
+		n++
+		typed := false
+		if len(el) > 0 && el[0] == '{' {
+			eachMember(el, func(k, v []byte) bool {
+				if keyIs(k, "type") {
+					typed = string(v) == `"tool_result"`
+					return false
+				}
+				return true
+			})
+		}
+		ok = typed
+		return ok
+	})
+	return ok && n > 0
+}
+
+// joinBytes is a, b and c in one slice: the spelling above is written as
+// it goes, the request's own text bytes between them.
+func joinBytes(a string, b []byte, c string) []byte {
+	out := make([]byte, 0, len(a)+len(b)+len(c))
+	out = append(out, a...)
+	out = append(out, b...)
+	return append(out, c...)
 }
 
 // writeOpening writes msg, one message of an opening of several
