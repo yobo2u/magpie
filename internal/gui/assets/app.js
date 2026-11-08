@@ -7638,7 +7638,7 @@ function input(value, placeholder, type = "text") {
 // editor put away (Cancel, Escape, a click outside) takes it with it (#526)
 let providerDraftRef = null, providerDraftBase = "";
 function providerDraftValue() {
-  return JSON.stringify({ ...draft, headers: headersOf(draft?.headers), modelHeaderRows: undefined, modelPrefs: modelPrefsOfDraft() });
+  return JSON.stringify({ ...draft, headers: headersOf(draft?.headers), modelHeaderRows: undefined, onLimits: undefined, modelPrefs: modelPrefsOfDraft() });
 }
 function providerDirty() {
   // Price boxes parse on change; a page closed while typing hasn't blurred one yet.
@@ -10253,10 +10253,7 @@ function contextsText(cx) {
   return out.join(", ");
 }
 
-// contextPicks puts the usual windows under the context field, one click
-// each, and, when some models take more than they are said to (Codex's
-// GPT-6: 272K said, 872K taken), their own most: sizes nobody remembers
-// (#120). The pick matching what is typed is lit.
+// contextPicks: the usual windows under the context field, a model's own most too (#120)
 function contextPicks(p, cx) {
   cx.classList.add("contexts");
   const size = (n) => contextsText({ "*": n });
@@ -10291,21 +10288,21 @@ function contextPicks(p, cx) {
       cx.value = typeof pk.value === "function" ? pk.value() : pk.value;
       draft.contexts = cx.value;
       light();
+      limitsSaid();
     };
     row.append(b);
   }
-  cx.oninput = () => { draft.contexts = cx.value; light(); };
+  cx.oninput = () => { draft.contexts = cx.value; light(); limitsSaid(); };
   light();
   const wrap = el("div", "cxfield");
   wrap.append(cx, row);
   return wrap;
 }
 
-// outputField is the editor's Max output: the most a reply of its models
-// may hold, over what the vendor or models.dev says, one for all of them
-// and model=size for one, as the context window is set (ARNO on Discord: a
-// model's maxTokens was wrong, and only its window could be set here).
-// The usual sizes sit under it, one click each, as under the window (#875).
+// limitsSaid: Model settings' rows follow Advanced
+const limitsSaid = () => { for (const f of Object.values(draft?.onLimits || {})) f(); };
+
+// outputField: the editor's Max output, set as the window is (ARNO, #875)
 function outputField() {
   const ox = input(draft.outputs || "", t("e.g. 32k · or gpt-6=128k, comma separated"));
   ox.classList.add("outputs");
@@ -10318,21 +10315,18 @@ function outputField() {
   for (const v of sizes) {
     const b = el("button", "cxpick", v.toUpperCase());
     b.type = "button";
-    b.onclick = () => { ox.value = v; draft.outputs = v; light(); };
+    b.onclick = () => { ox.value = v; draft.outputs = v; light(); limitsSaid(); };
     row.append(b);
   }
-  ox.oninput = () => { draft.outputs = ox.value; light(); };
+  ox.oninput = () => { draft.outputs = ox.value; light(); limitsSaid(); };
   light();
   const wrap = el("div", "cxfield");
   wrap.append(ox, row);
   return field(t("Max output"), wrap, t("The most a reply may hold, told to the agents as their max tokens and sent as max_tokens on Anthropic's API when the agent names none; empty leaves it to the vendor and models.dev"));
 }
 
-// nativeCompactionField is the editor's Compaction (#1099): Codex's own
-// compaction asked of the provider as Codex sent it, its sealed item given
-// back as it came, in place of the summary magpie writes. Offered only
-// where the wire carries it (a Responses API, a ChatGPT account, GitHub
-// Copilot); show says when, for a custom provider whose URLs are typed.
+// nativeCompactionField: Codex's own compaction on the provider (#1099),
+// where the wire carries it; show says when, for typed URLs
 function nativeCompactionField(show) {
   const [ntk, ncb] = tick(t("Codex compacts on this provider"), !!draft.nativeCompaction);
   ntk.classList.add("native-compaction");
@@ -10407,9 +10401,7 @@ function parseContexts(text) {
   return { map };
 }
 
-// fetchImportIcon asks the server to download the vendor's own logo, named
-// by the link. It swaps the header mark when it lands; a failure is silent
-// (the generic outline stays), since the icon is decoration, not the deal.
+// fetchImportIcon: the link's logo, swapped in when it lands; a failure is silent
 function fetchImportIcon(p, head, ed) {
   const host = hostOf(p.iconUrl);
   const note = el("div", "hint", t("Fetching {host}’s icon…", { host: host || t("the vendor") }));
@@ -10424,10 +10416,8 @@ function fetchImportIcon(p, head, ed) {
   }).catch(() => note.remove());
 }
 
-// Scan off the page's loading path, at most once a minute as it is opened
-// or refreshed. A completed import forces a fresh scan; an older response
-// cannot put the pre-import hint back. Ignored configurations stay quiet
-// across launches; new or changed ones can still be offered.
+// Scan off the loading path, at most once a minute; an import forces one,
+// and an older response can't bring the hint back.
 async function discoverLocalProviders(force = false) {
   if (mode !== "window" || view !== "providers" || providers?.fileError) return;
   if (!force && (discoveryPending || Date.now() - discoveryAt < 60000)) return;
@@ -10764,12 +10754,10 @@ function renderImport(im) {
     }
     ed.append(...field(t("Models"), chips, ""));
   }
+  if (p.balanceURL) ed.append(...field(t("Balance URL"), el("code", "imp-bal", [p.balanceMethod, p.balanceURL, p.balancePath].filter(Boolean).join(" ")), ""));
   if (im.replaces) ed.append(edAligned(el("div", "warnbox soft", t("Replaces your {name}, key and all.", { name: im.replaces }))));
 
-  // The link may name the vendor's own logo — an explicit icon= wins over
-  // whatever the catalog or preset gave. magpie fetches it here (the dialog
-  // being open is the confirmation), once, quietly, and only ever into its
-  // icons folder; the fallback mark stays when it fails.
+  // icon= over the catalog's or preset's, fetched once the dialog is open
   if (p.iconUrl) fetchImportIcon(p, h, ed);
 
   const addBtn = el("button", "text primary", t(im.replaces ? "Replace" : "Add"));
@@ -11541,6 +11529,16 @@ function renderModels(p) {
         idBox.append(el("span", "", t("Listed as")), idInput);
         row.append(idBox);
       }
+      // its window and reply limit (sayagoodbyeplz on Discord), in modellimits.js
+      const limits = [];
+      const limitsAgain = () => { for (const x of limits) x.again(); drawReset(); };
+      if (!decideOnly(p)) {
+        const at = el("span", "mlimits");
+        row.append(at);
+        const fill = () => limits.push(...modelLimitsFill(at, m, p, () => drawReset()));
+        window.modelLimitsFill ? fill() : import("./modellimits.js").then(() => { fill(); limitsAgain(); }, () => {});
+        (draft.onLimits = draft.onLimits || {})[id] = limitsAgain;
+      }
       // its cost, $ / 1M tokens (#819); empty: the list's
       const parts = [["input", "Input"], ["output", "Output"], ["cache_read", "Cache read"], ["cache_write", "Cache write"], ["cache_write_1h", "Cache write 1h"]];
       const tierParts = parts.slice(0, 4);
@@ -11775,7 +11773,7 @@ function renderModels(p) {
       const unsaved = el("span", "hint munsaved", t("unsaved"));
       unsaved.title = t("Made when the provider is saved; Cancel drops it");
       const reset = el("button", "text action", t("Restore default"));
-      reset.title = t("Its own name, every reasoning level it has, whether it sees images, the API it is asked on, the model it is the same as, its own id, its list price, and no headers of its own");
+      reset.title = t("Its own name, every reasoning level it has, whether it sees images, the API it is asked on, the model it is the same as, its own id, its list price, its listed window and reply limit, and no headers of its own");
       reset.onclick = () => {
         prefs[id] = {};
         if (draft.priceTyped) delete draft.priceTyped[id];
@@ -11798,15 +11796,17 @@ function renderModels(p) {
         if (Object.keys(savedHeaders).length) prefs[id].headers = {};
         hrows[id] = [];
         if (p.takesModelHeaders) drawHeaders();
+        for (const x of limits) if (x.own()) { x.i.value = ""; x.i.onchange(); }
         drawReset();
       };
       const drawReset = () => {
         const x = prefs[id];
         if (x && !Object.keys(x).length) delete prefs[id];
-        unsaved.hidden = !prefs[id] && !draft.priceTyped?.[id];
+        const limitsMoved = limits.some((x) => (x.own() || 0) !== x.saved());
+        unsaved.hidden = !prefs[id] && !draft.priceTyped?.[id] && !limitsMoved;
         // staged back to its own already, there is nothing to restore
         const images = prefs[id]?.ownImages ? false : prefs[id]?.images !== undefined ? prefs[id].images !== !!m.ownImages : !!m.imageSet;
-        const custom = nameNow() !== "" || noneNow() || (prefs[id]?.efforts ? prefs[id].efforts.length > 0 : !!m.kept?.length) || images || apiNow() !== "" || sameNow() !== "" || idNow() !== "" || priceNow() !== null || !!draft.priceTyped?.[id] || Object.keys(headersNow()).length > 0;
+        const custom = nameNow() !== "" || noneNow() || (prefs[id]?.efforts ? prefs[id].efforts.length > 0 : !!m.kept?.length) || images || apiNow() !== "" || sameNow() !== "" || idNow() !== "" || priceNow() !== null || !!draft.priceTyped?.[id] || Object.keys(headersNow()).length > 0 || limits.some((x) => x.own());
         reset.hidden = !custom;
       };
       row.append(unsaved, reset);
@@ -11914,10 +11914,8 @@ function renderModels(p) {
     if (e.key === "Enter") take();
     else if (e.key === "Escape") cancelEdit();
   };
-  // named as the add form's, there before the Save (耍赖天都爱: 模型拉取一
-  // 次就没有这个按钮了 — a relay key moved to another group serves another
-  // list), "again" once fetched. Asked with the key typed (asTyped), merged
-  // as Refetch merges: picks the new list lacks go, ids added by hand stay
+  // there before the Save (耍赖天都爱), "again" once fetched; asked with
+  // the key typed, merged as Refetch merges
   const refresh = el("button", "text action fetch-models", t(p.fetched ? "Fetch models again" : "Fetch models"));
   refresh.title = t("Ask the vendor for its model list with the key typed here, and again after the key moves to another group: picks it no longer lists are dropped, ids added by hand stay");
   refresh.onclick = async () => {
@@ -12044,10 +12042,8 @@ function mediaChips(cls, ids, key, p, names) {
   return chips;
 }
 
-// renderRouting: how the gateway spreads requests over the keys or
-// accounts a provider has on, and how long a conversation stays with the
-// one that answered it. Both are staged in the draft and made with Save
-// (01huadalang on Discord: each click saved and redrew).
+// renderRouting: spread over keys or accounts and stickiness, staged in
+// the draft and made with Save (01huadalang on Discord)
 const ROUTINGS = [
   ["", "Smart", "The first takes requests while it has quota to spare; when it runs low, the one with the most left takes over. One out of credit sits out half an hour, one out of quota until it resets, one rate limited as long as the vendor asks, and one that fails a minute, longer each time it fails again."],
   ["order", "In order", "Requests go to the first; the next takes over when the one before runs out of quota, hits a rate limit or fails."],
@@ -12094,10 +12090,8 @@ const STAYS = [
   ["off", "Off", "Every request is routed afresh, whoever answered its conversation before."],
   ["strict", "Strict", "A conversation stays with the account or key that answered it and never moves to another, even past its usage cap: when that one is rate limited or out of quota, the error goes to the agent. New conversations are routed as usual."],
 ];
-// what one rate limited while it still has quota does then (provider.Sink,
-// 01huadalang): keeps its place, back first once its rest ends, or goes to
-// the back of the order so the load goes round — as on the Routing page
-// (routing/client.js SINK_OPTS)
+// one rate limited with quota left keeps its place or goes to the back
+// (provider.Sink, as routing/client.js SINK_OPTS)
 const SINKS = [
   [false, "Keeps its place", "One rate limited while it still has quota rests as long as the vendor asks, then takes its place in the order again."],
   [true, "Goes to the back", "One rate limited (429) while it still has quota goes to the back of the order, behind every one not rate limited since, and comes round again once those ahead of it are rate limited in turn — so the load goes round rather than back to the first each time. Out of quota, it rests as usual. Kept until magpie restarts."],
@@ -14640,7 +14634,7 @@ function keyWeight(p, k, w, total, path = "keys/weight", body = { id: p.id, ref:
 
 // renderKeyAccounts: a key provider's accounts, one per key, the same list
 // a subscription has. addingKey holds the half-typed new one.
-let addingKey = null, keyHeld;
+let addingKey = null;
 function renderKeyAccounts(p) {
   const list = el("div", "accts keys");
   list.dataset.provider = p.id;
@@ -14729,10 +14723,8 @@ function renderKeyAccounts(p) {
     // how many requests it has out at once, and waiting (#892)
     row.append(laneLimitPill(p, k.id, p.id + "#" + k.id, k.name || k.masked));
     row.append(el("span", "grow"));
-    // one, under the chips if it doesn't fit (young02036); held: app.css
+    // one, under the chips if it doesn't fit (young02036)
     const acts = el("span", "key-acts");
-    acts.onclick = () => keyHeld = k.id;
-    if (keyHeld === k.id) row.classList.add("held"), addEventListener("pointermove", function go(e) { if (!row.contains(e.target)) keyHeld = null, row.classList.remove("held"), removeEventListener("pointermove", go); });
     // off and on by name (wei_VC on X); not the last key on, which the
     // provider's own switch is for. An off key's Switch on always shows
     if (!k.on || several) {
@@ -17574,7 +17566,7 @@ function panelBalances(bals) {
         amount.append(el("b", "pq-amt", balanceText(p)), el("span", "", p.label));
         card.append(amount);
       } else {
-        amount = el("span", "pq-sub pq-bp");
+        amount = el("span", "pq-sub pq-bp" + (p.soon ? " soon" : ""));
         amount.append(el("span", "", p.label || ""), el("b", "", balanceText(p)));
         card.append(amount);
       }
@@ -18358,8 +18350,6 @@ function fitQuotas() {
   quotaFitting.clear();
 }
 function fitQuota(g) {
-  // a count's own width, its parts laid end to end: once stacked it spans
-  // the row and may be two lines, so its box no longer says
   const wide = (e) => [...e.children].reduce((w, c) => w + c.getBoundingClientRect().width, 0) + 4 * (e.children.length - 1);
   const wraps = [...g.querySelectorAll(".quota-labels")].some((l) => {
     const [name, n] = l.children;
@@ -18372,20 +18362,16 @@ function fitQuota(g) {
   for (const l of ls) if (top[l.offsetTop] > h(l) + 0.5) l.style.minHeight = top[l.offsetTop] + "px";
 }
 
-// balanceRow: what is left on an account, as a figure; a balance field
-// with several amounts, each on a line of its own, its label quiet and the
-// first the one that counts, a percent a meter (amber from 90%, as the
-// panel's rings) (#420). Under it, when it was read, unless the card
-// says that under its windows (when false).
+// balanceRow: what is left, a line per amount, the first the one that
+// counts (#420); when it was read under it unless when is false
 function balanceRow(sub, why, when = true) {
   const parts = balanceShown(sub);
   const b = el("div", "quota-balance" + (parts?.length ? " parts" : ""));
   b.title = t(why);
   if (!parts?.length) b.append(el("span", "", t("Balance")), el("b", "", sub.balance));
   for (const [i, p] of (parts || []).entries()) {
-    const row = el("div", "bal-part" + (i ? "" : " lead"));
+    const row = el("div", "bal-part" + (i ? "" : " lead") + (p.soon ? " soon" : ""));
     row.append(el("span", "", p.label || (i ? "" : t("Balance"))), el("b", "", balanceText(p)));
-    // an amount the reply hadn't, "—": why, on hover (#1993)
     if (p.error) row.title = p.error;
     if (p.percent != null) row.append(balanceMeter(p.percent));
     b.append(row);
@@ -18395,14 +18381,17 @@ function balanceRow(sub, why, when = true) {
   return b;
 }
 
-// balanceShown: a balance's amounts each on a line, when it has several:
-// a balance field's own, or the figure and what the vendor says it is
-// made of (DeepSeek's granted credit and the money topped up, wwcraft_ on
-// Discord), those labels in the user's language. null for one figure.
+// balanceShown: a balance's amounts, when it has several (wwcraft_); a
+// part that expires says in how many days (tenacious_eagle)
 function balanceShown(q) {
   if (q.balanceParts?.length) return q.balanceParts;
   if (!q.balanceSplit?.length) return null;
-  return [{ text: q.balance }, ...q.balanceSplit.map((p) => ({ ...p, label: t(p.label) }))];
+  return [{ text: q.balance }, ...q.balanceSplit.map((p) => p.expires ? { ...p, ...expiresIn(p.expires) } : { ...p, label: t(p.label) })];
+}
+// expiresIn: days until ends, soon within a week
+function expiresIn(ends) {
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()), n = Math.round((day(new Date(new Date(ends) - 1)) - day(new Date())) / 864e5);
+  return { days: n, soon: n <= 7, label: n <= 0 ? t("Expires today") : n === 1 ? t("Expires tomorrow") : t("Expires in {n} days", { n }) };
 }
 
 // balanceMeter: a balance field's percent, as a meter, filled as Left or
@@ -22019,6 +22008,11 @@ function pmSub(m) {
     // the Intel build on Apple silicon: Go, translated, several times slower
     if (m.rosetta) return t("On, slowly under Rosetta: the next update installs magpie for Apple silicon");
     if (m.gpuError && m.model === "astrlink-guard") return t("On, on the CPU: CoreML failed ({error})", { error: m.gpuError });
+    // Privacy Filter lost the GPU: to its driver resetting it (device
+    // lost), or to a fault; the GPU is tried again at gpuAgain
+    const time = m.gpuAgain ? hhmm(m.gpuAgain) : "";
+    if (m.gpuReset) return time ? t("On, on the CPU until {time}: the graphics driver reset the GPU (device lost)", { time }) : t("On, on the CPU: the graphics driver reset the GPU (device lost)");
+    if (m.gpuError && time) return t("On, on the CPU until {time}: the GPU failed ({error})", { time, error: m.gpuError });
     return m.gpuError ? t("On, on the CPU: the GPU failed ({error})", { error: m.gpuError }) : t("On, on the CPU");
   }
   if (m.on) return t("On: the model starts with the next request");

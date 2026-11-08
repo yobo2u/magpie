@@ -64,6 +64,9 @@ type Asset struct {
 	URL    string `json:"url"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	// API is GitHub's API address of the file, asked when URL is busy
+	// (apiroute.go); a feed without it has it looked up from URL.
+	API string `json:"api,omitempty"`
 }
 
 // client asks the feed and downloads a release through the proxy the rest
@@ -1139,7 +1142,12 @@ func download(ctx context.Context, a Asset, path string) error {
 	if err := clearFile(path); err != nil {
 		return err
 	}
-	var err error
+	var err, direct error
+	// on, the tries go through GitHub's API route (apiroute.go): once
+	// the address itself answered busy, which trying it again didn't get
+	// past on 2026-11-08, or for the last try after connections that
+	// broke. Never through a mirror the user gave.
+	on, tried := a, false
 	for try := 0; try <= len(retryWaits); try++ {
 		if try > 0 {
 			step(ctx, StepRetry)
@@ -1150,8 +1158,20 @@ func download(ctx context.Context, a Asset, path string) error {
 			}
 		}
 		step(ctx, StepDownload)
-		if err = fetch(ctx, a, path); err == nil || ctx.Err() != nil || !Network(err) {
+		tctx := ctx
+		if on.URL != a.URL {
+			tctx = withAPIRoute(ctx)
+		}
+		if err = fetch(tctx, on, path); err == nil || ctx.Err() != nil || !Network(err) {
 			break
+		}
+		if !tried && mirrorOf(ctx) == "" && (busyErr(err) || try == len(retryWaits)-1) {
+			tried = true
+			if api, aerr := apiRoute(ctx, a); api != "" {
+				on.URL, direct = api, err
+			} else if aerr != nil {
+				err = fmt.Errorf("%w (GitHub's API route couldn't be found: %v)", err, aerr)
+			}
 		}
 		// the tries after a connection that broke go over HTTP/1.1: a
 		// proxy that cuts HTTP/2 streams part way cuts every try made
@@ -1160,6 +1180,9 @@ func download(ctx context.Context, a Asset, path string) error {
 		ctx = netproxy.OverHTTP1(ctx)
 	}
 	if err != nil {
+		if direct != nil {
+			err = fmt.Errorf("%w, and through api.github.com: %v", direct, err)
+		}
 		if cerr := clearFile(path); cerr != nil {
 			err = errors.Join(err, cerr)
 		}
@@ -1197,6 +1220,9 @@ type NetError struct {
 }
 
 func (e *NetError) Error() string {
+	if s, ok := e.Err.(statusError); ok {
+		return fmt.Sprintf("download %s: %s, on every try", e.File, string(s))
+	}
 	cause := e.Err
 	var ue *url.Error
 	if errors.As(cause, &ue) {
@@ -1206,6 +1232,23 @@ func (e *NetError) Error() string {
 }
 
 func (e *NetError) Unwrap() error { return e.Err }
+
+// statusError is a reply a host gives when it is busy, not a refusal of
+// the file: its status line.
+type statusError string
+
+func (s statusError) Error() string { return string(s) }
+
+// busyStatus is a status trying again may get past: the host or its
+// gateway overloaded or timed out, or asking for a pause.
+func busyStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
 
 // Network reports whether err is a download the network broke off, which
 // trying again may get through.
@@ -1219,7 +1262,10 @@ func Network(err error) bool { return errors.As(err, new(*NetError)) }
 func fetch(ctx context.Context, a Asset, path string) error {
 	// through a mirror when one is given (mirror.go): the hash checked
 	// below is still the feed's
-	u := mirrored(mirrorOf(ctx), a.URL)
+	u := a.URL
+	if !onAPIRoute(ctx) {
+		u = mirrored(mirrorOf(ctx), a.URL)
+	}
 	mirror := strings.TrimSuffix(u, a.URL)
 	name := filepath.Base(path)
 	var have int64
@@ -1270,6 +1316,11 @@ func fetch(ctx context.Context, a Asset, path string) error {
 		if have > 0 {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
 		}
+		if onAPIRoute(ctx) {
+			// the file itself; GitHub redirects to it, and Go's client
+			// carries Accept and Range to where it is
+			req.Header.Set("Accept", "application/octet-stream")
+		}
 		res, err = source.Do(fileClient(), req)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1292,6 +1343,11 @@ func fetch(ctx context.Context, a Asset, path string) error {
 		flag = os.O_WRONLY | os.O_APPEND
 	case res.StatusCode == http.StatusOK:
 		have = 0 // the whole file again
+	case busyStatus(res.StatusCode):
+		// the host is busy or its edge timed out (GitHub's asset host
+		// answered 504 Gateway Timeout, 0.1.3316): tried again, as a
+		// connection that broke, with what came kept
+		return fail(&NetError{File: name, Err: statusError(res.Status)})
 	default:
 		if u != a.URL {
 			return fail(&MirrorError{Mirror: mirror, Err: fmt.Errorf("download %s through the mirror %s: %s", name, mirror, res.Status)})

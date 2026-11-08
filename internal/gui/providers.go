@@ -85,6 +85,10 @@ type modelJSON struct {
 	// RemoteList says the list price is what the other magpie counts the
 	// model at, as its list told (a Remote magpie's), not models.dev's
 	RemoteList bool `json:"remoteList,omitempty"`
+	// ListedOutput is its reply limit before the user's Max output: its
+	// vendor's list's, else models.dev's, within Listed; Model settings'
+	// Max output shows it when none is set (sayagoodbyeplz on Discord)
+	ListedOutput int `json:"listedOutput,omitempty"`
 }
 
 type providerJSON struct {
@@ -965,7 +969,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 			images = said
 		}
 		window := p.WindowOf(m)
-		j := modelJSON{ID: m.ID, Name: m.Name, Efforts: provider.EffortsOf(m), On: on, Context: window, Output: provider.OutputWithin(window, p.ReplyLimitIn(m, set)), Listed: provider.ListedWindow(m), Max: m.MaxContext, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Images: images, ImageSet: imageSet, Own: own, Best: newest[m.ID]}
+		j := modelJSON{ID: m.ID, Name: m.Name, Efforts: provider.EffortsOf(m), On: on, Context: window, Output: provider.OutputWithin(window, p.ReplyLimitIn(m, set)), Listed: provider.ListedWindow(m), ListedOutput: provider.OutputWithin(provider.ListedWindow(m), p.ReplyLimitIn(m, settings.Settings{})), Max: m.MaxContext, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Images: images, ImageSet: imageSet, Own: own, Best: newest[m.ID]}
 		j.Zero = !m.Free && p.PricedFree(set, m.ID)
 		// a plugin reports a model's load by its own id, not one the user
 		// lists it by (axelburks on Discord)
@@ -1676,6 +1680,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Refill, for keybalancerefill: when the key's balance typed
 			// is whole again; none for never
 			Refill *provider.Refill `json:"refill"`
+			// Expiring, for keyexpiring: a grant of credit that expires
+			// on the key's balance typed, {amount, until}, added beside
+			// the others; with Remove, the grant {at} (or every one
+			// {until}) taken off; none takes every grant off
+			Expiring *provider.Expiring `json:"expiring"`
+			Remove   bool               `json:"remove"`
 			// Alias, for accountname: the account's name of the user's
 			// own, "" to take it off (#1515)
 			Alias string `json:"alias"`
@@ -2401,6 +2411,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
+		case "keyexpiring":
+			var err error
+			switch {
+			case req.Expiring == nil:
+				err = provider.ClearKeyExpiring(in.ID, req.Account)
+			case req.Remove:
+				err = provider.RemoveKeyExpiring(in.ID, req.Account, *req.Expiring)
+			default:
+				err = provider.AddKeyExpiring(in.ID, req.Account, *req.Expiring)
+			}
+			if err != nil {
+				fail(rw, err)
+				return
+			}
 		case "accountweight":
 			if err := provider.SetAccountWeight(in.ID, req.Account, req.Weight); err != nil {
 				fail(rw, err)
@@ -3076,7 +3100,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		// and System Settings' Login Items, where Open at login is allowed
 		// again: that one pane, not System Settings' scheme at large
-		if strings.HasPrefix(in.URL, "https://") || strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, agent.CindyScheme) || strings.HasPrefix(in.URL, agent.LodyScheme) || strings.HasPrefix(in.URL, agent.AionUiScheme) || in.URL == autostart.LoginItemsURL {
+		if strings.HasPrefix(in.URL, "https://") || strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, agent.CindyScheme) || strings.HasPrefix(in.URL, agent.LodyScheme) || strings.HasPrefix(in.URL, agent.AionUiScheme) || strings.HasPrefix(in.URL, agent.CherryStudioScheme) || in.URL == autostart.LoginItemsURL {
 			open := w.OpenURL
 			// an app's import link is handed over only when something
 			// here opens it: the system says nothing when nothing does,
@@ -3087,7 +3111,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				// Lody on Linux is run with the link, which xdg-open
 				// turned away (agent.OpenLody)
 				open = func(u string) error { return agent.OpenLody(u, app) }
-			case strings.HasPrefix(in.URL, agent.CindyScheme), strings.HasPrefix(in.URL, agent.AionUiScheme):
+			case strings.HasPrefix(in.URL, agent.CindyScheme), strings.HasPrefix(in.URL, agent.AionUiScheme), strings.HasPrefix(in.URL, agent.CherryStudioScheme):
 				open = app
 			}
 			// Open again on a sign-in says why it didn't open (#2043)

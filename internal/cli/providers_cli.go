@@ -98,10 +98,12 @@ const providerUsage = `usage:
                                           how much an API key may spend, in USD as the Usage page prices its calls,
                                           a day (the default), a month or in all from now: at it, routing takes the
                                           key for used up and goes on to the other keys and the fallbacks
-  magpie provider key-balance <id> [key [usd|¥cny|off] [--refill monthly[:day]|weekly[:mon…sun]|off]]
+  magpie provider key-balance <id> [key [usd|¥cny|off] [--refill monthly[:day]|weekly[:mon…sun]|off] [--expiring amount@yyyy-mm-dd|off]… [--expiring-remove [amount@]yyyy-mm-dd]…]
                                           the balance on an API key whose vendor tells none, typed from its own page
                                           in USD or in yuan (¥100): the Usage page shows it less what magpie prices the
-                                          key's calls at since; with --refill it is whole again each month or week
+                                          key's calls at since; with --refill it is whole again each month or week;
+                                          --expiring adds credit that counts through a day and is spent first
+                                          (each one a grant, the soonest spent first; off takes every one off)
   magpie provider account-weight <id> [account [n|default]]
                                           a subscription account's share of the requests with routing=weight:
                                           one weighing 3 takes three for each one weighing 1 takes (default 1)
@@ -856,7 +858,12 @@ func announce(id string) error {
 	return nil
 }
 
-func showProvider(p provider.Provider) error {
+func showProvider(p provider.Provider) error { return showProviderAsking(p, true) }
+
+// showProviderAsking is showProvider; with ask false (an import not yet
+// confirmed) the balance query is named, not asked: nothing goes out with
+// the key before the user says yes.
+func showProviderAsking(p provider.Provider, ask bool) error {
 	kv := func(k, v string) {
 		// a plugin's provider is reached through the plugin, not a URL
 		if v != "" && !strings.HasPrefix(v, "plugin://") {
@@ -937,8 +944,18 @@ func showProvider(p provider.Provider) error {
 	kv("catalog", p.Catalog)
 	kv("website", p.Website)
 	kv("keys", p.KeysURL)
+	if !ask {
+		if u, field := provider.BalanceQuery(p); u != "" {
+			if p.BalanceMethod != "" {
+				u = strings.ToUpper(p.BalanceMethod) + " " + u
+			}
+			kv("balance", u+" "+muted.Render(field+"  asked once added"))
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	if amount, ok, err := provider.Balance(ctx, p); ok {
+	if !ask {
+		cancel()
+	} else if amount, ok, err := provider.Balance(ctx, p); ok {
 		from := ""
 		// where it was asked: a panel's key query when its account query
 		// has no token left to ask with
@@ -1557,7 +1574,7 @@ func importCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := showProvider(p); err != nil {
+	if err := showProviderAsking(p, false); err != nil {
 		return err
 	}
 	if old, err := provider.Find(p.ID); err == nil {
