@@ -7173,12 +7173,15 @@ function pickForAgent(a, p, btn, ev) {
 }
 
 // shinePartners: a hairline of light runs once round the Partners heading
-// when the sheet opens, as the reader reaches it (the owner picked it, of
-// three). Once an opening: a search or a reload drawing it again doesn't.
-function shinePartners(k) {
+// and, at the same time, round its tiles, when the sheet opens, as the
+// reader reaches it (the owner picked it, of three; 标题跟这一块要一起播放).
+// Once an opening: a search or a reload drawing it again doesn't.
+function shinePartners(k, grid) {
   if (partnersShone || calm()) return;
-  k.classList.add("shine");
-  k.append(el("i", "glow"), el("i", "ring"));
+  for (const x of [k, grid]) {
+    x.classList.add("shine");
+    x.append(el("i", "glow"), el("i", "ring"));
+  }
   const seen = new IntersectionObserver(([en]) => {
     // a redraw's new heading takes over from this one
     if (!k.isConnected) return seen.disconnect();
@@ -7187,6 +7190,7 @@ function shinePartners(k) {
     if (partnersShone) return;
     partnersShone = true;
     k.classList.add("lit");
+    grid.classList.add("lit");
   }, { root: $("#view-providers"), threshold: 1 });
   seen.observe(k);
 }
@@ -7270,7 +7274,7 @@ function renderAdd() {
     if (partners.length) {
       any = true;
       const grid = section("Partners", "magpie's sponsors");
-      shinePartners(grid.previousElementSibling);
+      shinePartners(grid.previousElementSibling, grid);
       // a new one's tile keeps a dot until opened (partnerTile)
       newPartnerTiles ??= new Set();
       for (const p of partners) if (p.new && !p.added) newPartnerTiles.add(p.id);
@@ -19167,6 +19171,7 @@ function openSessCombo(anchor, all, opts, value, choose, head) {
   const list = el("div", "sc-list");
   box.append(top, list);
   let items = [];
+  const iconed = opts.some((o) => o.icon);
   const item = (o) => {
     const b = el("button", "pm-item" + (o.v === value ? " on" : ""));
     b.type = "button";
@@ -19177,7 +19182,8 @@ function openSessCombo(anchor, all, opts, value, choose, head) {
     const words = el("span", "pm-words");
     words.append(el("span", "pm-name", o.name), el("span", "pm-note", o.note));
     b.title = o.v;
-    b.append(tick, words);
+    // a menu of agents shows each one's icon; "All" keeps the room blank
+    b.append(tick, ...(iconed ? [o.icon ? icon(o.icon) : el("span", "ic")] : []), words);
     b.onclick = (e) => { e.stopPropagation(); closeProtoMenu(); choose(o.v); };
     hoverFocus(b);
     return b;
@@ -19834,10 +19840,11 @@ function renderCLI(r) {
 }
 
 // Settings' Download source (#893): where an update's file is downloaded
-// from — GitHub, or a GitHub download mirror put before its URL, the same
-// setting `magpie update mirror` writes. magpie names no mirror of its
-// own; the feed and each file's SHA-256 still come from usemagpie.ai, and a
-// file that doesn't match is never installed. A draft and its error are
+// from — usemagpie.ai (R2), and github.com when that fails, or a GitHub
+// download mirror put before github.com's URL, the same setting `magpie
+// update mirror` writes. magpie names no mirror of its own; the feed and
+// each file's SHA-256 still come from usemagpie.ai, and a file that doesn't
+// match is never installed. A draft and its error are
 // kept across the page being drawn again.
 let mirrorEditing = false, mirrorDraft = "", mirrorErr = "";
 function setUpdateMirror(mirror) {
@@ -19852,13 +19859,13 @@ function renderUpdateMirror(r, s) {
   const sub = el("div", "sub");
   who.append(sub);
   const m = s.updateMirror || "";
-  sub.textContent = mirrorErr || (m ? t("Updates are downloaded through this mirror, each checked against usemagpie.ai's checksum")
-    : t("Updates are downloaded from GitHub; a mirror can be used where GitHub is slow"));
+  sub.textContent = mirrorErr || (m ? t("Updates are downloaded from usemagpie.ai, and through this mirror when that fails, each checked against usemagpie.ai's checksum")
+    : t("Updates are downloaded from usemagpie.ai, and from GitHub when that fails; a mirror can stand in for GitHub where it is slow"));
   sub.classList.toggle("err", !!mirrorErr);
   sub.title = t("The update and its checksum always come from usemagpie.ai; a file from the mirror that doesn't match it is not installed.");
   if (!mirrorEditing) {
     if (m) {
-      const official = el("button", "text", t("Use GitHub"));
+      const official = el("button", "text", t("Remove mirror"));
       official.onclick = () => setUpdateMirror("").catch(statusTErr);
       const change = el("button", "text", t("Change"));
       change.onclick = () => { mirrorEditing = true; mirrorDraft = m; renderUpdateMirror(r, s); };
@@ -19866,7 +19873,7 @@ function renderUpdateMirror(r, s) {
     } else {
       const add = el("button", "text", t("Use a mirror…"));
       add.onclick = () => { mirrorEditing = true; mirrorDraft = ""; renderUpdateMirror(r, s); };
-      val.append(el("code", "", "GitHub"), add);
+      val.append(el("code", "", "usemagpie.ai"), add);
     }
     return;
   }
