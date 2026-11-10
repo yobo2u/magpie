@@ -401,6 +401,29 @@ re-derives every place that discloses it.**
   privacy text in the same commit.
 - Seen 1× (2026-10-08).
 
+**A test waits for the state it checks, not for an earlier step of
+the same start.**
+- TestServingGatesTools waited for the gateway's listener and then read
+  the tool gate at once. ListenAndServe sets the listener first and takes
+  the gate later, after loading rests, acks and groups. On a loaded mote,
+  a full -race run of internal/gateway checked in that gap and went red
+  (#6016). With a 300ms pause injected there, it was red 3 of 3.
+  6fa02550a waits for the gate itself.
+- Before waiting on a "ready" sign, read the code that sets it and check
+  that what you assert is done before that sign, not after it.
+- Seen 1× (2026-11-11).
+
+**A body written "to be rewritten at ship" is rewritten before the
+push.**
+- b9f8548d2 (11-10, account export, 1,037 lines; it writes live sign-ins
+  to files) went to main with only "WIP commit before the full checks;
+  body rewritten at ship." The rewrite never happened, so no record of
+  what was run reaches git. This is the 10-15 SUITE_LINE placeholder
+  again, in another wording.
+- Before pushing, read each commit's body (`git log origin/main..`) for
+  "WIP", "TODO", "rewritten" or a template's placeholder.
+- Seen 1× (2026-11-11).
+
 **A test that reads a dependency's source needs the dependency on disk.**
 - 884dbdb2's TestTrayMenuOpenFrameIsWails read Wails' source through
   `go list -m` Dir. CI's fresh module cache hasn't unpacked it, so main was
@@ -893,6 +916,42 @@ each one.
     Writing the rule here didn't reach those sessions. Until a pre-push
     check runs these guards, run them yourself before every push that
     adds an agent or a route.
+  - 86825005e (#5890) wrote two hook-budget tests whose margin was the
+    one second between a hook's own timer and the RPC's 11s. That 11s
+    counts the plugin host's start, which on a busy CI machine is more
+    than a second. Both went red on CI and were fixed one at a time
+    (e39ecfec8, then 0659dc66f). When a test's margin is under a
+    deadline that also covers starting something, start it first, and
+    fix every test in the file that shares the margin.
+  - The route guard went red a sixth and seventh time before midnight:
+    e053c337a's /api/settings/join and 4623f5419's five
+    /api/settings/https routes. 4623f5419's record says it ran
+    `go test ./internal/cli -run Help|HTTPS|TLS|…`, and a -run filter
+    skips the guard, which was named for none of those words. A change
+    that adds a route runs internal/cli whole, with no -run.
+  - The same commit's `GET /magpie-ca.crt` was in neither
+    clientPrefixes nor readOnlyRoutes, so internal/gateway's
+    TestClientPathCoversHandler and TestReadOnlyKeyEveryRoute were red
+    on ubuntu and macOS CI for about ten hours (db0f2f20d, 5b28e8599)
+    under two tags, until 6b11914df. The CLI fix (20aff50d4) answered
+    one guard and stopped there. A route has three guards: the CLI's,
+    the one-port page's and the read-only key's. A change that adds one
+    runs internal/cli and internal/gateway whole, and a fix for one
+    guard reads the other two.
+  - plugins#601 (muzimu217) brought back the Doubao plugin declined on
+    10-06, now reading Doubao.app's HttpOnly cookies over CDP, clicking
+    through its reward campaigns, installing a .dmg into /Applications
+    and sending requests through a third-party relay. It was closed
+    unrun. A vendor the maintainer declined is checked for before the
+    diff is read: search the repo's closed issues and PRs and
+    docs/contributors.md for the vendor's name.
+- **11-10, criteria still missed.**
+  - The suite: 6af54dc9a (internal/library) and b9f8548d2
+    (internal/provider) each added a package-level regexp.MustCompile.
+    Each ran its own packages, not the root package, whose
+    TestNoEagerPackageRegexps went red on ubuntu and macOS CI. It was
+    found by yinwu01 (#6020) and fixed in a68f114d9. A new package-level
+    var runs the guards in `.` too.
 - **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
   diffed staticcheck's U1000 against its base for dead code, b98f906b1
   was red on the old code for an own-account gap, and 8 subscriptions

@@ -56,7 +56,7 @@ line; agents connected to magpie lose it when it quits.
 - **Providers with one field.** Pick a preset (Anthropic, OpenAI, Gemini,
   Amazon Bedrock and its Mantle endpoint, DeepSeek, Kimi, GLM, MiniMax, StepFun, LongCat, Qwen, Baidu Qianfan, Tencent Cloud Token Plan,
   Huawei Cloud MaaS, Volcengine Ark, Mistral, Groq, Nous Portal, xAI, OpenRouter, Together,
-  Fireworks, SiliconFlow, NVIDIA NIM, ModelScope, AiHubMix, PipeLLM, 302.AI, Ollama, LM Studio…),
+  Fireworks, Fireworks Nexus, SiliconFlow, NVIDIA NIM, ModelScope, AiHubMix, PipeLLM, 302.AI, Ollama, LM Studio…),
   paste a key, done. Custom vendors need a name and a base URL. magpie never
   reads keys from your shell environment.
 - **Real model lists, nothing compiled in.** With a key in hand magpie asks
@@ -163,6 +163,7 @@ line; agents connected to magpie lose it when it quits.
 | T3 Code      | `~/.t3/userdata/settings.json` (`$T3CODE_HOME/userdata`) | provider (a `magpie` provider instance on Claude Code, magpie's models as its custom models; a `magpie-codex` instance on Codex, whose `launchArgs` are Codex's own `-c` overrides to magpie and a `magpie-codex-models.json` catalog beside the settings. The harness is picked in T3's model picker) |
 | OpenMausBot  | `~/.openmausbot/config.json` (`$OMB_DATA_DIR`) | provider (a `magpie` engine in `instances`: OpenMausBot's own Claude endpoint shape, Claude Code with `ANTHROPIC_BASE_URL` at the gateway and magpie's models as its `endpointModels`, in its own `CLAUDE_CONFIG_DIR` under `providers/magpie`. With no `instances` saved, OpenMausBot's default engines are written beside it. OpenMausBot reads it when it starts) |
 | Avibe        | `~/.avibe/config/config.json` (`$AVIBE_HOME`; `~/.vibe_remote` from before 3.0), changed through its control socket `state/dispatch.sock` (Windows: `runtime/control-ipc/endpoint.json`) while it runs | provider (a `magpie` model source on its Models page: custom vendor, OpenAI chat completions at the gateway's `/v1`, with Avibe's own key; Avibe lists magpie's models from the gateway and adds the source to Vibey's, Claude Code's, Codex's and OpenCode's routes. Avibe has to be running to connect or disconnect it) |
+| Kun          | `~/.kun/data/model-connections.v2.json` (`$KUN_DATA_DIR`), changed through its runtime's admin API (`baseUrl` and `runtimeToken` of `runtime.json` in the same folder) while it runs | model (a `magpie` connection in Settings > Providers: HTTP, OpenAI chat completions at the gateway's `/v1`, with Kun's own key and the models picked for Kun; the model picked is Kun's default. Kun has to be running to connect or disconnect it) |
 | OpenHanako   | `~/.hanako/provider-catalog.json` + `agents/<id>/config.yaml` (`$HANA_HOME`; its local API while it runs) | model (the primary agent's; magpie's models as a provider) |
 | AtomCode     | `~/.atomcode/config.toml` (`$ATOMCODE_HOME`) | model, effort (a `magpie` provider account, one model table per catalog model as its own sign-in writes) |
 | Snow CLI     | `~/.snow/profiles/magpie.json` (`$SNOW_CONFIG_DIR`), made the active profile and copied to `config.json` | model (the user's other profiles' models too; Snow App takes the profile in with "Sync Snow CLI API config") |
@@ -960,6 +961,40 @@ port, as the agents, MCP servers and status checks magpie wires here do,
 since no certificate for the server's name covers loopback. A container or
 a WSL distro calling through its NAT address is another computer, and uses
 `https://`. Gateway keys, sharing and allowed addresses work as over HTTP.
+
+**HTTPS on the local network.** Without a certificate of your own, turn
+on Settings → Network and sharing → HTTPS (or `magpie https on`; zhangly1
+on X: Claude on another computer needed magpie at `https://`). magpie
+serves other computers `https://` with a certificate its own CA (the mTLS
+one, in `~/.config/magpie/mtls`) signs for this computer's names, its
+addresses and the name the client dialled; this computer keeps plain
+`http://`. Each computer that calls magpie trusts the CA once: Save under
+magpie's CA puts `magpie-ca.crt` in Downloads, and the gateway serves it
+to any address the share lets in, without a key, at
+`https://<this computer>:<port>/magpie-ca.crt` (`curl -kO`, then check its
+SHA-256 against the one Settings and `magpie https` show). Then:
+
+```sh
+# macOS
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain magpie-ca.crt
+# Windows, as administrator
+certutil -addstore -f Root magpie-ca.crt
+# Debian, Ubuntu
+sudo cp magpie-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates
+# Claude Code and other Node apps, which keep their own list
+export NODE_EXTRA_CA_CERTS=/path/to/magpie-ca.crt
+```
+
+Windows' own `curl.exe` checks revocation, which a private CA has none
+of, so it needs `--ssl-no-revoke`; Node, browsers and Claude Code don't.
+
+To serve a certificate of your own instead (one your network's CA, or a
+public one, signed), Import… under Certificate (or `magpie https import
+cert.pem key.pem`): PEM, the certificate with its chain and an
+unencrypted key, in one file or several. It is kept in
+`~/.config/magpie/https` and read again when it changes; Remove goes back
+to magpie's CA. `--tls-cert` comes before both. A page open from another
+computer can't turn HTTPS on or off under itself.
 
 **Client certificates (mTLS).** A magpie open to the internet can also
 ask every other computer for a client certificate it issued itself
@@ -3530,6 +3565,7 @@ magpie web                      # the app's window in a browser (WSL, a server o
                                 # (behind a reverse proxy, MAGPIE_WEB_URL=https://<the page there> prints the link through it)
 magpie serve                    # the gateway alone, no window; --web[=host:port] serves the page too, from the same process
                                 # --tls-cert <file> --tls-key <file>: https:// for other computers (see HTTPS under sharing)
+magpie https                    # https:// for other computers: on, off, import <files>, remove, ca [--out]
 magpie mtls                     # other computers need a client certificate magpie issued: on, off, issue <device>, revoke <device>, list
 magpie daemon install           # run magpie serve as a service (systemd, launchd); --web, --lan, --addr serve the page too; --tls-cert/--tls-key, --no-tls
 magpie ls                       # list every agent and its current settings
@@ -4126,10 +4162,19 @@ and models to look after first, by magpie's own ids only:
   many times a day the add sheet showed it, its row was opened, its key
   page was opened and a provider was added from it (at most 20 of each,
   5 adds), kept in `~/.cache/magpie/partner-counts.json` for at most 14
-  days and sent the day after as `magpie partner` events.
+  days and sent the day after as `magpie partner` events;
+- to usemagpie.ai, not PostHog, which of the plugins Discover lists are
+  installed and on (npm names, or `github:owner/repo` for a repository
+  tagged `magpie-plugin`; never a folder, a private repository or an
+  unlisted package), with the same id, so Discover can say how many use
+  each (the ids that reported it in 7 days). A like on a plugin's page
+  goes there too, only for a plugin installed here, and is kept in
+  `~/.config/magpie/plugin-likes.json`. The code is
+  [internal/stats/plugins.go](../internal/stats/plugins.go) and
+  [site/pluginstats.js](../site/pluginstats.js).
 
 No names, base URLs, accounts, keys, prompts or usage go. Turn that part off
-in Settings → Privacy → Share the agents, providers and models I use; the
+in Settings → Privacy → Share the agents, providers, models and plugins I use; the
 day's event then has the id, version and system only. Turn it all off in
 Settings → Privacy → Count me as a user, or with `DO_NOT_TRACK=1` or
 `MAGPIE_NO_STATS=1`. Builds from source never send it. The code is

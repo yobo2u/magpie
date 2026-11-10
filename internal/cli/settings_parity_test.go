@@ -202,6 +202,11 @@ var cliForRoute = map[string]string{
 	"GET /api/groups":                      "magpie groups",
 	"POST /api/groups/{action}":            "magpie group",
 	"GET /api/import/{id}":                 "magpie import",
+	"GET /api/settings/https":              "magpie https",
+	"POST /api/settings/https":             "magpie https on",
+	"POST /api/settings/https/ca":          "magpie https ca",
+	"POST /api/settings/https/import":      "magpie https import",
+	"POST /api/settings/https/remove":      "magpie https remove",
 	"POST /api/settings/mtls":              "magpie mtls on",
 	"POST /api/settings/mtls/issue":        "magpie mtls issue",
 	"POST /api/settings/mtls/revoke":       "magpie mtls revoke",
@@ -260,6 +265,9 @@ var notYet = map[string]string{
 	"POST /api/profile/{action}":                 A,  // api.go
 	"POST /api/proxy/check":                      S2, // api.go
 	"POST /api/set":                              S2, // api.go
+	"POST /api/settings/agent-telemetry":         A,  // api.go
+	"POST /api/settings/bark":                    S2, // api.go: Bark server, key and daily time
+	"POST /api/bark/test":                        S2, // api.go: a test push to Bark
 	"POST /api/settings/allowips":                S2, // api.go
 	"POST /api/settings/bare-ids":                S2, // api.go
 	"POST /api/settings/busy-load":               S2, // api.go
@@ -284,6 +292,7 @@ var notYet = map[string]string{
 	"POST /api/settings/full-context":            S2, // api.go
 	"POST /api/settings/github-token":            S2, // api.go
 	"POST /api/settings/guide":                   W,  // api.go
+	"POST /api/settings/join":                    S2, // join.go: the join password, set or turned off
 	"POST /api/settings/lan":                     S2, // api.go
 	"POST /api/settings/log/reveal":              W,  // api.go
 	"POST /api/settings/login":                   S2, // api.go
@@ -322,6 +331,8 @@ var notYet = map[string]string{
 	"POST /api/web-page":                         W,  // apppage.go
 	"GET /api/plugins/builtin":                   P,  // builtins.go
 	"POST /api/plugins/builtin":                  P,  // builtins.go
+	"GET /api/plugins/counts":                    P,  // plugins_counts.go: Discover's installs and likes
+	"POST /api/plugins/like":                     P,  // plugins_counts.go
 	"GET /api/library/browser":                   L,  // browser.go
 	"POST /api/library/browser/setup":            L,  // browser.go
 	"POST /api/library/browser/drag":             L,  // browser.go
@@ -383,6 +394,7 @@ var notYet = map[string]string{
 	"POST /api/library/rtk/upgrade":              L,  // library.go
 	"POST /api/library/skills/check":             L,  // library.go
 	"POST /api/library/skills/probe":             L,  // library.go
+	"POST /api/library/plugins/probe":            L,  // library.go
 	"GET /api/memory":                            L,  // memory.go
 	"POST /api/memory":                           L,  // memory.go
 	"POST /api/memory/digest":                    L,  // memory.go
@@ -395,6 +407,9 @@ var notYet = map[string]string{
 	"POST /api/memory/dream":                     L,  // memory_distill.go
 	"POST /api/memory/dream/run":                 L,  // memory_distill.go
 	"POST /api/memory/dream/undo":                L,  // memory_distill.go
+	"GET /api/memory/semantic":                   L,  // memory_semantic.go
+	"POST /api/memory/semantic":                  L,  // memory_semantic.go
+	"POST /api/memory/rank":                      L,  // memory_semantic.go
 	"POST /api/library/skills/regroup":           W,  // library.go
 	"GET /api/omarchy/widget":                    W,  // omarchy.go
 	"POST /api/omarchy/widget":                   W,  // omarchy.go
@@ -442,6 +457,7 @@ var notYet = map[string]string{
 	"POST /api/signin/{id}/cancel":               P,  // providers.go
 	"POST /api/signin/claude-token":              P,  // providers.go
 	"POST /api/signin/import":                    P,  // providers.go
+	"POST /api/signin/export":                    P,  // providers.go
 	"POST /api/stepfun/{id}/session":             P,  // providers.go
 	"POST /api/stepfun/{id}/signout":             P,  // providers.go
 	"GET /api/speeds":                            U,  // sessions_manage.go: the Sessions row's speed curve
