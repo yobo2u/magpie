@@ -32,7 +32,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -40,6 +39,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/steady"
 )
@@ -88,7 +88,7 @@ func coldAfter(p provider.Provider) time.Duration {
 	if p.Account != nil && p.Account.Agent == "codex" {
 		return chatGPTCold
 	}
-	if p.Host() == deepseekHost {
+	if p.VendorHost() == deepseekHost {
 		return deepseekCold
 	}
 	return cacheCold
@@ -394,11 +394,22 @@ func turnOf(from provider.Protocol, body []byte) (turn int, within bool) {
 // todo nudge, an agent list, Codex's context — begins none: after an
 // answer it carries the turn on, and right after the user's own message
 // it leaves that as it was.
+//
+// An image beside the turn's tool results is the result's, as the bridge
+// tells it (match): a client whose tool messages hold text only sends it
+// in a user message after (pi's "Attached image(s) from tool result:").
+// It carries the turn on, a turn of the user's own begun none (#5767):
+// counted one, the router re-decided the conversation's account at every
+// image result, and the bridge let the waiting run go under the other
+// owner ("tool results account changed"), a new Claude Code told the
+// whole conversation, the prompt cache rewritten each time.
 func turnIn(req *Request) (turn int, within bool) {
-	answered := false
+	answered, results := false, false
 	for _, m := range req.Messages {
 		if m.Role == "assistant" {
 			answered = true
+			results = false
+			continue
 		}
 		if m.Role != "user" {
 			continue
@@ -414,6 +425,12 @@ func turnIn(req *Request) (turn int, within bool) {
 		}
 		switch {
 		case result:
+			within = true
+			results = true
+		case results && withImages(m):
+			// the words beside the images are their caption, as match
+			// reads them; the user's words in a message of no images
+			// begin a turn (saidWithResults)
 			within = true
 		case said:
 			turn++
@@ -1153,7 +1170,7 @@ func unanswered(key string, c candidate) {
 // blob", which names no item and says nothing of encrypted content,
 // where the #3392 shaping (xaiBody's) never runs because the relay's
 // host isn't api.x.ai.
-var foreignReasoning = regexp.MustCompile(`(?i)invalid_encrypted_content|invalid[ _]encrypted[ _](summary|content)|encrypted[ _]content.{0,80}could not be (verified|decrypted)|could not (decrypt|verify).{0,40}encrypted[ _]content|could not (decode|decrypt).{0,20}compaction[ _]blob`)
+var foreignReasoning = lazyre.New(`(?i)invalid_encrypted_content|invalid[ _]encrypted[ _](summary|content)|encrypted[ _]content.{0,80}could not be (verified|decrypted)|could not (decrypt|verify).{0,40}encrypted[ _]content|could not (decode|decrypt).{0,20}compaction[ _]blob`)
 
 // refusedSeals remembers, per conversation and the key or account that
 // refused it, what another one sealed: its reasoning, and the sealed copy

@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -29,6 +28,8 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lastgood"
+	"github.com/yetone/magpie/internal/lazyre"
+	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
 )
@@ -271,6 +272,10 @@ type Provider struct {
 	// weighs it at nothing). Prices and the costs Usage counts stay as
 	// listed: it says what to spend first, not what a call cost.
 	CountFree bool `json:"countFree,omitempty"`
+	// Billing is the user's word on how the provider bills: BillingPlan
+	// or BillingPAYG (EV_John_Liu on X); "" has magpie read it
+	// (BillingKind). It only marks the provider on Providers and Routing.
+	Billing string `json:"billing,omitempty"`
 	// RateWindows are the time-of-day windows it bills at its own rate
 	// (#2463): a peak at 2× or 3×, a discount off peak. The first window
 	// that holds a call's time multiplies the price again, on top of
@@ -460,6 +465,19 @@ type Provider struct {
 	// (TakesInsecureTLS), for the hosts of its own base URLs
 	// (UncheckedHosts); see Via.
 	HTTP1 bool `json:"http1,omitempty"`
+
+	// ClientCert and ClientKey are the PEM files of a client certificate
+	// magpie shows the provider's own HTTPS hosts when they ask for one,
+	// and ServerCA a PEM CA their certificate may be signed by beside the
+	// system's roots (#5596, clxsh, and hhdaxia on X: Remote magpie to a
+	// magpie at home behind an Nginx that requires a client certificate,
+	// or one with `magpie mtls` on). Only a provider the user added, and
+	// Remote magpie, takes them (TakesClientCert), for the hosts of its
+	// own base URLs (UncheckedHosts), on every request made for it:
+	// models, the connection test, requests, quotas; see Via.
+	ClientCert string `json:"clientCert,omitempty"`
+	ClientKey  string `json:"clientKey,omitempty"`
+	ServerCA   string `json:"serverCA,omitempty"`
 
 	// Proxy is the proxy magpie's requests to this provider go through
 	// (#237: Codex through one, a vendor at home without): "" follows
@@ -1063,6 +1081,8 @@ func accountSettings(a, pk Provider) Provider {
 	a.PriceRate = pk.PriceRate
 	// counted free by the user's word, every account alike
 	a.CountFree = pk.CountFree
+	// and how it bills, by the user's word (BillingKind)
+	a.Billing = pk.Billing
 	// the hours the provider bills at its own rate (#2463), as the editor
 	// keeps them for the account like the rest of these
 	a.RateWindows = pk.RateWindows
@@ -1163,7 +1183,7 @@ func readElsewhere() string {
 	return fmt.Sprintf("\n  this magpie reads its files from %s, as XDG_CONFIG_HOME says; the app opened from the Dock or Start menu keeps them in %s. Run it with XDG_CONFIG_HOME unset (env -u XDG_CONFIG_HOME magpie …) to use those", appdir.Config(), def)
 }
 
-var idRe = regexp.MustCompile(`[^a-z0-9]+`)
+var idRe = lazyre.New(`[^a-z0-9]+`)
 
 // Slug derives an id from a name: "My Relay" → "my-relay".
 func Slug(name string) string {
@@ -1243,6 +1263,21 @@ func Save(p Provider) error {
 		}
 		if p.HTTP1 && !p.TakesInsecureTLS() {
 			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can be held to HTTP/1.1", p.Name)
+		}
+		if p.ClientCert != "" || p.ClientKey != "" || p.ServerCA != "" {
+			if !p.TakesClientCert() {
+				return fmt.Errorf("%s: a client certificate or server CA is only for a provider you added with a base URL of its own, or Remote magpie", p.ID)
+			}
+			for _, f := range []*string{&p.ClientCert, &p.ClientKey, &p.ServerCA} {
+				v, err := CertPath(*f)
+				if err != nil {
+					return fmt.Errorf("%s: %w", p.ID, err)
+				}
+				*f = v
+			}
+			if err := netproxy.CheckClientCert(p.ClientCert, p.ClientKey, p.ServerCA); err != nil {
+				return fmt.Errorf("%s: %w", p.ID, err)
+			}
 		}
 		if strings.Contains(p.Decide, WorkspaceID) {
 			return errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")
@@ -1478,6 +1513,9 @@ func AddCopy(p Provider, from string) (string, error) {
 	p.Searches = p.Searches || src.Searches
 	p.Unredacted = p.Unredacted || src.Unredacted
 	p.CountFree = p.CountFree || src.CountFree
+	if p.Billing == "" {
+		p.Billing = src.Billing
+	}
 	p.NativeCompaction = p.NativeCompaction || src.NativeCompaction
 	if p.Socket == "" {
 		p.Socket = src.Socket

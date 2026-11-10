@@ -964,6 +964,13 @@ magpie.plugin("library", (ctx) => {
   let memOpen = null;    // the memory open to edit, or "new"
   let memDraft = null;   // its fields as typed
   let memRemoving = null; // the memory whose Delete was clicked once
+  // Select (RealZeroP27 on X): a box on each memory shown, and a bar that
+  // keeps, archives, restores or deletes the ones picked at once
+  let memPicking = false;
+  const memPicked = new Set(); // ids
+  let memAnchor = null;  // the one picked or unpicked last: a Shift-click's range starts there
+  let memSure = false;   // the bar's Delete was clicked once
+  let memShown = [];     // the memories listed, in their order
   const MEM_KINDS = ["profile", "preference", "rule", "reference", "fact", "procedure", "episode"];
   const kindName = (k) => ({ profile: t("About you"), preference: t("Preference"), rule: t("Rule"), reference: t("Reference"), fact: t("Fact"), procedure: t("How-to"), episode: t("Decision") })[k] || k;
   function scopeName(s) {
@@ -1086,15 +1093,23 @@ magpie.plugin("library", (ctx) => {
     ], memStatus, (v) => { memStatus = v; memOpen = null; render(); });
     st.classList.add("lib-memstatus");
     const sc = menuButton(memScope ? scopeName(memScope) : t("All"), "lib-memscope", () => openProtoMenu(sc, [{ v: "", name: t("Everywhere and every project"), literalName: true, note: "" }, ...memScopes(true).filter((s) => all.some((m) => m.scope === s)).map((s) => ({ v: s, name: scopeName(s), literalName: true, note: "" }))], memScope, (v) => { memScope = v; render(); }, "Where it applies"));
-    bar.append(q, sc, st, el("span", "grow"), button("+ " + t("Add"), "action lib-memadd", () => { openMemory(null); render(); }));
-    body.append(bar);
-
     const words = memQ.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const shown = all.filter((m) => (memStatus === "archived" ? m.status === "archived" || m.status === "superseded" : m.status === memStatus)
       && (!memScope || m.scope === memScope)
       && words.every((w) => [m.text, m.why || "", ...(m.tags || []), kindName(m.kind), scopeName(m.scope)].join(" ").toLowerCase().includes(w)))
       .sort((a, b) => (!!b.pinned - !!a.pinned) || (b.updated > a.updated ? 1 : b.updated < a.updated ? -1 : 0));
-    const list = el("div", "list lib-list lib-mems");
+    // what's picked is what's listed: a search, a filter or another
+    // status leaves the rest unpicked, and an empty list ends Select
+    memShown = shown;
+    for (const id of memPicked) if (!shown.some((m) => m.id === id)) memPicked.delete(id);
+    if (memAnchor && !memPicked.has(memAnchor) && !shown.some((m) => m.id === memAnchor)) memAnchor = null;
+    if (memPicking && !shown.length) endMemPick();
+    bar.append(q, sc, st, el("span", "grow"));
+    if (memPicking || shown.length > 1) bar.append(memPickButton());
+    bar.append(button("+ " + t("Add"), "action lib-memadd", () => { endMemPick(); openMemory(null); render(); }));
+    body.append(bar);
+
+    const list = el("div", "list lib-list lib-mems" + (memPicking ? " picking" : ""));
     if (memOpen === "new") list.append(memDetail(null));
     for (const m of shown) list.append(...memRow(m));
     if (!shown.length && memOpen !== "new") {
@@ -1104,6 +1119,121 @@ magpie.plugin("library", (ctx) => {
         : t("Nothing remembered yet. Tell an agent “remember that…”, or add one here.")));
     }
     body.append(list);
+    if (memPicking) body.append(memPickBar());
+  }
+
+  // ---------- some memories, picked, acted on at once ----------
+
+  function endMemPick() {
+    memPicking = false;
+    memPicked.clear();
+    memAnchor = null;
+    memSure = false;
+  }
+  function memPickButton() {
+    const b = button(memPicking ? t("Done") : t("Select"), "action lib-select lib-memselect", () => {
+      const on = !memPicking;
+      endMemPick();
+      if (on) { memPicking = true; memOpen = null; memDraft = null; memRemoving = null; }
+      render();
+      if (on) requestAnimationFrame(() => page.querySelector(".lib-mems .lib-pickbox")?.focus({ preventScroll: true }));
+    });
+    b.dataset.alt = memPicking ? t("Select") : t("Done"); // as wide as the other, see library.css
+    b.title = memPicking ? t("Stop picking memories") : t("Pick some memories and act on them together");
+    return b;
+  }
+  // a click picks one or unpicks it; with Shift, every one from the last
+  // clicked to this one takes the last one's state
+  function memPick(id, range) {
+    const ids = memShown.map((m) => m.id);
+    const to = ids.indexOf(id), from = range && memAnchor ? ids.indexOf(memAnchor) : -1;
+    if (from >= 0 && to >= 0) {
+      const on = memPicked.has(memAnchor);
+      for (const x of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) on ? memPicked.add(x) : memPicked.delete(x);
+    } else if (memPicked.has(id)) memPicked.delete(id);
+    else memPicked.add(id);
+    memAnchor = id;
+    memSync();
+  }
+  function memPickAll(on) {
+    for (const m of memShown) on ? memPicked.add(m.id) : memPicked.delete(m.id);
+    memSync();
+  }
+  // every box and the bar as the picks are now, without drawing the page
+  // again: the box with the focus keeps it
+  function memSync() {
+    memSure = false;
+    for (const row of page.querySelectorAll(".lib-mems .lib-mem")) {
+      const on = memPicked.has(row.dataset.id);
+      row.classList.toggle("picked", on);
+      const box = row.querySelector(".lib-pickbox");
+      if (box) box.checked = on;
+    }
+    page.querySelector(".lib-mempickbar")?.replaceWith(memPickBar());
+  }
+  // the keys a picked list answers to: ↑ ↓ move between the boxes (with
+  // Shift, picking as they go), ⌘A / Ctrl+A picks every one shown, Escape
+  // ends Select
+  function memPickKeys(e, id) {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endMemPick(); render(); page.querySelector(".lib-memselect")?.focus({ preventScroll: true }); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "a") { e.preventDefault(); e.stopPropagation(); memPickAll(memPicked.size !== memShown.length); return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const boxes = [...page.querySelectorAll(".lib-mems .lib-pickbox")];
+    const i = boxes.findIndex((b) => b.closest(".lib-mem")?.dataset.id === id);
+    const next = boxes[i + (e.key === "ArrowDown" ? 1 : -1)];
+    if (!next) return;
+    next.focus({ preventScroll: true });
+    next.closest(".lib-mem")?.scrollIntoView({ block: "nearest" });
+    if (e.shiftKey) {
+      const nid = next.closest(".lib-mem").dataset.id;
+      if (!memAnchor) memAnchor = id;
+      memPick(nid, true);
+    }
+  }
+  function memPickBar() {
+    const bar = el("div", "row lib-row lib-pickbar lib-mempickbar");
+    const n = memShown.filter((m) => memPicked.has(m.id)).length;
+    const every = el("label", "lib-pickall");
+    const all = el("input", "lib-pickbox lib-mempickall");
+    all.type = "checkbox";
+    all.checked = n > 0 && n === memShown.length;
+    all.indeterminate = n > 0 && n < memShown.length;
+    all.onclick = (e) => { e.stopPropagation(); memPickAll(n !== memShown.length); };
+    all.onkeydown = (e) => { if (e.key === "Escape") memPickKeys(e, ""); };
+    every.append(all, el("span", "", t("All {n}", { n: memShown.length })));
+    bar.append(every, el("span", "lib-pickn" + (n ? "" : " none"), n ? t("{n} selected", { n }) : t("Shift-click picks a range")), el("span", "grow"));
+    if (n) {
+      const ids = memShown.filter((m) => memPicked.has(m.id)).map((m) => m.id);
+      const act = async (path, body, done) => {
+        const ok = await memChange(path, body, done);
+        if (ok) { memPicked.clear(); memAnchor = null; memSure = false; render(); }
+      };
+      // what the status shown moves them to: kept, archived or brought back
+      const to = memStatus === "candidate" ? ["active", t("Keep"), t("{n} kept", { n })]
+        : memStatus === "active" ? ["archived", t("Archive"), t("{n} archived", { n })]
+        : ["active", t("Restore"), t("{n} restored", { n })];
+      bar.append(button(to[1], "action lib-updall lib-memto", () => act("memory/status", { ids, status: to[0] }, to[2])));
+      // deleted on a second click, as one memory's Delete is
+      const del = button(memSure ? t("Delete {n} for good", { n }) : t("Delete"), (memSure ? "primary danger-fill" : "action danger") + " lib-updall lib-memdel", () => {
+        if (!memSure) {
+          memSure = true;
+          const b = memPickBar();
+          bar.replaceWith(b);
+          b.querySelector(".lib-memdel")?.focus({ preventScroll: true });
+          return;
+        }
+        act("memory/remove", { ids }, t("{n} deleted", { n }));
+      });
+      bar.append(del);
+      const c = button(t("Clear"), "lib-updall lib-pickclear", () => { memPicked.clear(); memAnchor = null; memSync(); });
+      c.title = t("Unpick them all");
+      bar.append(c);
+    }
+    bar.append(button(t("Done"), "action lib-updall lib-pickdone", () => { endMemPick(); render(); }));
+    bar.onkeydown = (e) => { if (e.key === "Escape") memPickKeys(e, ""); };
+    return bar;
   }
   // the model conversations are read and memory tidied with: the
   // automatic one or one picked, shared by both rows
@@ -1116,6 +1246,29 @@ magpie.plugin("library", (ctx) => {
     d.model || "", (v) => distChange("memory/distill", { on: d.on, model: v }), "Model", "", "left", false, d.models.length > 8 ? "Search models" : ""));
     return pick;
   }
+  // the reasoning level the model reads and tidies at, when its levels
+  // are known: Default sends none (RealZeroP27 on X)
+  function memEffortPick(d) {
+    if (!d.efforts?.length) return null;
+    const shown = d.effort ? d.effortNow || d.effort : "";
+    const b = menuButton(shown ? t(shown) : t("Default"), "lib-disteffort", () => openProtoMenu(b,
+      [{ v: "", name: "Default", note: "The model's own" }, ...d.efforts.map((l) => ({ v: l, name: l, note: "" }))],
+      shown, (v) => v !== (d.effort || "") && distChange("memory/distill", { on: d.on, model: d.model || "", effort: v }), "Thinking"));
+    b.prepend(effortIcon({ options: d.efforts.map((l) => ({ value: l })), value: shown }));
+    b.title = t("How hard this model thinks");
+    return b;
+  }
+  // how far back conversations are read: 7 days unless picked, All the
+  // latest 400 (memdistill.Listed); a longer range reads at once
+  const rangeName = (n) => n === -1 ? t("All") : n === 365 ? t("1 year") : t("{n} days", { n });
+  function memRangePick(d) {
+    const cur = d.days || 7;
+    const b = menuButton(rangeName(cur), "lib-distrange", () => openProtoMenu(b,
+      (d.ranges || [7, 30, 90, 365, -1]).map((n) => ({ v: String(n), name: rangeName(n), literalName: true, note: n === -1 ? "The latest 400 conversations" : "" })),
+      String(cur), (v) => +v !== cur && distChange("memory/distill", { on: d.on, model: d.model || "", days: +v }), "How far back it reads"));
+    b.title = t("How far back it reads");
+    return b;
+  }
   // Conversations read into memory (internal/memdistill): what the
   // agents' finished sessions say worth keeping waits under To review.
   // Off until switched on; the model is the automatic one or one picked.
@@ -1126,15 +1279,19 @@ magpie.plugin("library", (ctx) => {
     w.append(el("div", "name", t("Learn from conversations")));
     let line = t("Reads each finished conversation for what to remember. You review each one before agents see it.");
     let err = false;
-    if (d.on && d.running) line = t("Reading conversations…");
-    else if (d.on && d.error) { line = t("Stopped {when}: {error}", { when: ago(d.last), error: d.error }); err = true; }
-    else if (d.on && d.last) line = t("Read {when} · {k} new to review", { when: ago(d.last), k: d.added || 0 });
+    // a run's progress, and what one left, so a long backlog is seen
+    // going and Read now reads the rest (RealZeroP27 on X)
+    const left = d.left ? " · " + t("{n} not read yet", { n: d.left }) : "";
+    if (d.on && d.running) line = d.of ? t("Reading conversations… {n} of {m}", { n: d.doing || 0, m: d.of }) : t("Reading conversations…");
+    else if (d.on && d.error) { line = t("Stopped {when}: {error}", { when: ago(d.last), error: d.error }) + left; err = true; }
+    else if (d.on && d.last) line = t("Read {when} · {k} new to review", { when: ago(d.last), k: d.added || 0 }) + left;
     else if (d.on) line = t("Reads conversations quiet for 30 minutes, every hour");
     w.append(el("div", "sub" + (err ? " err" : ""), line));
     const acts = el("div", "lib-acts");
     if (d.on) {
-      acts.append(memModelPick(d));
+      acts.append(memModelPick(d), ...[memEffortPick(d)].filter(Boolean), memRangePick(d));
       if (!d.running) acts.append(button(t("Read now"), "action lib-distnow", () => distChange("memory/distill/run", {})));
+      else if (d.of > 1) acts.append(button(t("Stop"), "action lib-diststop", () => distChange("memory/distill/stop", {})));
     }
     acts.append(toggle(d.on, t("Learn from conversations"), (on) => distChange("memory/distill", { on, model: d.model || "" })));
     r.append(glyph(GLYPH.search), w, acts);
@@ -1160,7 +1317,7 @@ magpie.plugin("library", (ctx) => {
     w.append(el("div", "sub" + (err ? " err" : ""), line));
     const acts = el("div", "lib-acts");
     if (ch.length && !d.undone && !d.dreaming) acts.append(button(t("Undo"), "action lib-dreamundo", () => distChange("memory/dream/undo", {}, true)));
-    if (d.dream && !d.on) acts.append(memModelPick(d));
+    if (d.dream && !d.on) acts.append(memModelPick(d), ...[memEffortPick(d)].filter(Boolean));
     if (d.dream && !d.dreaming && !d.running) acts.append(button(t("Tidy now"), "action lib-dreamnow", () => distChange("memory/dream/run", {})));
     acts.append(toggle(d.dream, t("Tidy up every night"), (on) => distChange("memory/dream", { on })));
     r.append(glyph(GLYPH.backup), w, acts);
@@ -1192,7 +1349,7 @@ magpie.plugin("library", (ctx) => {
     }, 2000);
   }
   function memRow(m) {
-    const isOpen = memOpen === m.id;
+    const isOpen = !memPicking && memOpen === m.id;
     const row = el("div", "row lib-row click lib-mem" + (isOpen ? " open" : ""));
     row.dataset.id = m.id;
     const who = el("div", "who");
@@ -1207,6 +1364,21 @@ magpie.plugin("library", (ctx) => {
     const chev = el("span", "chev");
     chev.append(svg(CHEV_R, 11, 1.7));
     row.append(who, tags, chev);
+    if (memPicking) {
+      // a row with a box, which its click ticks rather than opening it
+      const box = el("input", "lib-pickbox");
+      box.type = "checkbox";
+      box.checked = memPicked.has(m.id);
+      box.setAttribute("aria-label", m.text);
+      box.onclick = (e) => { e.stopPropagation(); memPick(m.id, e.shiftKey); };
+      box.onkeydown = (e) => memPickKeys(e, m.id);
+      row.prepend(box);
+      row.classList.toggle("picked", box.checked);
+      // a Shift-click picks a range, not the text between
+      row.onmousedown = (e) => { if (e.shiftKey) e.preventDefault(); };
+      row.onclick = (e) => { memPick(m.id, e.shiftKey); box.focus({ preventScroll: true }); };
+      return [row];
+    }
     row.onclick = () => { if (isOpen) { memOpen = null; memDraft = null; } else openMemory(m); render(); };
     return isOpen ? [row, memDetail(m)] : [row];
   }
@@ -1490,6 +1662,7 @@ magpie.plugin("library", (ctx) => {
     card.append(ttl);
     if (bili.path) {
       ttl.append(el("span", "note mono", bili.version ? "v" + bili.version : tilde(bili.path)));
+      card.append(biliSaved(bili.saved));
       card.append(el("p", "lib-rtk-gain", t("An agent switched on here can't also run billion-context-pi or opencode-acp.")));
       if (bili.listErr) card.append(el("p", "lib-rtk-note lib-rtk-err", t("magpie couldn't read which agents have it: {why}", { why: bili.listErr })));
     } else {
@@ -1526,8 +1699,25 @@ magpie.plugin("library", (ctx) => {
       row.append(sw);
       list.append(row);
     }
-    if (!rows.length) list.append(el("div", "lib-none", t("None of your agents is one billion-context has a plugin for that works with magpie: Pi, omp, OpenCode or Claude Code.")));
+    if (!rows.length) list.append(el("div", "lib-none", t("None of your agents can use billion-context with magpie: Pi, omp, OpenCode, Claude Code, Hermes or Zed.")));
     body.append(list);
+  }
+  // What billion-context saved, in its own count: what its running proxy
+  // says at /__bili/overview (its dashboard's net savings), over every
+  // session on this computer; the last answer kept when none runs now
+  function biliSaved(s) {
+    if (!s) return el("p", "lib-rtk-gain lib-bili-saved", t("What billion-context saves shows here once it has run for an agent."));
+    const n = (v) => Number(v || 0).toLocaleString(intlLang());
+    const count = (v, one, many) => v === 1 ? t(one) : t(many, { n: n(v) });
+    const p = el("p", "lib-rtk-gain lib-bili-saved", s.hasFolds
+      ? t("{saved} tokens saved over {folds} in {sessions}", { saved: (s.net < 0 ? "-" : "") + tokens(Math.abs(s.net)), folds: count(s.folds, "1 fold", "{n} folds"), sessions: count(s.sessions, "1 session", "{n} sessions") })
+      : t("Nothing folded yet over {requests}: billion-context folds a session once it nears the model's window.", { requests: count(s.requests, "1 request", "{n} requests") }));
+    if (s.hasFolds) p.append(" ", el("span", "lib-rtk-scope", t("billion-context's own count, after the rebuilds a fold causes and the summaries' cost ({gross} before them): every session it ran on this computer, from any agent.", { gross: tokens(s.gross) })));
+    if (!s.live) {
+      const at = new Date(s.at);
+      p.append(" ", el("span", "lib-rtk-scope lib-bili-asof", t("As of {time}: billion-context isn't running now.", { time: isNaN(at) ? s.at : at.toLocaleString(intlLang(), { dateStyle: "medium", timeStyle: "short" }) })));
+    }
+    return p;
   }
   async function setBili(a, on) {
     biliBusy.add(a.id);
@@ -1608,14 +1798,15 @@ magpie.plugin("library", (ctx) => {
           const tags = [tag(k.kind)];
           if (!k.installed) tags.push(tag(t("Not installed"), "", t("Pi installs it when it next starts")));
           else if (k.version) tags.push(tag("v" + k.version));
-          list.append(piRow(p, others, { pkg: k.source }, k.name, k.source, k.on, tags, k.filtered));
+          list.append(piRow(p, others, { pkg: k.source }, k.name, k.source, k.on, tags, k.filtered, () => confirmRemovePi(p, k)));
         }
         if (!(p.extensions || []).length && !(p.packages || []).length) list.append(el("div", "lib-none", t("No extensions or packages yet.")));
       }
       body.append(list);
     }
+    if (live.length) body.append(discover("pi"));
   }
-  function piRow(p, others, what, name, sub, on, tags, filtered) {
+  function piRow(p, others, what, name, sub, on, tags, filtered, remove) {
     const key = p.id + " " + (what.ext || what.pkg);
     const row = el("div", "row lib-row lib-pi-row");
     row.dataset.id = what.ext || what.pkg;
@@ -1635,6 +1826,13 @@ magpie.plugin("library", (ctx) => {
     if (filtered) sw.title = t("This entry loads only some of the package; change it with pi config");
     sw.disabled = !!filtered || piBusy.has(key);
     row.append(sw);
+    if (remove) {
+      const rm = button("", "lib-icon danger lib-rm lib-pi-rm", remove);
+      rm.append(svg(GLYPH.trash, 13, 1.4));
+      rm.title = t("Remove");
+      rm.disabled = piBusy.has(key);
+      row.append(rm);
+    }
     return row;
   }
   async function setPi(p, what, name, on) {
@@ -2250,7 +2448,8 @@ magpie.plugin("library", (ctx) => {
       // and again once it changed after that: a sign-in since isn't left
       // beside "needs sign-in" (新v学员 on Discord)
       // With no agent, the router is what starts them, so on it checks them too
-      const unchecked = lib.servers.filter((s) => (inUse(s) || (agentless() && lib.mcpHub && inHub(s)) || health.has(s.name)) && health.get(s.name)?.key !== healthKey(s));
+      // One turned off is started for nobody, and checked only on a click.
+      const unchecked = lib.servers.filter((s) => (!s.hidden && (inUse(s) || (agentless() && lib.mcpHub && inHub(s))) || health.has(s.name)) && health.get(s.name)?.key !== healthKey(s));
       queueMicrotask(() => checkHealth(unchecked));
     }
     // an agent's own servers (Codex's node_repl, added each time it starts)
@@ -2681,7 +2880,8 @@ magpie.plugin("library", (ctx) => {
   }
 
   function serverRow(s, all) {
-    const row = el("div", "row lib-row click lib-server");
+    const row = el("div", "row lib-row click lib-server" + (s.hidden ? " off" : ""));
+    row.dataset.server = s.name;
     const who = el("div", "who");
     const nm = el("div", "name mono", s.name);
     if (s.signIn?.dead) nm.append(tag(t("Sign-in ran out"), "warn", t("Open it to sign in again")));
@@ -2700,13 +2900,26 @@ magpie.plugin("library", (ctx) => {
     who.append(noteSub(s.note, sub, serverLine(s)), toolsEl(s.name));
     row.append(mark(s.icon, s.transport === "stdio" ? GLYPH.cmd : GLYPH.web), who, ...removeAct(() => confirmRemoveServer(s)),
       // no agent to give it to: other apps reach it through the router
-      ...(agentless() ? [] : [agentChips(withGone(all, s.agents), s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true })]));
+      ...(agentless() ? [] : [agentChips(withGone(all, s.agents), s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true })]),
+      ...serverSwitch(s));
     if (picking) return pickRow(row, s.name);
     // a line of its own under the row, not in the name's column (tao0194)
     if (s.name === "magpie-browser" && !s.agents?.length) row.append(browserAsk(row));
     row.onclick = () => editServer(s);
     row.title = t("Edit {name}", { name: s.name });
     return row;
+  }
+
+  // A server off for everyone, or on again as it was (swang20201 on X:
+  // an installed server could only be removed). Off, no agent, project or
+  // app at the router's address has it, and it keeps its settings, env
+  // and sign-in; on, the agents it had get it back. While picking, the
+  // bar is the one acting, as with Remove.
+  function serverSwitch(s) {
+    if (picking) return [];
+    const on = !s.hidden;
+    return [toggle(on, t("Turn {name} on or off", { name: s.name }), (v) => change("servers/on", { name: s.name, on: v },
+      v ? t("{name} is on again", { name: s.name }) : t("{name} is off; its settings are kept", { name: s.name })))];
   }
 
   // Magpie Browser connected and given to no agent: it is added opt-in, so
@@ -5336,6 +5549,11 @@ magpie.plugin("library", (ctx) => {
   // MCP tab lists the same projects with the servers.
   let addingProject = null;       // the folder being added: { dir, error, busy }
   const openProjects = new Set(); // projects whose skills (or servers) are shown
+  // An open project's card lists the skills it has, not every library
+  // skill as though each were in it (POM_JUMPING on X): its menu picks
+  // which go in. A row whose chips are switched off stays till the card is
+  // closed, so it doesn't vanish under the pointer.
+  const projectShown = new Map(); // project dir → the skills its open card lists
   const projectAgents = () => shownAgents().filter((a) => a.projectSkills);
   // a project's file may take less than the agent's own: Pi's .pi/mcp.json
   // no SSE, whatever extension its user-wide file is for
@@ -5434,7 +5652,7 @@ magpie.plugin("library", (ctx) => {
     const chev = el("span", "chev");
     chev.append(svg(CHEV_R, 11, 1.7));
     head.append(glyph(GLYPH.folder), who, pills, acts, chev);
-    head.onclick = () => { isOpen ? openProjects.delete(p.dir) : openProjects.add(p.dir); render(); };
+    head.onclick = () => { isOpen ? openProjects.delete(p.dir) : openProjects.add(p.dir); projectShown.delete(p.dir); render(); };
     head.title = mcp ? (isOpen ? t("Hide its servers") : t("Pick the servers it gets")) : isOpen ? t("Hide its skills") : t("Pick the skills it gets");
     card.append(head);
     if (p.problems?.[""]) card.append(el("div", "lib-err", p.problems[""]));
@@ -5451,10 +5669,17 @@ magpie.plugin("library", (ctx) => {
     opts.append(lab, el("span", "note", p.copy
       ? t("Copies are made again whenever the library's skill changes; edits made to them are replaced.")
       : t("Links follow the library's skill: an update reaches the project at once.")));
+    const all = projectAgents();
+    const shown = projectShown.get(p.dir) || new Set();
+    projectShown.set(p.dir, shown);
+    const has = (s) => !!(p.skills[s.name]?.length || p.problems?.[s.name]);
+    for (const s of lib.skills) if (has(s)) shown.add(s.name);
+    opts.append(projectSkillsPick(p, all, has));
     card.append(opts);
 
-    const all = projectAgents();
-    for (const s of lib.skills) {
+    const listed = lib.skills.filter((s) => shown.has(s.name));
+    if (!listed.length) card.append(el("p", "lib-aside lib-projfoot lib-projnone", t("No skills yet")));
+    for (const s of listed) {
       const row = el("div", "row lib-row lib-projskill");
       const w = el("div", "who");
       const n = el("div", "name", s.name);
@@ -5477,6 +5702,40 @@ magpie.plugin("library", (ctx) => {
     const skip = shownAgents().filter((a) => a.skills && !a.projectSkills);
     if (skip.length) card.append(el("p", "lib-aside lib-projfoot", t("{agents} reads no project skills folder magpie knows of.", { agents: skip.map((a) => a.name).join(", ") })));
     return card;
+  }
+
+  // The open card's menu of the library's skills, those in the project
+  // ticked. One ticked goes to the agents the project's skills are for
+  // already, or, in a project with none yet, to every agent here that
+  // reads a project's skills; its chips change that after. One unticked is
+  // taken out of the project. The rest keep their agents.
+  function projectSkillsPick(p, all, has) {
+    const b = menuButton(t("Skills"), "lib-projpick", () => {
+      const now = lib.skills.filter(has).map((s) => s.name);
+      const opts = lib.skills.map((s) => ({ v: s.name, name: s.name, literalName: true, note: "" }));
+      openProtoMenu(b, opts, now, async (next) => {
+        const adds = next.filter((n) => !now.includes(n)), outs = now.filter((n) => !next.includes(n));
+        const ids = new Set(all.map((a) => a.id));
+        const used = [...new Set(Object.values(p.skills || {}).flat())].filter((id) => ids.has(id));
+        const agents = used.length ? used : all.filter((a) => !a.gone && !a.unseen && !a.asleep).map((a) => a.id);
+        const names = (xs) => xs.join(", ");
+        if (adds.length && agents.length) {
+          await change("projects/skills", { dir: p.dir, names: adds, agents }, adds.length === 1
+            ? t("{skill} is in {name} for {agents}", { skill: adds[0], name: p.name, agents: agents.map(nameOf).join(", ") })
+            : t("{skills} are in {name} for {agents}", { skills: names(adds), name: p.name, agents: agents.map(nameOf).join(", ") }));
+        }
+        if (outs.length) {
+          const shown = projectShown.get(p.dir);
+          for (const n of outs) shown?.delete(n);
+          await change("projects/skills", { dir: p.dir, names: outs, agents: [] }, outs.length === 1
+            ? t("{skill} is out of {name}", { skill: outs[0], name: p.name })
+            : t("{skills} are out of {name}", { skills: names(outs), name: p.name }));
+        }
+      }, "Pick the skills it gets", "", "right", false, opts.length > 8 ? "Find a skill" : "");
+    });
+    b.setAttribute("aria-expanded", "false");
+    if (!lib.skills.length || !all.length) b.disabled = true;
+    return b;
   }
 
   // A project row's chip: lit at once, so a second click before magpie has
@@ -6854,6 +7113,7 @@ magpie.plugin("library", (ctx) => {
   const market = {
     mcp: { q: "", items: null, error: "", loading: false, seq: 0, timer: 0, custom: null, shown: 0 },
     skills: { q: "", items: null, error: "", loading: false, seq: 0, timer: 0, shown: 0 },
+    pi: { q: "", items: null, error: "", loading: false, seq: 0, timer: 0, shown: 0 },
   };
   // how many cards a list shows at first, and each Show more adds
   const MARKET_PAGE = 60;
@@ -6865,7 +7125,7 @@ magpie.plugin("library", (ctx) => {
     m.loading = true;
     drawMarket(kind);
     try {
-      const r = await api("library/market/" + (kind === "mcp" ? "servers" : "skills") + "?q=" + encodeURIComponent(m.q.trim()));
+      const r = await api("library/market/" + ({ mcp: "servers", skills: "skills", pi: "pi" })[kind] + "?q=" + encodeURIComponent(m.q.trim()));
       if (seq !== m.seq) return;
       m.items = r.items || [];
       m.shown = MARKET_PAGE;
@@ -6885,6 +7145,7 @@ magpie.plugin("library", (ctx) => {
     m.loading = false;
     drawMarket(kind);
     if (kind === "skills") describeSkills();
+    if (kind === "pi") return;
     // The market reads the library as it is now; one it calls added that
     // this page doesn't list was added elsewhere — another window, the CLI.
     const mine = new Set((kind === "mcp" ? lib?.servers : lib?.skills)?.map((x) => x.name) || []);
@@ -6920,7 +7181,7 @@ magpie.plugin("library", (ctx) => {
     const inp = el("input");
     inp.type = "search";
     inp.dataset.lib = "market-" + kind;
-    inp.placeholder = kind === "mcp" ? t("Search MCP servers — GitHub, Postgres, Figma…") : t("Search skills on skills.sh — react, pdf, testing…");
+    inp.placeholder = kind === "mcp" ? t("Search MCP servers — GitHub, Postgres, Figma…") : kind === "pi" ? t("Search Pi packages on npm — mcp, web, subagents…") : t("Search skills on skills.sh — react, pdf, testing…");
     inp.spellcheck = false;
     inp.autocomplete = "off";
     inp.value = m.q;
@@ -6928,7 +7189,7 @@ magpie.plugin("library", (ctx) => {
       m.q = inp.value;
       clearTimeout(m.timer);
       const q = m.q.trim();
-      if (kind === "skills" && q.length === 1) return;
+      if (kind !== "mcp" && q.length === 1) return;
       m.timer = setTimeout(() => fetchMarket(kind), 320);
     };
     inp.onkeydown = (e) => {
@@ -6951,7 +7212,7 @@ magpie.plugin("library", (ctx) => {
     box.classList.toggle("loading", m.loading);
     const note = box.querySelector(".mk-note");
     note.textContent = q && m.items ? (m.items.length === 1 ? t("1 result") : t("{n} results", { n: m.items.length }))
-      : kind === "mcp" ? t("Featured, and the official MCP Registry") : t("Popular on skills.sh");
+      : kind === "mcp" ? t("Featured, and the official MCP Registry") : kind === "pi" ? t("Most downloaded on npm") : t("Popular on skills.sh");
     const grid = box.querySelector(".mk-grid");
     grid.replaceChildren();
     if (!m.items) {
@@ -6974,6 +7235,7 @@ magpie.plugin("library", (ctx) => {
     if (m.error && m.failed && m.items.length) {
       grid.append(el("div", "mk-msg mk-partial", kind === "mcp"
         ? t("The MCP Registry didn't answer ({error}), so these are only magpie's featured servers that match.", { error: m.failed.cause })
+        : kind === "pi" ? t("npm's search didn't answer ({error}), so these are only the matches among the most downloaded packages.", { error: m.failed.cause })
         : t("skills.sh's search didn't answer ({error}), so these are only the matches among magpie's picks and the most installed skills.", { error: m.failed.cause })));
     } else if (m.error) grid.append(el("div", "mk-msg err", m.error));
     if (kind === "mcp" && q && m.custom) grid.append(customAt(q, m.custom, m.items.length));
@@ -6981,9 +7243,11 @@ magpie.plugin("library", (ctx) => {
       grid.append(el("div", "mk-msg", q ? t("Nothing matches “{q}”.", { q }) : t("Nothing to show.")));
       return;
     }
-    for (const x of m.items.slice(0, m.shown)) grid.append(kind === "mcp" ? serverCard(x) : skillCard(x));
+    for (const x of m.items.slice(0, m.shown)) grid.append(cardOf(kind, x));
     moreCards(kind, grid);
   }
+
+  const cardOf = (kind, x) => kind === "mcp" ? serverCard(x) : kind === "pi" ? piCard(x) : skillCard(x);
 
   // The rest of a long list, a page at a time: the cards added under the
   // ones shown, which stay where they are.
@@ -6994,7 +7258,7 @@ magpie.plugin("library", (ctx) => {
     const more = button(t("Show more ({n} left)", { n: left.toLocaleString(intlLang()) }), "mk-more", () => {
       const from = m.shown;
       m.shown += MARKET_PAGE;
-      more.before(...m.items.slice(from, m.shown).map((x) => kind === "mcp" ? serverCard(x) : skillCard(x)));
+      more.before(...m.items.slice(from, m.shown).map((x) => cardOf(kind, x)));
       more.remove();
       moreCards(kind, grid);
       if (kind === "skills") describeSkills();
@@ -7335,6 +7599,102 @@ magpie.plugin("library", (ctx) => {
     const ok = await change("market/skill", body, t("{name} is in the library now", { name: x.name }));
     if (ok) { x.have = x.name; drawMarket("skills"); } // take asked the market again
     return ok;
+  }
+
+  // A package from Pi's market: who has it, or Install into a Pi (picked
+  // when there are several). Pi itself installs it.
+  const piLive = () => (piView?.pis || []).filter((p) => !p.asleep && !p.err && !isHidden({ id: p.id }));
+  const piHas = (x) => piLive().filter((p) => (p.packages || []).some((k) => k.kind === "npm" && k.name === x.name));
+  function piCard(x) {
+    const has = piHas(x);
+    const c = el("div", "mk-card" + (has.length ? " have" : ""));
+    c.dataset.id = x.source;
+    const top = el("div", "mk-top");
+    const who = el("div", "mk-who");
+    const nm = el("div", "mk-name");
+    nm.append(el("span", "mk-title", x.name));
+    who.append(nm);
+    const meta = el("div", "mk-meta");
+    if (x.publisher) meta.append(el("span", "mk-pub", x.publisher));
+    if (x.version) meta.append(el("span", "mk-badge", "v" + x.version));
+    who.append(meta);
+    top.append(logo(x.icon, x.name), who);
+    const d = el("p", "mk-desc", x.description || "");
+    d.title = x.description || "";
+    const foot = el("div", "mk-foot");
+    if (x.downloads) {
+      const n = el("span", "mk-installs");
+      n.append(svg(GLYPH.down, 11, 1.5), el("span", "", compact(x.downloads)));
+      n.title = t("{n} downloads last month", { n: x.downloads.toLocaleString(intlLang()) });
+      foot.append(n);
+    }
+    foot.append(extLink(x.repo || x.npm, x.repo ? t("Source") : "npm"), el("span", "grow"));
+    const live = piLive();
+    const want = live.filter((p) => !has.includes(p));
+    if (has.length && !want.length) {
+      const b = el("span", "mk-have");
+      b.append(svg(CHECK, 11, 2), el("span", "", t("Installed")));
+      b.title = t("In {agents}", { agents: has.map((p) => p.name).join(", ") });
+      foot.append(b);
+    } else if (want.length) {
+      const busy = want.some((p) => piBusy.has(p.id + " " + x.source));
+      const b = button(busy ? t("Installing…") : t("Install"), "action mk-add", () => {
+        if (want.length === 1) return installPi(want[0], x);
+        openProtoMenu(b, want.map((p) => ({ v: p.id, name: p.name, literalName: true, note: "" })), "", (id) => installPi(want.find((p) => p.id === id), x), "Install into", "", "right");
+      });
+      if (busy) { b.disabled = true; b.classList.add("busy"); }
+      if (has.length) b.title = t("In {agents}", { agents: has.map((p) => p.name).join(", ") });
+      foot.append(b);
+    }
+    c.append(top, d, foot);
+    return c;
+  }
+  async function installPi(p, x) {
+    if (!p) return;
+    const key = p.id + " " + x.source;
+    piBusy.add(key);
+    drawMarket("pi");
+    status(t("Installing {name} into {agent}…", { name: x.name, agent: p.name }), "", 300000);
+    try {
+      const v = await api("library/pi/install", { pi: p.id, source: x.source });
+      piView = v;
+      status(v.pending
+        ? t("{name} is in {agent}'s packages now: Pi installs it when it next starts", { name: x.name, agent: p.name })
+        : t("{name} is installed in {agent}: Pi loads it when it next starts, or at /reload", { name: x.name, agent: p.name }), "ok", 8000);
+    } catch (e) {
+      status(e.message, "err", 10000);
+    }
+    piBusy.delete(key);
+    if (tab === "pi") render();
+  }
+  function confirmRemovePi(p, k) {
+    const ed = el("div", "editor lib-editor lib-rmone");
+    const head = el("div", "ehead");
+    head.append(glyph(GLYPH.trash), el("b", "", t("Remove {name} from {agent}?", { name: k.name, agent: p.name })));
+    ed.append(head);
+    ed.append(el("p", "lib-confirm", p.wsl
+      ? t("It is taken out of {agent}'s settings.json; Pi stops loading it when it next starts.", { agent: p.name })
+      : t("pi remove takes it out of {agent}'s settings.json and uninstalls it.", { agent: p.name })));
+    const bar = el("div", "bar");
+    const go = button(t("Remove"), "primary danger-fill", async () => {
+      go.disabled = true;
+      const key = p.id + " " + k.source;
+      piBusy.add(key);
+      try {
+        piView = await api("library/pi/remove", { pi: p.id, source: k.source });
+        status(t("{name} removed from {agent}", { name: k.name, agent: p.name }), "ok", 6000);
+        closeLibModal(true);
+      } catch (e) {
+        status(e.message, "err", 10000);
+        go.disabled = false;
+      }
+      piBusy.delete(key);
+      if (tab === "pi") render();
+    });
+    bar.append(el("span", "grow"), button(t("Cancel"), "", closeLibModal), go);
+    ed.append(bar);
+    modal = { save: () => go.click() };
+    openLib(ed);
   }
 
   function skillSheet(x) {

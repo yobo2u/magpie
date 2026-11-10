@@ -16,13 +16,13 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
@@ -555,7 +555,7 @@ func ptrs(pics []picture) []*picture {
 
 // decimalNumber is a number as JSON writes it, not as Go's ParseFloat also
 // takes it (hex, inf, nan, underscores).
-var decimalNumber = regexp.MustCompile(`^[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?$`)
+var decimalNumber = lazyre.New(`^[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?$`)
 
 // parseSeconds is a duration in whole seconds, however it was written: 6,
 // "6", 6.0, 6e0. What the vendor's limit makes of a length it says itself.
@@ -793,7 +793,7 @@ func signer(p provider.Provider) string {
 
 // idPart is what a provider id or a vendor's request id is made of; an id
 // is put in a URL, so nothing that would change its path gets through.
-var idPart = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var idPart = lazyre.New(`^[A-Za-z0-9_-]+$`)
 
 // parseVideoID is the provider, vendor id, start and signer of a video's id.
 func parseVideoID(id string) (providerID, vendorID string, started time.Time, by string, ok bool) {
@@ -1125,20 +1125,23 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	call.To = provider.Chat
-	var unmask func()
 	prompt := f.Prompt
-	var hits maskHits
-	w, f.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, f.Prompt)
-	defer unmask()
-	// the fields passed on as they came are masked as the prompt is: a
-	// negative_prompt is the user's text all the same
-	var extra maskHits
-	if err == nil {
-		err = maskStrings(r.Context(), f.Extra, &extra)
-	}
-	if err != nil { // fails closed
-		fail(maskStatus(err), err.Error())
-		return
+	var hits, extra maskHits
+	// masked unless every model it may start on is a provider the user
+	// set to go unmasked (unmaskedMembers), as a chat's is
+	if !unmaskedMembers(tries) {
+		var unmask func()
+		w, f.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, f.Prompt)
+		defer unmask()
+		// the fields passed on as they came are masked as the prompt is: a
+		// negative_prompt is the user's text all the same
+		if err == nil {
+			err = maskStrings(r.Context(), f.Extra, &extra)
+		}
+		if err != nil { // fails closed
+			fail(maskStatus(err), err.Error())
+			return
+		}
 	}
 	n := extra.n
 	hits.add(extra)

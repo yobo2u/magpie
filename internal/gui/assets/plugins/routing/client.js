@@ -562,7 +562,7 @@ function routingPage(part) {
       duration: ["duration", "Duration", r.done && r.ms ? took(r.ms) : "—", ""],
       ttft: ["ttft", "First token", r.done && r.ttft ? took(r.ttft) : "—", t("First token")],
       tokens: ["tokens", "Tokens", r.tokens ? tokens(r.tokens) : "—", tokenBreakdown([r])],
-      cache: ["cache-hit", "Cache", prompt ? pct(100 * read / prompt) : "—",
+      cache: ["cache-hit", "Cache", prompt ? hitPct(read / prompt) : "—",
         t("Cache hit rate") + ": " + t("The share of the prompt read from the cache")],
       speed: ["speed", "Speed", speed ? speed.text : "—", speed?.title ||
         t("Output tokens a second after the first, over the streamed replies") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed")],
@@ -584,7 +584,7 @@ function routingPage(part) {
     const v = speedOf(r, tr.ms, tr.ttft, tr.firstText, tr.flow, tr.firstReasoning || 0, tr.reasoningHidden || false);
     if (v) s += " · " + t("{n} tok/s", { n: Math.round(v) });
     const { prompt, read } = promptOf(r);
-    if (prompt) s += " · " + t("request cache hit rate {p}", { p: pct(100 * read / prompt) });
+    if (prompt) s += " · " + t("request cache hit rate {p}", { p: hitPct(read / prompt) });
     return s;
   }
   // a count short (fmtN: 12.3K, 1.2 万), exact on hover when they differ
@@ -1290,6 +1290,16 @@ function routingPage(part) {
   function condText(c) {
     let m;
     if ((m = intentOf(c)) != null) return t("asks for “{intent}”", { intent: m });
+    // a condition in the rule's where, as provider.Cond's Text writes it
+    if ((m = /^tokens ([><≤]) (\d+)$/.exec(c))) return whereText({ field: "tokens", op: { ">": "gt", "<": "lt", "≤": "lte" }[m[1]], value: m[2] });
+    if ((m = /^effort (is not|is|≤) (\w+)$/.exec(c))) return whereText({ field: "effort", op: { "is not": "not", is: "is", "≤": "lte" }[m[1]], value: m[2] });
+    if ((m = /^agent (is not|is) (.+)$/.exec(c))) return whereText({ field: "agent", op: m[1] === "is" ? "is" : "not", value: m[2].split("|").join(",") });
+    if (c === "subagent" || c === "not subagent") return whereText({ field: "subagent", op: c === "subagent" ? "is" : "not" });
+    if ((m = /^(message|system|last) (contains|doesn't contain|starts with|matches) (".*")$/.exec(c))) {
+      let v = m[3];
+      try { v = JSON.parse(v); } catch { v = v.slice(1, -1); }
+      return whereText({ field: m[1], op: { contains: "contains", "doesn't contain": "excludes", "starts with": "starts", matches: "matches" }[m[2]], value: v });
+    }
     if ((m = /^tokens ≥ (\d+)$/.exec(c))) return t("≥ {n} tokens", { n: Number(m[1]).toLocaleString(intlLang()) });
     if (c === "images") return t("has an image");
     if (c === "reasoning") return t("reasoning on");
@@ -2566,7 +2576,7 @@ function routingPage(part) {
   // account's plan; and the provider of a key or account named as one of
   // another provider's on the stage is (twin), so two providers' Key-01
   // rows, each of the same model, are told apart (iamleehom on Discord)
-  const rowSub = (w, twin) => w.fallback ? w.name : w.kind === "provider" ? "" : twin ? [w.name || w.provider, w.plan].filter(Boolean).join(" · ") : w.plan || "";
+  const rowSub = (w, twin) => w.fallback ? w.name : w.kind === "provider" ? "" : twin ? [w.name || w.provider, planName(w.plan)].filter(Boolean).join(" · ") : planName(w.plan) || "";
 
   // sync puts the staged routes on the stage: each agent on the left, and
   // the accounts they weighed, each route's in the order it weighed them —
@@ -3712,6 +3722,8 @@ function routingPage(part) {
       case "stand-in": return t("{agent} asked for {model}, which magpie doesn't serve; magpie served it on {to}, the model its config names.", v);
       case "codex-turn": return t("{agent} asked for {model} for a call of its own, which magpie doesn't serve; magpie served it on {to}, the model its last turn was answered on.", v);
       case "codex-follow": return t("{agent} asked for {model}, one of its own default models, for its memories, and its config names no model for them; magpie served it on {to}, the model of its conversation.", v);
+      case "dsh-compact": return t("{agent} asked for {model} to compact its conversation; magpie served it on {to}, the model set for its compaction.", v);
+      case "dsh-compact-rested": return t("{agent} asked for {model} to compact its conversation, and its provider is out of its limit; magpie served it on {to}, the same model from another provider.", v);
       case "privacy": return t("Masking would have changed this request, so magpie sent it as written to {to}, the model set for that in Settings › Privacy.", v);
       default: return t("magpie served it on {to} in place of {model}.", v);
     }
@@ -4128,7 +4140,7 @@ function routingPage(part) {
       if (total.running) count.append(" · " + bits[bits.length - 1]);
       const meta = [count];
       const coverage = (n) => t("Based on {n} of {total} completed requests", { n, total: total.completed });
-      if (g.key && visibleMetrics.includes("cache") && total.prompt) meta.push(metricElement(["cache-hit", "Avg. cache", pct(100 * total.read / total.prompt),
+      if (g.key && visibleMetrics.includes("cache") && total.prompt) meta.push(metricElement(["cache-hit", "Avg. cache", hitPct(total.read / total.prompt),
         t("Total cache reads divided by total prompt tokens; larger prompts carry more weight") + "\n" + coverage(total.cached)]));
       if (g.key && visibleMetrics.includes("speed") && total.decodeMs) meta.push(metricElement(["speed", "Avg. speed", t("{n} tok/s", { n: Math.round(total.decodeOut * 1000 / total.decodeMs) }),
         t("Total output tokens divided by total decode time; excludes waiting and replies without usable timing") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed") + "\n" + coverage(total.timed)]));
@@ -4854,7 +4866,7 @@ function routingPage(part) {
       const name = el("div", "nm");
       // a provider's own row: its model, the provider's name is the heading
       if (w.kind === "provider") name.append(el("b", "", w.model || w.name));
-      else name.append(el("b", "", who(w)), el("span", "", w.plan || (w.kind === "key" ? t("API key") : "")));
+      else name.append(el("b", "", who(w)), el("span", "", planName(w.plan) || (w.kind === "key" ? t("API key") : "")));
       let st, cls = "", asOf = "";
       const resting = a.rest && at(a.rest.until) > n;
       // its models resting alone, while the account answers its others:
@@ -5616,7 +5628,10 @@ function routingPage(part) {
     hubText();
     win = null; laid = []; gapOf = new Map();
     list.replaceChildren(el("li", "idle", t(purpose.length || day ? "No requests match these filters." : "No request yet")));
-    say(t("Every request an agent sends to magpie shows up here, routed for real."));
+    // the mode line above already says what plays here; a caption saying
+    // it again was one more line to read (yujezhang on X, 11-10)
+    capQ = [];
+    cap.textContent = "";
     log.hidden = true;
     renderHist(); // none live, but the days the history keeps are still there to look at
     layout();
@@ -5818,15 +5833,17 @@ function routingPage(part) {
   });
   // whether magpie finds groups on its own, by the list it fills (蓝猫 on
   // Discord: they could only be removed one at a time)
-  const gFound = el("div", "rt-gfound");
+  const gFound = el("div", "rt-gfound hint-row");
   // how the agents' lists name every group, one setting for them all (and
   // for the providers' models), so it sits over the groups rather than in
   // one group's editor (PAMI on Discord)
-  const gNames = el("div", "rt-gnames");
+  const gNames = el("div", "rt-gnames hint-row");
   // what every group does that sets none of its own when one is rate
   // limited, slow to start, or every member is busy (jiezhengj on Discord:
   // set once rather than in each group); a group's editor sets its own
-  const gDefs = [el("div", "rt-gdef rt-gdef-sink"), el("div", "rt-gdef rt-gdef-first"), el("div", "rt-gdef rt-gdef-patience")];
+  // (each a .hint-row: its line that explains it rests out of sight, shown
+  // in the hover card, settingshints.js)
+  const gDefs = [el("div", "rt-gdef rt-gdef-sink hint-row"), el("div", "rt-gdef rt-gdef-first hint-row"), el("div", "rt-gdef rt-gdef-patience hint-row")];
   // the groups go with the routing groups built-in plugin; the pools stay
   for (const n of [gHead, gFound, gNames, ...gDefs, gList]) n.dataset.feature = "groups";
   // and off (the Essentials preset leaves it off), where they were
@@ -5967,7 +5984,42 @@ function routingPage(part) {
     if (r.time) bits.push(timeText(r.time));
     if (r.folders?.length) bits.push(t("in {folders}", { folders: r.folders.join(" / ") }));
     if (r.exceptFolders?.length) bits.push(t("not in {folders}", { folders: r.exceptFolders.join(" / ") }));
+    for (const c of r.where || []) bits.push(whereText(c));
     return bits.join(" · ");
+  }
+  // a rule's conditions as a field, a way to compare and a value
+  // (aipha2025 on X: provider.Cond), beside the rule's own fields, which
+  // keep meaning what they did. The editor shows a field's first in its
+  // pill; any more (typed in the CLI) in pills of their own
+  const whereOf = (r, f) => (r.where || []).find((c) => c.field === f);
+  const setWhere = (r, f, c) => {
+    const w = [...(r.where || [])], at = w.findIndex((x) => x.field === f);
+    if (!c) { if (at >= 0) w.splice(at, 1); } else if (at >= 0) w[at] = { field: f, ...c }; else w.push({ field: f, ...c });
+    r.where = w;
+  };
+  const TOKEN_OPS = { gte: "≥", gt: ">", lt: "<", lte: "≤" };
+  // the conditions that look for words in a text of the request
+  const TEXT_FIELDS = ["message", "system", "last"];
+  const MESSAGE_OPS = { contains: "has the words", excludes: "doesn't have the words", starts: "starts with the words", matches: "matches the expression" };
+  function whereText(c) {
+    const v = String(c.value ?? "");
+    switch (c.field) {
+      case "tokens": return t("{op} {n} tokens", { op: TOKEN_OPS[c.op] || c.op, n: (+v || 0).toLocaleString(intlLang()) });
+      case "effort":
+        if (c.op === "gte") return t("reasoning ≥ {level}", { level: v });
+        if (c.op === "lte") return t("reasoning ≤ {level}", { level: v });
+        if (v === "off" || v === "on") return (c.op === "not") === (v === "on") ? t("reasoning is off") : t("reasoning on");
+        return t(c.op === "not" ? "reasoning is not {level}" : "reasoning is {level}", { level: v });
+      case "agent": {
+        const agents = v.split(",").filter(Boolean).map(agentName).join(" / ");
+        return c.op === "not" ? t("not {agents}", { agents }) : agents;
+      }
+      case "subagent": return c.op === "not" ? t("not sent by a subagent") : t("sent by a subagent");
+      case "message": return t("message {op} “{text}”", { op: t(MESSAGE_OPS[c.op] || c.op), text: v });
+      case "system": return t("system prompt {op} “{text}”", { op: t(MESSAGE_OPS[c.op] || c.op), text: v });
+      case "last": return t("last user message {op} “{text}”", { op: t(MESSAGE_OPS[c.op] || c.op), text: v });
+    }
+    return [c.field, c.op, v].filter(Boolean).join(" ");
   }
   const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   let groups = null, gEdit = null; // gEdit: { id: "" for a new one, draft }
@@ -5997,7 +6049,7 @@ function routingPage(part) {
     const group = (g) => ({ ...g, id: String(g.id ?? ""), name: typeof g.name === "string" && g.name ? g.name : String(g.id ?? ""),
       members: ids(g.members), memberInfo: objs(g.memberInfo), holds: ids(g.holds), offers: ids(g.offers), shared: ids(g.shared), patterns: objs(g.patterns),
       match: opt(g.match, ids), matched: opt(g.matched, ids), off: opt(g.off, ids), fast: opt(g.fast, ids), levels: opt(g.levels, ids), weights: opt(g.weights, weightsOf), effortMaps: opt(g.effortMaps, effortMapsOf), keys: opt(g.keys, ids),
-      rules: opt(g.rules, (rs) => objs(rs).map((r) => ({ ...r, agents: opt(r.agents, ids), folders: opt(r.folders, ids), exceptFolders: opt(r.exceptFolders, ids) }))) });
+      rules: opt(g.rules, (rs) => objs(rs).map((r) => ({ ...r, agents: opt(r.agents, ids), folders: opt(r.folders, ids), exceptFolders: opt(r.exceptFolders, ids), where: opt(r.where, objs) }))) });
     const refs = (v) => objs(v).filter((m) => typeof m.id === "string");
     return { ...x, groups: objs(x.groups).filter((g) => typeof g.id === "string" && g.id).map(group),
       models: refs(x.models), deciders: refs(x.deciders), pools: objs(x.pools), gatewayKeys: x.gatewayKeys == null ? null : refs(x.gatewayKeys),
@@ -6143,7 +6195,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, note: g.note || "", members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], where: (r.where || []).map((c) => ({ ...c })), time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -6265,7 +6317,7 @@ function routingPage(part) {
       const all = mergeQuotas(subs);
       const ws = (familyWindows(all.windows) || []).slice(0, 3);
       if (!ws.length) continue;
-      const figs = ws.map((w) => t(w.name) + (w.plan ? " · " + w.plan : "") + " " + quotaText(w)).join(" · ");
+      const figs = ws.map((w) => t(w.name) + (w.plan ? " · " + planName(w.plan) : "") + " " + quotaText(w)).join(" · ");
       const text = t("{name}, {n} accounts: {windows}", { name: i.name || i.provider, n: subs.length, windows: figs });
       const line = el("div", "mem rt-gquota", all.unknown ? text + " · " + t("{n} couldn't be read", { n: all.unknown }) : text);
       line.dataset.provider = i.provider;
@@ -6587,7 +6639,7 @@ function routingPage(part) {
     if (groupDirty() && !(await confirmDiscard())) return;
     const g = tp.group;
     gSel = null;
-    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
+    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], where: (r.where || []).map((c) => ({ ...c })), time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
     renderGroups();
     const ed = gList.querySelector(".rt-gedit");
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -6728,7 +6780,7 @@ function routingPage(part) {
     s.append(el("i"));
     s.onclick = (e) => { e.stopPropagation(); setFound(!on, s); };
     const txt = el("div", "txt");
-    txt.append(el("b", "", t("Find groups on their own")), el("small", "", on
+    txt.append(el("b", "", t("Find groups on their own")), el("small", "expl", on
       ? t("A model two or more of your providers serve becomes a group of them (auto/…). Switch it off to list and serve only the groups you made or changed.")
       : t("Off: only the groups you made or changed are listed and served. An agent set to a found group is moved to its model from one provider, and a request still naming one goes there too.")));
     if (on) txt.append(skipPick());
@@ -6770,7 +6822,7 @@ function routingPage(part) {
   }
   function drawNames() {
     const txt = el("div", "txt");
-    txt.append(el("b", "", t("Names in agents’ lists")), el("small", "", t("Whether “· routing group” follows a group’s name in the agents’ lists: one setting for every group, and for the provider after each model’s name, as on Settings.")));
+    txt.append(el("b", "", t("Names in agents’ lists")), el("small", "expl", t("Whether “· routing group” follows a group’s name in the agents’ lists: one setting for every group, and for the provider after each model’s name, as on Settings.")));
     // an agent the setting can't reach is named, not left to seem broken
     txt.append(noNamesLine("small", ""));
     // an open editor says what its group will be called: drawn again with it
@@ -6783,7 +6835,7 @@ function routingPage(part) {
     const def = groupDefaults();
     const row = (box, label, hint, opts, cur, key) => {
       const txt = el("div", "txt");
-      txt.append(el("b", "", t(label)), el("small", "", hint));
+      txt.append(el("b", "", t(label)), el("small", "expl", hint));
       // a value set elsewhere (magpie settings set) that no option names
       if (!opts.some(([v]) => v === cur)) opts = [...opts, [cur, key === "firstToken" ? firstWord(cur) : patienceWord(cur)]];
       const pick = segs(opts.map(([v, n]) => [v, t(n)]), cur, (v) => setDefaults({ ...def, [key]: v }));
@@ -6827,6 +6879,22 @@ function routingPage(part) {
       status(e.message, "err");
     }
   }
+  // billTag: the group's members' billing summed up, quiet, each member's
+  // on hover; null while one of them is unknown or a group
+  function billTag(g) {
+    const kinds = new Set(), lines = [];
+    for (const id of shownMembers(g)) {
+      if (g.off?.includes(id)) continue;
+      const kind = g.memberInfo?.find((x) => x.id === id)?.billing;
+      if (!kind) return null;
+      for (const k of kind === "mixed" ? ["plan", "payg"] : [kind]) kinds.add(k);
+      lines.push(`${memberLabel(g, id)}: ${billingWord(kind)}`);
+    }
+    if (!kinds.size) return null;
+    const k = el("span", "tag bill", billingWord(kinds.size > 1 ? "mixed" : [...kinds][0]));
+    k.title = lines.join("\n");
+    return k;
+  }
   function groupRow(g) {
     const row = el("div", "rt-group" + (g.ready ? "" : " off") + (g.disabled ? " disabled" : ""));
     row.dataset.id = row.dataset.gslot = g.id;
@@ -6835,10 +6903,18 @@ function routingPage(part) {
     const nm = el("div", "nm");
     nm.append(el("b", "", g.name), el("code", "mdl", g.ref || "group/" + g.id));
     if (g.auto) nm.append(el("small", "auto", t("found by magpie")));
+    main.append(nm);
+    // the user's own word on it (ConatusMoon2222 on X), one quiet line,
+    // only when there is one; the whole of it on hover
+    if (g.note) {
+      const note = el("div", "rt-gnote", g.note);
+      note.title = g.note;
+      main.append(note);
+    }
     const manual = g.routing === "manual";
     const sep = g.routing === "order" ? " → " : " · ";
     const mem = manual ? pickRow(g) : el("div", "mem", shownMembers(g).map((id) => memberLabel(g, id) + (g.off?.includes(id) ? ` (${t("off")})` : "")).join(sep));
-    main.append(nm, mem);
+    main.append(mem);
     if (!g.decides) main.append(...groupQuota(g));
     for (const p of g.patterns || []) {
       const line = el("div", "mem pat" + (p.models ? "" : " none"));
@@ -6870,6 +6946,10 @@ function routingPage(part) {
       k.title = t(LIST_HINT.unlists);
       tags.append(k);
     }
+    // on a plan, pay as you go or both, as its members' providers bill
+    // (EV_John_Liu on X); said only when magpie knows of every one
+    const bill = billTag(g);
+    if (bill) tags.append(bill);
     if (g.firstToken > 0 && !manual) tags.append(el("span", "tag", t("Next after {n} without a first token", { n: took(g.firstToken * 1000) })));
     if (g.rules?.length) {
       const r = el("span", "tag" + (manual ? " idle" : ""), t(g.rules.length === 1 ? "1 rule" : "{n} rules", { n: g.rules.length }));
@@ -6942,7 +7022,7 @@ function routingPage(part) {
         closeProtoMenu();
         if (v === cur || (groupDirty() && !(await confirmDiscard()))) return b.focus({ preventScroll: true });
         const n = opts.find(([id]) => id === v)?.[1] || v;
-        await groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
+        await groupAction("save", { id: g.id, name: g.name, note: g.note || "", members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
           t("{name}: {routing}", { name: g.name, routing: t(n) }));
         // the rows were drawn anew: the keyboard stays on this one's routing
         gList.querySelector(`.rt-group[data-id="${CSS.escape(g.id)}"] .rt-groute`)?.focus({ preventScroll: true });
@@ -7075,7 +7155,7 @@ function routingPage(part) {
       b.onclick = (e) => {
         e.stopPropagation(); // the card opens the editor; this picks
         if (on) return;
-        groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
+        groupAction("save", { id: g.id, name: g.name, note: g.note || "", members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
           t("{name}: every request to {model}", { name: g.name, model: memberName(id) }));
       };
       box.append(b);
@@ -7096,7 +7176,7 @@ function routingPage(part) {
     h.append(el("b", "", g ? g.name : t("New group")));
     if (g?.auto) h.append(el("span", "note", t("found by magpie — saving a change makes it yours")));
     ed.append(h);
-    const keys = (i) => { i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") { cancelGroup(); } else if (e.key === "Enter" && i === name) saveBtn.onclick(); }; return i; };
+    const keys = (i) => { i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") { cancelGroup(); } else if (e.key === "Enter" && (i === name || i === noteIn)) saveBtn.onclick(); }; return i; };
     const name = keys(input(d.name, t("e.g. Opus anywhere")));
     const idHint = el("div", "hint");
     // an existing group's id can change (an auto- one found by magpie too);
@@ -7150,6 +7230,12 @@ function routingPage(part) {
     nw.append(name);
     if (!g) nw.append(idHint);
     ed.append(el("label", "", t("Name")), nw);
+    // the user's own word on the group, shown under its name in the list
+    const noteIn = keys(input(d.note || "", t("e.g. for the work key")));
+    noteIn.classList.add("rt-gnote-in");
+    noteIn.maxLength = 200; // provider.NoteLongest
+    noteIn.oninput = () => { d.note = noteIn.value; };
+    ed.append(el("label", "", t("Note")), noteIn);
     const sw = el("div", "gsuffix");
     sw.append(sfxSaid);
     sayLabel();
@@ -7417,11 +7503,11 @@ function routingPage(part) {
             const free = accts.filter((a) => !used(a.id) && a.id !== mine?.id);
             ab.onclick = (ev) => pickFrom("account", ab, ev, [
               { value: "", label: t("Any account"), note: t("any the group allows") },
-              ...accts.map((a) => ({ value: a.id, label: a.name, note: [a.plan, used(a.id) && t("in the group already")].filter(Boolean).join(" · ") })),
+              ...accts.map((a) => ({ value: a.id, label: a.name, note: [planName(a.plan), used(a.id) && t("in the group already")].filter(Boolean).join(" · ") })),
               ...(free.length ? [{ value: "+", label: t("Also on another account…"), note: t("a member of its own, tried after this one") }] : []),
             ], (v) => {
               if (v === "+") {
-                pickFrom("account", ab, ev, free.map((a) => ({ value: a.id, label: a.name, note: a.plan || "" })), (a) => {
+                pickFrom("account", ab, ev, free.map((a) => ({ value: a.id, label: a.name, note: planName(a.plan) || "" })), (a) => {
                   if (!a) return;
                   d.members.splice(i + 1, 0, memberId(model, fixed, bare(a)));
                   rematch(); draw(); drawRules();
@@ -7548,7 +7634,7 @@ function routingPage(part) {
         b.title = on.length ? t("This group spends only {accounts} of {provider}", { accounts: on.map(nameOf).join(", "), provider: pname }) : t("This group may spend every account of {provider}", { provider: pname });
         b.setAttribute("aria-label", `${pname}: ${b.textContent}`);
         b.onclick = (ev) => openPicker({ id: "", name: "", fields: [] }, { key: "account", label: "account", value: "", menu: true, multi: true,
-          options: all.map((a) => ({ value: a.id, label: a.name, note: a.plan || "" })), picked: (v) => d.accounts.includes(v), onPick: (v) => {
+          options: all.map((a) => ({ value: a.id, label: a.name, note: planName(a.plan) || "" })), picked: (v) => d.accounts.includes(v), onPick: (v) => {
             if (!v) return;
             d.accounts = d.accounts.includes(v) ? d.accounts.filter((x) => x !== v) : [...d.accounts, v];
             drawAccounts();
@@ -7829,7 +7915,7 @@ function routingPage(part) {
     // a rule with nothing to match by can't be saved (provider.cleanRules
     // refuses it too): one Save refused for it says so under it, with the
     // way out, until it has a condition or is removed
-    const bareRule = (r) => r.pause ? !condSet(r, "time") && !r.agents.length && !r.folders?.length && !r.exceptFolders?.length
+    const bareRule = (r) => r.pause ? !condSet(r, "time") && !condSet(r, "agents") && !r.folders?.length && !r.exceptFolders?.length
       : !COND_KINDS.some(([k]) => condSet(r, k));
     const refused = new WeakSet();
     // what a rule can hold, in the order a rule reads: [kind, its name in
@@ -7838,29 +7924,45 @@ function routingPage(part) {
     // keeps the model out of every one.
     const COND_KINDS = [
       ["intent", "asks for", false],
+      ["message", "Message text", false],
+      ["system", "System prompt text", false],
+      ["last", "Last user message", false],
       ["tokens", "Conversation length", false],
       ["images", "has an image", false],
       ["effort", "Reasoning level", false],
       ["compact", "compacting", false],
       ["agents", "Agents", true],
+      ["subagent", "Subagent", false],
       ["folders", "in folder", true],
       ["exceptFolders", "not in folder", true],
       ["time", "Hours and days", true],
     ];
-    const condSet = (r, k) => k === "time" ? !!(r.time && (r.time.from || r.time.to || r.time.days?.length))
-      : Array.isArray(r[k]) ? r[k].length > 0 : !!r[k];
+    // the field of a kind's conditions in the rule's where
+    const KIND_FIELD = { tokens: "tokens", effort: "effort", agents: "agent", subagent: "subagent", message: "message", system: "system", last: "last" };
+    const condSet = (r, k) => {
+      const c = KIND_FIELD[k] && whereOf(r, KIND_FIELD[k]);
+      if (c && (k === "subagent" || String(c.value ?? "").trim())) return true;
+      return k === "time" ? !!(r.time && (r.time.from || r.time.to || r.time.days?.length))
+        : !(k in condNone) ? false : Array.isArray(r[k]) ? r[k].length > 0 : !!r[k];
+    };
     // a condition taken off is the value saved for none, as before
     const condNone = { intent: "", tokens: 0, images: false, effort: "", compact: false, agents: [], folders: [], exceptFolders: [], time: null };
     const addCond = (r, k) => {
       openedOf(r).add(k);
       if (k === "images" || k === "compact") r[k] = true;
+      if (k === "subagent") setWhere(r, "subagent", { op: "is" });
+      if (TEXT_FIELDS.includes(k) && !whereOf(r, k)) setWhere(r, k, { op: "contains", value: "" });
       if (k === "intent" && !d.classifier && deciders.length) d.classifier = deciders[0].id;
       focusCond = { r, k };
       drawRules();
     };
     const dropCond = (r, k) => {
       openedOf(r).delete(k);
-      r[k] = Array.isArray(condNone[k]) ? [] : condNone[k];
+      // the pill's own: the rule's field when it is set, else the field's
+      // first condition (one more, from the CLI, keeps its own pill)
+      const own = k in condNone && (Array.isArray(r[k]) ? r[k].length > 0 : !!r[k]);
+      if (k in condNone) r[k] = Array.isArray(condNone[k]) ? [] : condNone[k];
+      if (KIND_FIELD[k] && !own) setWhere(r, KIND_FIELD[k], null);
       focusCond = { r, k: "+" };
       drawRules();
     };
@@ -7947,6 +8049,16 @@ function routingPage(part) {
         const shown = (k, pauses) => (pauses || !r.pause) && (condSet(r, k) || openedOf(r).has(k));
         const kinds = COND_KINDS.filter(([k, , p]) => shown(k, p)).map(([k]) => k);
         const mine = focusCond?.r === r ? focusCond.k : null;
+        // the where conditions a pill shows; any other is drawn on its own
+        const inPill = new Set();
+        // how a pill compares (aipha2025 on X), picked in the app's menu
+        const opBtn = (text, options, value, onPick) => {
+          const b = el("button", "rt-op", text);
+          b.type = "button";
+          b.setAttribute("aria-haspopup", "menu");
+          b.onclick = (ev) => { ev.stopPropagation(); pickFrom("rule-op", b, ev, options, onPick, value()); };
+          return b;
+        };
         // a set condition in its pill, and the × that takes it off
         const wrap = (k, ...els) => {
           openedOf(r).add(k); // emptied, it stays until its × takes it off
@@ -7996,15 +8108,67 @@ function routingPage(part) {
           wrap("intent", it);
           if (mine === "intent") focus = () => ii.focus({ preventScroll: true });
         }
+        // the message's own words, as the user wrote them when the turn
+        // began: contains, doesn't contain, starts with, or a pattern
+        // a text of the request: the user's words as the turn began; or,
+        // as the agent sent them (SucroseMoE on X: a harness's title or
+        // compaction call told by its prompt, no model asked), a block of
+        // its system prompt, or a text of its last user message
+        for (const [k, cls, name, tip, eg, egRe] of [
+          ["message", "ms", "Message text", "The words the user wrote as the turn began, without what the agent adds to them; not case-sensitive", "e.g. run the tests", "^translate\\b"],
+          ["system", "sy", "System prompt text", "Any block of the system prompt, as the agent sent it; not case-sensitive", "e.g. title", "^You are"],
+          ["last", "lu", "Last user message", "Any text of the request's last user message, as the agent sent it, what the agent adds included; not case-sensitive", "e.g. summarize", "^Summarize"],
+        ]) {
+          if (!kinds.includes(k)) continue;
+          const mc = whereOf(r, k) || (setWhere(r, k, { op: "contains", value: "" }), whereOf(r, k));
+          inPill.add(mc);
+          const ms = el("span", "rt-cond rt-tx " + cls);
+          ms.onclick = (e) => { if (e.target === ms || e.target.tagName === "SPAN") mi.focus(); };
+          ms.title = t(tip);
+          const mi = input(mc.value || "", "");
+          mi.maxLength = 500; // provider.MaxCondText
+          const bad = () => { if (mc.op !== "matches") return false; try { new RegExp(mc.value); return false; } catch { return true; } };
+          const look = () => {
+            ms.classList.toggle("on", !!mc.value.trim());
+            ms.classList.toggle("bad", bad());
+            mi.placeholder = mc.op === "matches" ? egRe : t(eg);
+            fitBox(mi);
+          };
+          const mo = opBtn(t(MESSAGE_OPS[mc.op] || mc.op), Object.entries(MESSAGE_OPS).map(([v, w]) => ({ value: v, label: t(w), note: v === "matches" ? t("regular expression, any case") : "" })), () => mc.op,
+            (v) => { mc.op = v; mo.textContent = t(MESSAGE_OPS[v]); look(); warn(); });
+          mi.oninput = () => { mc.value = mi.value; look(); warn(); };
+          mi.onkeydown = (e) => e.stopPropagation();
+          ms.append(el("span", "", t(name)), mo, mi);
+          look();
+          wrap(k, ms);
+          if (mine === k) focus = () => mi.focus({ preventScroll: true });
+        }
         // tokens: at least this long
         if (kinds.includes("tokens")) {
-          const tk = el("span", "rt-cond tk" + (r.tokens ? " on" : ""));
+          // ≥ is the rule's own tokens, as before; >, < and ≤ a condition
+          let tw = !r.tokens ? whereOf(r, "tokens") || null : null;
+          if (tw) inPill.add(tw);
+          const n = () => tw ? +tw.value || 0 : r.tokens;
+          const tk = el("span", "rt-cond tk" + (n() ? " on" : ""));
           tk.onclick = (e) => { if (e.target === tk || e.target.tagName === "SPAN") ti.focus(); };
-          const ti = input(r.tokens ? String(r.tokens) : "", "", "number");
+          const ti = input(n() ? String(n()) : "", "", "number");
           ti.min = "0"; ti.step = "1000";
-          ti.oninput = () => { r.tokens = Math.max(0, parseInt(ti.value, 10) || 0); tk.classList.toggle("on", !!r.tokens); warn(); };
+          const setN = (v) => { if (tw) tw.value = v ? String(v) : ""; else r.tokens = v; tk.classList.toggle("on", !!v); };
+          ti.oninput = () => { setN(Math.max(0, parseInt(ti.value, 10) || 0)); warn(); };
           ti.onkeydown = (e) => e.stopPropagation();
-          tk.append(el("span", "", "≥"), ti, el("span", "", t("tokens")));
+          const to = opBtn(TOKEN_OPS[tw?.op || "gte"], [
+            { value: "gte", label: "≥" }, { value: "gt", label: ">" }, { value: "lt", label: "<" }, { value: "lte", label: "≤" },
+          ], () => tw?.op || "gte", (op) => {
+            const v = n();
+            if (tw) r.where = r.where.filter((c) => c !== tw);
+            tw = null;
+            r.tokens = 0;
+            if (op === "gte") r.tokens = v;
+            else { tw = { field: "tokens", op, value: v ? String(v) : "" }; r.where = [...(r.where || []), tw]; inPill.add(tw); }
+            to.textContent = TOKEN_OPS[op];
+            warn();
+          });
+          tk.append(to, ti, el("span", "", t("tokens")));
           wrap("tokens", tk);
           if (mine === "tokens") focus = () => ti.focus({ preventScroll: true });
         }
@@ -8017,15 +8181,43 @@ function routingPage(part) {
         }
         // reasoning
         if (kinds.includes("effort")) {
-          const effortName = (v) => v === "on" ? t("reasoning on") : v ? t("reasoning ≥ {level}", { level: v }) : t("any reasoning");
-          const ef = el("button", "rt-cond" + (r.effort ? " on" : ""), effortName(r.effort));
-          ef.onclick = (ev) => pickFrom("reasoning", ef, ev, [
-            { value: "", label: t("any reasoning"), note: t("not a condition") },
-            { value: "on", label: t("reasoning on"), note: t("thinking or any effort level") },
-            ...EFFORTS.map((v) => ({ value: v, label: t("reasoning ≥ {level}", { level: v }) })),
-          ], (v) => { r.effort = v; ef.textContent = effortName(v); ef.classList.toggle("on", !!v); warn(); });
+          // ≥ a level and "is on" are the rule's own effort, as before;
+          // ≤, is and is not (off, on or a level) a condition
+          let ew = !r.effort ? whereOf(r, "effort") || null : null;
+          if (ew) inPill.add(ew);
+          const cur = () => ew ? [ew.op, ew.value || ""] : r.effort === "on" ? ["is", "on"] : ["gte", r.effort || ""];
+          const OPS = { gte: "≥", lte: "≤", is: "=", not: "≠" };
+          const valName = (v) => v === "off" ? t("off") : v === "on" ? t("on") : v || t("any reasoning");
+          const ef = el("span", "rt-cond ef");
+          const set = (op, v) => {
+            if (ew) r.where = r.where.filter((c) => c !== ew);
+            ew = null;
+            r.effort = "";
+            if (v && op === "gte") r.effort = v;
+            else if (v === "on" && op === "is") r.effort = "on";
+            else if (v) { ew = { field: "effort", op, value: v }; r.where = [...(r.where || []), ew]; inPill.add(ew); }
+            eo.textContent = OPS[op];
+            ev.textContent = valName(v);
+            ef.classList.toggle("on", !!v);
+            warn();
+          };
+          const eo = opBtn(OPS[cur()[0]], [
+            { value: "gte", label: "≥" }, { value: "lte", label: "≤" }, { value: "is", label: "=" }, { value: "not", label: "≠" },
+          ], () => cur()[0], (op) => { const v = cur()[1]; set(op, (op === "gte" || op === "lte") && !EFFORTS.includes(v) ? "" : v); });
+          const ev = opBtn(valName(cur()[1]), [], () => cur()[1], () => {});
+          ev.onclick = (e) => {
+            e.stopPropagation();
+            const [op, v] = cur();
+            pickFrom("reasoning", ev, e, [
+              { value: "", label: t("any reasoning"), note: t("not a condition") },
+              ...(op === "is" || op === "not" ? [{ value: "off", label: t("off"), note: t("reasoning off, or not asked for") }, { value: "on", label: t("on"), note: t("thinking or any effort level") }] : []),
+              ...EFFORTS.map((x) => ({ value: x, label: x })),
+            ], (x) => set(op, x), v);
+          };
+          ef.classList.toggle("on", !!cur()[1]);
+          ef.append(el("span", "", t("reasoning")), eo, ev);
           wrap("effort", ef);
-          if (mine === "effort") focus = () => { ef.focus({ preventScroll: true }); ef.onclick({ stopPropagation() {} }); };
+          if (mine === "effort") focus = () => { ev.focus({ preventScroll: true }); ev.onclick({ stopPropagation() {} }); };
         }
         // compacting: the agent summarizing its conversation (/compact),
         // which a cheaper, faster model can do
@@ -8041,14 +8233,36 @@ function routingPage(part) {
         // (raikyou on Discord: SillyTavern, one's own app)
         if (kinds.includes("agents")) {
           const clients = state.clients || state.agents || [];
-          const agentsName = () => r.agents.length ? r.agents.map((id) => clients.find((a) => a.id === id)?.name || id).join(", ") : t("any agent");
-          const ag = el("button", "rt-cond" + (r.agents.length ? " on" : ""), agentsName());
+          // is one of them: the rule's own agents, as before; is none of
+          // them: a condition, which a pause takes too
+          let aw = !r.agents.length ? whereOf(r, "agent") || null : null;
+          if (aw) inPill.add(aw);
+          const listed = () => aw ? String(aw.value || "").split(",").filter(Boolean) : r.agents;
+          const setListed = (xs) => { if (aw) aw.value = xs.join(","); else r.agents = xs; };
+          const agentsName = () => listed().length ? listed().map((id) => clients.find((a) => a.id === id)?.name || id).join(", ") : t("any agent");
+          const ag = el("button", "rt-cond" + (listed().length ? " on" : ""), agentsName());
+          const notOf = () => aw?.op === "not" ? "not" : "is";
+          const ao = el("button", "rt-cond on rt-aop", t(notOf() === "not" ? "agent is none of" : "agent is one of"));
+          ao.type = "button";
+          ao.setAttribute("aria-haspopup", "menu");
+          ao.onclick = (ev) => { ev.stopPropagation(); pickFrom("rule-op", ao, ev, [
+            { value: "is", label: t("agent is one of") }, { value: "not", label: t("agent is none of") },
+          ], (op) => {
+            const xs = [...listed()];
+            if (aw) r.where = r.where.filter((c) => c !== aw);
+            aw = null;
+            r.agents = [];
+            if (op === "is") r.agents = xs;
+            else { aw = { field: "agent", op: "not", value: xs.join(",") }; r.where = [...(r.where || []), aw]; inPill.add(aw); }
+            ao.textContent = t(op === "not" ? "agent is none of" : "agent is one of");
+            warn();
+          }, notOf()); };
           heard();
           ag.onclick = async (ev) => {
             ev.stopPropagation();
             const known = new Set(clients.map((a) => a.id));
-            const others = [...(await heard()), ...r.agents].filter((id, i, all) => !known.has(id) && all.indexOf(id) === i);
-            const tick = (id) => r.agents.includes(id) ? "✓" : "";
+            const others = [...(await heard()), ...listed()].filter((id, i, all) => !known.has(id) && all.indexOf(id) === i);
+            const tick = (id) => listed().includes(id) ? "✓" : "";
             openPicker({ id: "", name: "", fields: [] }, { key: "rule", label: "agent", value: "", menu: true,
               placeholder: t("Filter, or type an agent's name…"),
               typed: (s) => { const id = uaName(s); return id && { value: id, label: id, note: t("the name its User-Agent begins with") }; },
@@ -8057,12 +8271,31 @@ function routingPage(part) {
                 ...clients.map((a) => ({ value: a.id, label: a.name, icon: a.icon, note: tick(a.id) })),
                 ...others.map((id) => ({ value: id, label: id, icon: "generic", note: tick(id) || t("heard from in the last 30 days") })),
               ], onPick: (v) => {
-                r.agents = !v ? [] : r.agents.includes(v) ? r.agents.filter((x) => x !== v) : [...r.agents, v];
-                ag.textContent = agentsName(); ag.classList.toggle("on", r.agents.length > 0); warn();
+                const xs = listed();
+                setListed(!v ? [] : xs.includes(v) ? xs.filter((x) => x !== v) : [...xs, v]);
+                ag.textContent = agentsName(); ag.classList.toggle("on", listed().length > 0); warn();
               } }, ag, ev);
           };
-          wrap("agents", ag);
+          // the way to compare sits apart from the agents' own button
+          const aoBox = el("span", "rt-aopw");
+          aoBox.append(ao);
+          wrap("agents", aoBox, ag);
           if (mine === "agents") focus = () => { ag.focus({ preventScroll: true }); ag.onclick({ stopPropagation() {} }); };
+        }
+        // a subagent's turn, or the lead's: Claude Code and Codex say which
+        // their requests are; any other agent's count as not a subagent's
+        if (kinds.includes("subagent")) {
+          const sc = whereOf(r, "subagent") || (setWhere(r, "subagent", { op: "is" }), whereOf(r, "subagent"));
+          inPill.add(sc);
+          const name = () => sc.op === "not" ? t("not sent by a subagent") : t("sent by a subagent");
+          const sb = el("button", "rt-cond on rt-sub", name());
+          sb.type = "button";
+          sb.title = t("Claude Code and Codex say when a subagent sends a turn; any other agent's turns count as not a subagent's");
+          sb.onclick = (ev) => pickFrom("rule-op", sb, ev, [
+            { value: "is", label: t("sent by a subagent") }, { value: "not", label: t("not sent by a subagent"), note: t("the lead, or an agent that doesn't say") },
+          ], (v) => { sc.op = v; sb.textContent = name(); warn(); }, sc.op);
+          wrap("subagent", sb);
+          if (mine === "subagent") focus = () => sb.focus({ preventScroll: true });
         }
         // folders: the project the agent works in, as it tells its model
         // (Cario0x on X), typed comma separated; a folder inside one counts
@@ -8143,6 +8376,19 @@ function routingPage(part) {
           drawTime();
           wrap("time", tm, dayBtn, zoneTag);
           if (mine === "time") focus = () => tFrom.focus({ preventScroll: true });
+        }
+        // a condition no pill shows (a second on one field, typed in the
+        // CLI): said in words, and taken off by its ×
+        for (const c of (r.where || []).filter((c) => !inPill.has(c) && (c.field === "subagent" || String(c.value ?? "").trim()))) {
+          const w = el("span", "rt-c");
+          const x = el("button", "rt-cx");
+          x.type = "button";
+          x.title = t("Remove condition");
+          x.setAttribute("aria-label", x.title);
+          x.append(svg(CROSS, 8, 2));
+          x.onclick = (e) => { e.stopPropagation(); r.where = r.where.filter((o) => o !== c); focusCond = { r, k: "+" }; drawRules(); };
+          w.append(el("span", "rt-cond on rt-more", whereText(c)), x);
+          line.append(w);
         }
         // the quiet + that adds a condition: what the rule doesn't show yet,
         // in the app's menu; said in words while the rule has none
@@ -8237,6 +8483,7 @@ function routingPage(part) {
           if (r.pause) {
             delete r.more;
             Object.assign(r, { tokens: 0, images: false, effort: "", intent: "", compact: false, useEffort: "" });
+            r.where = (r.where || []).filter((c) => c.field === "agent");
             for (const [k, , p] of COND_KINDS) if (!p) openedOf(r).delete(k);
           }
           drawRules();
@@ -8297,7 +8544,7 @@ function routingPage(part) {
       focusCond = null;
       focus?.();
     };
-    const newRule = () => ({ use: d.members[d.members.length - 1], pause: false, useEffort: "", tokens: 0, images: false, effort: "", agents: [], intent: "", compact: false, folders: [], exceptFolders: [], time: null });
+    const newRule = () => ({ use: d.members[d.members.length - 1], pause: false, useEffort: "", tokens: 0, images: false, effort: "", agents: [], intent: "", compact: false, folders: [], exceptFolders: [], where: [], time: null });
     // a new rule asks for an intent first, its box focused and the
     // classifier shown (Jev picked when there is one); any other condition
     // is a + away, and the intent an × away
@@ -8477,6 +8724,10 @@ function routingPage(part) {
           ? t("Rule {n}: its hours are the whole day — pick days, or other hours", { n: badTime + 1 })
           : t("Rule {n}: the hours are two times like 09:00 and 18:00", { n: badTime + 1 }), "warn");
       }
+      // a condition left without its value is none (an emptied box)
+      for (const r of d.rules) if (r.where) { r.where = r.where.filter((c) => c.field === "subagent" || String(c.value ?? "").trim() && !(c.field === "tokens" && !(+c.value > 0))); if (!r.where.length) delete r.where; }
+      const badRe = d.rules.findIndex((r) => (r.where || []).some((c) => { if (!TEXT_FIELDS.includes(c.field) || c.op !== "matches") return false; try { new RegExp(c.value); return false; } catch { return true; } }));
+      if (badRe >= 0) return status(t("Rule {n}: what it matches isn't a regular expression", { n: badRe + 1 }), "warn");
       // a folder is a whole path (provider.cleanFolder)
       const badDir = d.rules.findIndex((r) => [...(r.folders || []), ...(r.exceptFolders || [])].some((f) => !/^(~$|~[\\/]|\/|\\\\|[A-Za-z]:([\\/]|$))/.test(f)));
       if (badDir >= 0) return status(t("Rule {n}: a folder is a whole path, like ~/work or /Users/me/work", { n: badDir + 1 }), "warn");
@@ -8495,7 +8746,7 @@ function routingPage(part) {
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), note: (d.note || "").trim(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -37,9 +37,13 @@ import (
 // bili's local proxy, which forwards to the gateway (ANTHROPIC_BASE_URL
 // .../bili/<magpie's address>). Codex's lane is an MCP server only, ZCode's
 // routes only its own provider, Kimi Code's renames the default model in
-// config.toml at each start (bili-kimi), dsh's installs through dsh's
-// package manager, and Hermes' can't be tried without touching its
-// launcher: none of those is offered.
+// config.toml at each start (bili-kimi) and dsh's installs through dsh's
+// package manager: none of those is offered.
+//
+// Zed has no plugin of bili's, and Hermes' sets HTTPS_PROXY alone, which
+// magpie's http://127.0.0.1 provider never takes: their magpie provider
+// goes through bili's /bili/ prefix with bili start answering there
+// (biliURLLanes, bili_url.go).
 //
 // bili's remove doesn't put a file back as it was: it leaves "packages": []
 // in Pi's settings.json and "extensions:" in omp's config.yml, and after
@@ -48,6 +52,20 @@ import (
 // DISABLE_AUTO_COMPACT it had added. So magpie keeps each file as it was
 // before the install and as the install left it, and after a remove puts
 // back what the install changed and nothing changed since (biliRestore).
+
+// Claude Code's auto-compaction stays on beside bili's plugin. bili's
+// install writes DISABLE_AUTO_COMPACT=1, so a session bili doesn't
+// compress has nothing left to keep it under the window: Claude Desktop's
+// Code tab runs Claude Code on the same settings.json with its own base
+// URL, past bili's proxy (bili's #2290), and a window bili takes larger
+// than the one magpie serves lets the session reach it first. Claude Code
+// then answers each message at once with "Prompt is too long", sending
+// nothing. magpie sets the "1" bili added to "0", which bili leaves as a
+// value of the user's (and keeps across its SessionStart hook and a
+// reinstall): auto-compaction fires only at the window magpie wrote
+// (CLAUDE_CODE_AUTO_COMPACT_WINDOW), which bili, when it compresses,
+// keeps the session under. A value the user had before the install is
+// left as theirs.
 
 // BiliURL is billion-context's page.
 const BiliURL = "https://github.com/ranxianglei/billion-context"
@@ -89,6 +107,9 @@ type BiliView struct {
 	ListErr string   `json:"listErr,omitempty"`
 	Restart []string `json:"restart,omitempty"`
 	Backup  string   `json:"backup,omitempty"`
+	// Saved is what bili says it saved (bili_saved.go), nil when no bili
+	// has answered here yet
+	Saved *BiliSaved `json:"saved,omitempty"`
 }
 
 var biliMu sync.Mutex
@@ -161,7 +182,8 @@ func biliAgents(agents []*agent.Agent) []*agent.Agent {
 	}
 	var out []*agent.Agent
 	for _, a := range agents {
-		if _, ok := biliLanes[a.ID]; ok && a.WSL == "" && !a.CLIMissing() {
+		_, plugin := biliLanes[a.ID]
+		if _, url := biliURLLanes[a.ID]; (plugin || url) && a.WSL == "" && !a.CLIMissing() {
 			out = append(out, a)
 		}
 	}
@@ -170,7 +192,7 @@ func biliAgents(agents []*agent.Agent) []*agent.Agent {
 
 // biliStatusLine is a row of bili plugin list: the agent, then its
 // status, then the version and how it updates, apart by two spaces or more.
-var biliColumns = regexp.MustCompile(`\s{2,}`)
+var biliColumns = lazyre.New(`\s{2,}`)
 
 // parseBiliList is each agent's status as bili plugin list prints it.
 func parseBiliList(out string) map[string]string {
@@ -191,6 +213,22 @@ func biliOn(status string) bool {
 }
 
 // ReadBili says whether bili is installed and which agents have its plugin.
+// biliVersion is the version in `bili --version`'s output. Its output is
+// read with stderr, where bili writes warnings first (a config key it
+// doesn't know: "2026-11-09T23:44:06.211 [warn] [v=0.1.213] ..."), so
+// the version is the first word of the line that starts with one.
+func biliVersion(out string) string {
+	for _, l := range strings.Split(out, "\n") {
+		w, _, _ := strings.Cut(strings.TrimSpace(l), " ")
+		if biliVersionRe.MatchString(w) {
+			return w
+		}
+	}
+	return ""
+}
+
+var biliVersionRe = lazyre.New(`^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]*)?$`)
+
 func ReadBili() *BiliView {
 	return readBili(detected())
 }
@@ -204,8 +242,9 @@ func readBili(agents []*agent.Agent) *BiliView {
 		}
 	} else {
 		if out, err := biliRun(v.Path, 30*time.Second, "--version"); err == nil {
-			v.Version, _, _ = strings.Cut(strings.TrimSpace(out), " ")
+			v.Version = biliVersion(out)
 		}
+		v.Saved = readBiliSaved()
 		out, err := biliRun(v.Path, 30*time.Second, "plugin", "list")
 		if st = parseBiliList(out); err != nil || len(st) == 0 {
 			v.ListErr = lastLines(out, 2)
@@ -216,7 +255,9 @@ func readBili(agents []*agent.Agent) *BiliView {
 	}
 	for _, a := range biliAgents(agents) {
 		ba := BiliAgent{ID: a.ID, Name: a.Name, Icon: a.Icon}
-		if s, ok := st[a.ID]; ok {
+		if l, ok := biliURLLanes[a.ID]; ok {
+			ba.On = l.on(a)
+		} else if s, ok := st[a.ID]; ok {
 			ba.On = biliOn(s)
 			if !ba.On && s != "not installed" {
 				ba.Status = s
@@ -289,8 +330,9 @@ func SetBili(id string, on bool) (*BiliView, error) {
 		}
 	}
 	files, ok := biliLanes[id]
+	_, url := biliURLLanes[id]
 	switch {
-	case !ok:
+	case !ok && !url:
 		return nil, fmt.Errorf("billion-context isn't offered for %s", id)
 	case a == nil:
 		return nil, fmt.Errorf("%s isn't installed", id)
@@ -298,6 +340,9 @@ func SetBili(id string, on bool) (*BiliView, error) {
 	bin := biliPath()
 	if bin == "" {
 		return nil, fmt.Errorf("billion-context isn't installed — install it first (%s)", BiliURL)
+	}
+	if url {
+		return setBiliURL(a, agents, bin, on)
 	}
 	paths := files(a)
 	b := newBackups()
@@ -324,6 +369,11 @@ func SetBili(id string, on bool) (*BiliView, error) {
 		out, err := biliRun(bin, 2*time.Minute, "plugin", "install", biliLane(id))
 		if err != nil {
 			return nil, err
+		}
+		if id == "claude" {
+			if err := biliKeepCompact(snap[0].Path, snap[0].Before); err != nil {
+				return nil, err
+			}
 		}
 		for i := range snap {
 			snap[i].After = biliRead(snap[i].Path)
@@ -382,6 +432,64 @@ func SetBili(id string, on bool) (*BiliView, error) {
 		pruneBackups()
 	}
 	return v, nil
+}
+
+// biliCompact is the setting of Claude Code's that turns auto-compaction
+// off, and biliCompactOn its value magpie writes in place of bili's "1".
+const (
+	biliCompact   = "env.DISABLE_AUTO_COMPACT"
+	biliCompactOn = "0"
+)
+
+// biliKeepCompact turns Claude Code's auto-compaction back on in its
+// settings.json at path after bili's install turned it off, unless
+// before (the file before the install) had a DISABLE_AUTO_COMPACT of the
+// user's own.
+func biliKeepCompact(path string, before *string) error {
+	if v, has := edit.GetJSON(path, biliCompact); !has || v != "1" {
+		return nil
+	}
+	if b, ok := parseJSONC(before); !ok {
+		return nil
+	} else if _, had := jsonAt(b, []string{"env", "DISABLE_AUTO_COMPACT"}); had {
+		return nil
+	}
+	return edit.SetJSON(path, edit.KV{Path: biliCompact, Value: biliCompactOn})
+}
+
+// keepBiliCompact does biliKeepCompact for a Claude Code plugin magpie
+// installed before it did so itself (KeepLinked runs it at start), and has the record of the install say
+// "0" where it said bili's "1", so that switching the plugin off takes the
+// "0" away with the rest of the install.
+func keepBiliCompact() {
+	biliMu.Lock()
+	defer biliMu.Unlock()
+	state := readBiliState()
+	snap := state["claude"]
+	if len(snap) == 0 || snap[0].After == nil {
+		return
+	}
+	f := &snap[0]
+	if v, _ := edit.GetJSON(f.Path, biliCompact); v != "1" {
+		return
+	}
+	if err := biliKeepCompact(f.Path, f.Before); err != nil {
+		return
+	}
+	if v, _ := edit.GetJSON(f.Path, biliCompact); v != biliCompactOn {
+		return
+	}
+	after, ok := parseJSONC(f.After)
+	if v, _ := jsonAt(after, []string{"env", "DISABLE_AUTO_COMPACT"}); !ok || v != "1" {
+		return
+	}
+	b, err := edit.PatchJSON([]byte(*f.After), []edit.KV{{Path: biliCompact, Value: biliCompactOn}}, nil)
+	if err != nil {
+		return
+	}
+	s := string(b)
+	f.After = &s
+	_ = writeBiliState(state)
 }
 
 // biliLane is bili's name of an agent's plugin: magpie's id, as both use it.
@@ -517,7 +625,7 @@ func keyPath(p []string) (string, bool) {
 
 // biliURL is the ANTHROPIC_BASE_URL bili's Claude Code plugin writes: its
 // proxy, then the URL it forwards to.
-var biliURL = regexp.MustCompile(`^https?://(?:127\.0\.0\.1|localhost|\[::1\]):\d+/bili/(https?://.+)$`)
+var biliURL = lazyre.New(`^https?://(?:127\.0\.0\.1|localhost|\[::1\]):\d+/bili/(https?://.+)$`)
 
 // biliMergeJSON is now with what the install changed (before → after) and
 // nothing changed since (cur still has it) put back as before, and what

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/probelog"
 	"github.com/yetone/magpie/internal/settings"
@@ -1351,9 +1351,16 @@ func (p Provider) planMedia(ids func(*Region) []string, draws, films bool, serve
 // for under one there (catalog.FetchAt), and none is added here.
 func (p Provider) fixV1(base, at string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	if base == "" || at != base+"/v1/models" || catalog.Versioned(base) {
+	if base == "" || at != base+"/v1/models" && at != catalog.RelayOpenAIList(base) || catalog.Versioned(base) {
 		return base
 	}
+	return p.setV1(base)
+}
+
+// setV1 is base with the /v1 it was given without, set on p's OpenAI
+// URLs that were base, as saved; base when p can't be saved.
+func (p Provider) setV1(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	fixed := base + "/v1"
 	f, err := read()
 	if err != nil {
@@ -2445,7 +2452,7 @@ func (p Provider) EndpointCatalog() string {
 // cursorFast is a Cursor id of a Grok model in its fast mode, at an effort
 // or not, at a window or not: grok-4.7-fast, grok-4.7-low-fast,
 // grok-4.7-xhigh-fast@500k. m[1] is the model it is fast of.
-var cursorFast = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*?)(?:-(?:minimal|low|medium|high|xhigh|extra-high))?-fast(?:@[0-9]+k)?$`)
+var cursorFast = lazyre.New(`^((?:.*/)?grok-[0-9][^/@]*?)(?:-(?:minimal|low|medium|high|xhigh|extra-high))?-fast(?:@[0-9]+k)?$`)
 
 // cursorFastPrices are what Cursor bills a Grok model in its fast mode
 // per million tokens, as its own model list says
@@ -2495,7 +2502,7 @@ func (p Provider) cursorFastPrice(model string) (catalog.Price, bool) {
 // grokBuildFast is Grok Build's id of a Grok model's fast variant, as its
 // own model list offers it (grok-4.7-build-fast, and at a window of its
 // own, grok-4.7-build-fast@500k). m[1] is the model it is fast of.
-var grokBuildFast = regexp.MustCompile(`^(grok-[0-9][0-9.]*)-build-fast(?:@[0-9]+k?)?$`)
+var grokBuildFast = lazyre.New(`^(grok-[0-9][0-9.]*)-build-fast(?:@[0-9]+k?)?$`)
 
 // grokFastPrice is a Grok account's (the built-in's or the Grok plugin's)
 // price for its fast variant of a Grok model: twice the model's own, every
@@ -2997,13 +3004,13 @@ func byIDOrWasIn(all []Provider, id string) (Provider, bool) {
 // words Cursor spells its ids in. A fast one ("grok-4.7-low-fast") doesn't
 // match: fast is a model of its own (cursor_models.go), and no catalog
 // prices it.
-var grokEffort = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/]*?)-(?:minimal|low|medium|high|xhigh|extra-high)$`)
+var grokEffort = lazyre.New(`^((?:.*/)?grok-[0-9][^/]*?)-(?:minimal|low|medium|high|xhigh|extra-high)$`)
 
 // grokWindow is a Grok id offered at a context window of its own
 // ("grok-4.7@500k", the grok plugin's windowsOf): the same model, asked for
 // at a longer window. A window no multiple of 1000 the id names without the
 // k.
-var grokWindow = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
+var grokWindow = lazyre.New(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
 
 // modelWindow is an id a plugin offers a model by at one context window
 // of its own, the window in thousands or millions of tokens after an @:
@@ -3012,7 +3019,7 @@ var grokWindow = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
 // plugin's grok-4.7@500k. It is the same model asked for at that window,
 // at the same price per token; a long prompt's own rate is the price's
 // tier (Price.At), read from the call's tokens, not from the window.
-var modelWindow = regexp.MustCompile(`^([^@]+)@[0-9]+[km]$`)
+var modelWindow = lazyre.New(`^([^@]+)@[0-9]+[km]$`)
 
 // pricedNames are the ids a model is priced by, in order: its own, then,
 // for an id at a window (claude-opus-5-5@300k, grok-4.7@500k), the model

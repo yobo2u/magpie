@@ -111,7 +111,7 @@ func StartWeb(addr, version string) (*Web, error) {
 	go w.srv.Serve(ln)
 	// Settings' AutoRestart: magpie web runs on as the new version (#2096)
 	updates.autoRestart = func() bool {
-		if restartInto(true, false, "", true) {
+		if restartInto(true, false, "", true, false) {
 			quit()
 			return true
 		}
@@ -343,7 +343,7 @@ func LANAddrs() []string {
 // routes, judged by the gateway (onePort), and the page and its API behind
 // the allow list and the key.
 func webServed(port, key string, keep time.Duration, page http.Handler) http.Handler {
-	return onePort(gateway.AllowGuard(webHandler(port, key, keep, page)))
+	return onePort(gateway.AllowGuard(gateway.ClientCertGuard(webHandler(port, key, keep, page))))
 }
 
 // webHandler is what `magpie web` on port serves: the page and its API

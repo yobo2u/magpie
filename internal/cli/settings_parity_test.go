@@ -192,12 +192,19 @@ var cliForRoute = map[string]string{
 	"GET /api/davsync":                     "magpie webdav",
 	"POST /api/backup/export":              "magpie backup",
 	"POST /api/backup/import":              "magpie restore",
+	"GET /api/datafolder":                  "magpie data",
+	"POST /api/datafolder/{action}":        "magpie data move",
 	"POST /api/davsync/{action}":           "magpie webdav",
 	"GET /api/caller-keys":                 "magpie gateway-key list",
 	"POST /api/caller-keys/{action}":       "magpie gateway-key",
+	"GET /api/account-groups":              "magpie gateway-key groups",
+	"POST /api/account-groups/{action}":    "magpie gateway-key groups",
 	"GET /api/groups":                      "magpie groups",
 	"POST /api/groups/{action}":            "magpie group",
 	"GET /api/import/{id}":                 "magpie import",
+	"POST /api/settings/mtls":              "magpie mtls on",
+	"POST /api/settings/mtls/issue":        "magpie mtls issue",
+	"POST /api/settings/mtls/revoke":       "magpie mtls revoke",
 	"GET /api/library":                     "magpie library",
 	"POST /api/library/{what}/{action}":    "magpie library",
 	"GET /api/plugins":                     "magpie plugin",
@@ -217,7 +224,10 @@ var cliForRoute = map[string]string{
 	"GET /api/update":                      "magpie update check",
 	"POST /api/update/check":               "magpie update check",
 	"POST /api/settings/agent-compact":     "magpie model compact",
+	"POST /api/settings/agent-suffix":      "magpie model suffix",
 	"POST /api/update/install":             "magpie update",
+	"GET /api/model-price":                 "magpie model price",
+	"POST /api/model-price":                "magpie model price",
 }
 
 var notYet = map[string]string{
@@ -231,6 +241,9 @@ var notYet = map[string]string{
 	"GET /api/notices":                           W,  // api.go
 	"GET /api/omarchy":                           W,  // api.go
 	"GET /api/quit":                              W,  // api.go: the window's Quit question
+	"GET /api/remote":                            W,  // remote.go: another magpie opened in a window of the app
+	"POST /api/remote":                           W,  // remote.go
+	"POST /api/remote/forget":                    W,  // remote.go
 	"GET /api/state":                             W,  // api.go
 	"POST /api/agents/{action}/{id}":             A,  // api.go
 	"POST /api/agents/arrange":                   W,  // api.go
@@ -240,6 +253,7 @@ var notYet = map[string]string{
 	"POST /api/agents/rescan":                    A,  // api.go
 	"POST /api/agents/restart/{id}":              A,  // api.go
 	"POST /api/agents/stage/{id}":                A,  // api.go
+	"POST /api/agents/telemetry/{id}":            A,  // api.go
 	"POST /api/cli":                              A,  // api.go
 	"POST /api/cli-behind/quiet":                 W,  // api.go
 	"POST /api/gateway/held/reveal":              W,  // api.go
@@ -253,6 +267,7 @@ var notYet = map[string]string{
 	"POST /api/settings/claude-cache":            S2, // tune.go
 	"POST /api/settings/codex-agents-v1":         S2, // api.go
 	"POST /api/settings/codex-async-compact":     S2, // api.go
+	"POST /api/settings/codex-service-tier":      S2, // api.go
 	"POST /api/settings/codex-auto-reset":        S2, // api.go
 	"POST /api/settings/codex-auto-review":       S2, // api.go
 	"POST /api/settings/codex-compact-held/drop": S2, // api.go
@@ -322,6 +337,7 @@ var notYet = map[string]string{
 	"POST /api/dev/import":                       W,  // dev_on.go
 	"GET /api/fonts":                             W,  // fonts.go
 	"POST /api/settings/gateway-mode":            S2, // gatewaymode.go
+	"POST /api/gateway/pause":                    A,  // gatewaypause.go
 	"POST /api/gateway/restart":                  A,  // gateway_takeover.go
 	"POST /api/gateway/take-over":                A,  // gateway_takeover.go
 	"GET /api/importapps":                        P,  // importapps.go
@@ -342,6 +358,7 @@ var notYet = map[string]string{
 	"GET /api/library/icon":                      W,  // library.go
 	"GET /api/library/market/servers":            L,  // library.go
 	"GET /api/library/market/skills":             L,  // library.go
+	"GET /api/library/market/pi":                 L,  // library.go
 	"GET /api/library/mcp-signin/{id}":           L,  // library.go
 	"GET /api/library/pi":                        L,  // library.go
 	"GET /api/library/rtk":                       L,  // library.go
@@ -356,6 +373,8 @@ var notYet = map[string]string{
 	"POST /api/library/mcp/config":               L,  // library.go
 	"POST /api/library/pi":                       L,  // library.go
 	"POST /api/library/pi/copy":                  L,  // library.go
+	"POST /api/library/pi/install":               L,  // library.go
+	"POST /api/library/pi/remove":                L,  // library.go
 	"POST /api/library/projects/choose":          W,  // library.go
 	"POST /api/library/reveal":                   W,  // library.go
 	"POST /api/library/rtk":                      L,  // library.go
@@ -368,9 +387,11 @@ var notYet = map[string]string{
 	"POST /api/memory":                           L,  // memory.go
 	"POST /api/memory/digest":                    L,  // memory.go
 	"POST /api/memory/remove":                    L,  // memory.go
+	"POST /api/memory/status":                    L,  // memory.go
 	"GET /api/memory/distill":                    L,  // memory_distill.go
 	"POST /api/memory/distill":                   L,  // memory_distill.go
 	"POST /api/memory/distill/run":               L,  // memory_distill.go
+	"POST /api/memory/distill/stop":              L,  // memory_distill.go
 	"POST /api/memory/dream":                     L,  // memory_distill.go
 	"POST /api/memory/dream/run":                 L,  // memory_distill.go
 	"POST /api/memory/dream/undo":                L,  // memory_distill.go
@@ -423,6 +444,7 @@ var notYet = map[string]string{
 	"POST /api/signin/import":                    P,  // providers.go
 	"POST /api/stepfun/{id}/session":             P,  // providers.go
 	"POST /api/stepfun/{id}/signout":             P,  // providers.go
+	"GET /api/speeds":                            U,  // sessions_manage.go: the Sessions row's speed curve
 	"GET /api/sessions/manage":                   U,  // sessions_manage.go
 	"GET /api/sessions/search":                   U,  // sessions_manage.go
 	"POST /api/sessions/codex-provider":          U,  // sessions_manage.go
@@ -470,6 +492,7 @@ var notYet = map[string]string{
 	"POST /api/usage/requests/export":            U,  // usage.go
 	"POST /api/usage/trae-checkin":               U,  // usage.go
 	"GET /api/update/notes":                      W,  // update.go
+	"POST /api/update/using":                     W,  // update.go
 	"GET /api/whatsnew":                          W,  // whatsnew.go
 	"POST /api/whatsnew/seen":                    W,  // whatsnew.go
 	"POST /api/whatsnew/today":                   W,  // whatsnew.go

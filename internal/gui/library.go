@@ -209,6 +209,10 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		list, err := library.MarketSkills(r.URL.Query().Get("q"))
 		writeJSON(rw, marketOf(list, err))
 	})
+	mux.HandleFunc("GET /api/library/market/pi", func(rw http.ResponseWriter, r *http.Request) {
+		list, err := library.MarketPiPackages(r.URL.Query().Get("q"))
+		writeJSON(rw, marketOf(list, err))
+	})
 	mux.HandleFunc("POST /api/library/market/about", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ IDs []string }
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -314,6 +318,34 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		v, err := library.CopyPi(in.From, in.To, in.Ext, in.Pkg)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, v)
+	})
+	// a package from Pi's market installed into a Pi, or one of a Pi's
+	// packages removed, by Pi's own install and remove
+	mux.HandleFunc("POST /api/library/pi/install", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Pi, Source string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		v, err := library.InstallPiPackage(in.Pi, in.Source)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, v)
+	})
+	mux.HandleFunc("POST /api/library/pi/remove", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Pi, Source string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		v, err := library.RemovePiPackage(in.Pi, in.Source)
 		if err != nil {
 			fail(rw, err)
 			return
@@ -622,6 +654,11 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// a plugin's tools off for every agent, or on again, from its
 			// row on the Plugins page (Name is the plugin's)
 			res, err = library.PluginServerOn(in.Name, in.On)
+		case "servers/on":
+			// off for every agent, project and app at the router's
+			// address, kept with its settings, or on again as it was
+			// (swang20201 on X)
+			res, err = library.ServerOn(in.Name, in.On)
 		case "servers/agents-all":
 			res, err = library.EveryServerAgents(in.Agents, in.On)
 		case "servers/agents-some":
@@ -727,6 +764,8 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.RemoveProject(in.Dir, in.Keep)
 		case "projects/skill":
 			res, err = library.ProjectSkill(in.Dir, in.Name, in.Agents)
+		case "projects/skills":
+			res, err = library.ProjectSkills(in.Dir, in.Names, in.Agents)
 		case "projects/server":
 			res, err = library.ProjectServer(in.Dir, in.Name, in.Agents)
 		case "projects/copy":

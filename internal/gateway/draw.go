@@ -391,6 +391,10 @@ func DrawersOf(p provider.Provider, avail func() []catalog.Model) []catalog.Mode
 		return nil
 	}
 	out := p.PlanDrawers()
+	if filmsMiniMax(p) {
+		// a MiniMax key's image-01 models, which no list names
+		out = append(out, minimaxDrawers(p)...)
+	}
 	have := make(map[string]bool, len(out))
 	for _, m := range out {
 		have[m.ID] = true
@@ -729,20 +733,24 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 				tries = t
 			}
 		}
-		var unmask func()
+		// masked unless every model it may be drawn on is a provider the
+		// user set to go unmasked (unmaskedMembers), as a chat's is
 		var hits maskHits
-		w, d.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, d.Prompt)
-		defer unmask()
-		// the fields passed on as they came are masked as the prompt is,
-		// as a video's are
-		if err == nil {
-			var extra maskHits
-			err = maskStrings(r.Context(), d.Extra, &extra)
-			hits.add(extra)
-		}
-		if err != nil {
-			fail(maskStatus(err), err.Error())
-			return
+		if !unmaskedMembers(tries) {
+			var unmask func()
+			w, d.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, d.Prompt)
+			defer unmask()
+			// the fields passed on as they came are masked as the prompt is,
+			// as a video's are
+			if err == nil {
+				var extra maskHits
+				err = maskStrings(r.Context(), d.Extra, &extra)
+				hits.add(extra)
+			}
+			if err != nil {
+				fail(maskStatus(err), err.Error())
+				return
+			}
 		}
 		// the Routing page lists it as it does a chat, each account or
 		// member asked a try of its one route (sideRoute)
@@ -1135,6 +1143,9 @@ func viaFor(p provider.Provider, model string) drawVia {
 	case p.IsRemoteMagpie():
 		// another magpie's images API asks the model's vendor the way
 		// that model draws there
+		return viaImages
+	case drawsMiniMax(p, model):
+		// MiniMax's image_generation, which drawImages asks (rocbomb123 on X)
 		return viaImages
 	case isGoogle(p) && strings.Contains(strings.ToLower(model), "gemini"):
 		return viaGemini
@@ -1571,6 +1582,9 @@ func (s *Server) drawImages(ctx context.Context, p provider.Provider, model stri
 	}
 	if dashScopeDraws(p, model) {
 		return s.drawDashScope(ctx, p, model, d)
+	}
+	if drawsMiniMax(p, model) {
+		return s.drawMiniMax(ctx, p, model, d)
 	}
 	base := strings.TrimRight(p.Base(provider.Chat), "/")
 	if base == "" {

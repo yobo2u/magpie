@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/testenv"
 )
@@ -105,7 +109,11 @@ func (f *fakeBili) run(args ...string) (string, error) {
 			up = "https://api.anthropic.com"
 		}
 		env["ANTHROPIC_BASE_URL"] = f.proxy + up
-		env["DISABLE_AUTO_COMPACT"] = "1"
+		// bili's applyClaudeManagedBlock: a value other than its own "1"
+		// is the user's, left as it is
+		if v, has := env["DISABLE_AUTO_COMPACT"]; !has || v == "1" {
+			env["DISABLE_AUTO_COMPACT"] = "1"
+		}
 		m["env"] = env
 		m["hooks"] = map[string]any{"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "node claude-native-bootstrap.js"}}}}}
 		write(f.t, filepath.Join(f.h, ".claude", "commands", "acp-cache.md"), "acp cache\n")
@@ -115,7 +123,9 @@ func (f *fakeBili) run(args ...string) (string, error) {
 		_ = json.Unmarshal([]byte(read(f.t, p+".bili-bak")), &bak)
 		env, _ := m["env"].(map[string]any)
 		delete(env, "ANTHROPIC_BASE_URL")
-		delete(env, "DISABLE_AUTO_COMPACT")
+		if env["DISABLE_AUTO_COMPACT"] == "1" {
+			delete(env, "DISABLE_AUTO_COMPACT")
+		}
 		if be, ok := bak["env"].(map[string]any); ok && be["DISABLE_AUTO_COMPACT"] != nil {
 			env["DISABLE_AUTO_COMPACT"] = be["DISABLE_AUTO_COMPACT"]
 		}
@@ -364,5 +374,249 @@ func TestBiliMergeJSON(t *testing.T) {
 	b, _ := json.Marshal(got)
 	if string(b) != `{"a":2,"keep":"x","plugins":["mine"]}` {
 		t.Fatalf("got %s", b)
+	}
+}
+
+// TestBiliClaudeKeepsAutoCompact: Kling__Lab's "Prompt is too long". bili's
+// install turns Claude Code's auto-compaction off, and a session bili
+// doesn't compress (Claude Desktop's Code tab, past its proxy) then stops
+// at the window for good. magpie puts it back on, takes that away again
+// with the plugin, and leaves a value the user had before as theirs.
+func TestBiliClaudeKeepsAutoCompact(t *testing.T) {
+	compact := func(cc string) (any, bool) {
+		m := map[string]any{}
+		if err := json.Unmarshal([]byte(read(t, cc)), &m); err != nil {
+			t.Fatalf("%v:\n%s", err, read(t, cc))
+		}
+		env, _ := m["env"].(map[string]any)
+		v, has := env["DISABLE_AUTO_COMPACT"]
+		return v, has
+	}
+	t.Run("on and off", func(t *testing.T) {
+		h := sandbox(t)
+		f := newFakeBili(t, h)
+		cc := filepath.Join(h, ".claude", "settings.json")
+		write(t, cc, `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:3425","ANTHROPIC_AUTH_TOKEN":"magpie"}}`)
+		if _, err := SetBili("claude", true); err != nil {
+			t.Fatal(err)
+		}
+		if v, _ := compact(cc); v != "0" {
+			t.Fatalf("DISABLE_AUTO_COMPACT = %v after the install, want \"0\":\n%s", v, read(t, cc))
+		}
+		// bili's own install again (its SessionStart hook, a reinstall)
+		// keeps it
+		if _, err := f.run("plugin", "install", "claude"); err != nil {
+			t.Fatal(err)
+		}
+		if v, _ := compact(cc); v != "0" {
+			t.Fatalf("DISABLE_AUTO_COMPACT = %v after bili's reinstall:\n%s", v, read(t, cc))
+		}
+		if _, err := SetBili("claude", false); err != nil {
+			t.Fatal(err)
+		}
+		if v, has := compact(cc); has {
+			t.Fatalf("DISABLE_AUTO_COMPACT = %v left after the plugin went:\n%s", v, read(t, cc))
+		}
+	})
+	t.Run("the user's own", func(t *testing.T) {
+		h := sandbox(t)
+		newFakeBili(t, h)
+		cc := filepath.Join(h, ".claude", "settings.json")
+		write(t, cc, `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:3425","DISABLE_AUTO_COMPACT":"1"}}`)
+		if _, err := SetBili("claude", true); err != nil {
+			t.Fatal(err)
+		}
+		if v, _ := compact(cc); v != "1" {
+			t.Fatalf("the user's DISABLE_AUTO_COMPACT became %v:\n%s", v, read(t, cc))
+		}
+		if _, err := SetBili("claude", false); err != nil {
+			t.Fatal(err)
+		}
+		if v, _ := compact(cc); v != "1" {
+			t.Fatalf("the user's DISABLE_AUTO_COMPACT became %v after off:\n%s", v, read(t, cc))
+		}
+	})
+	t.Run("installed before", func(t *testing.T) {
+		// a plugin magpie installed before this: the record has bili's "1"
+		h := sandbox(t)
+		f := newFakeBili(t, h)
+		cc := filepath.Join(h, ".claude", "settings.json")
+		write(t, cc, `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:3425"}}`)
+		before := read(t, cc)
+		if _, err := f.run("plugin", "install", "claude"); err != nil {
+			t.Fatal(err)
+		}
+		after := read(t, cc)
+		if err := writeBiliState(map[string][]biliFile{"claude": {{Path: cc, Before: &before, After: &after}}}); err != nil {
+			t.Fatal(err)
+		}
+		keepBiliCompact()
+		if v, _ := compact(cc); v != "0" {
+			t.Fatalf("DISABLE_AUTO_COMPACT = %v after magpie started, want \"0\":\n%s", v, read(t, cc))
+		}
+		if _, err := SetBili("claude", false); err != nil {
+			t.Fatal(err)
+		}
+		if v, has := compact(cc); has {
+			t.Fatalf("DISABLE_AUTO_COMPACT = %v left after the plugin went:\n%s", v, read(t, cc))
+		}
+		if got := read(t, cc); !sameJSON(got, before) {
+			t.Fatalf("settings.json not as before:\n%s\nwant\n%s", got, before)
+		}
+	})
+}
+
+// TestBiliZedThroughPrefix: Zed has no plugin of bili's; it's offered,
+// and switched on its magpie provider's api_url goes through bili's
+// /bili/ prefix with bili start answering there, no plugin installed.
+// Off, the provider is back on the gateway and magpie's bili start ends.
+// While it's on, KeepLinked starts bili start again when it doesn't
+// answer.
+func TestBiliZedThroughPrefix(t *testing.T) {
+	h := sandbox(t)
+	f := newFakeBili(t, h)
+	dir := filepath.Join(h, "zed-config")
+	t.Setenv("MAGPIE_ZED_CONFIG_DIR", dir)
+	zs := filepath.Join(dir, "settings.json")
+	gw := gateway.URL() + "/v1"
+	write(t, zs, `{"theme":"One Dark","language_models":{"openai_compatible":{"magpie":{"api_url":"`+gw+`","available_models":[]}}}}`)
+
+	serving, served, stopped := false, 0, 0
+	through := []string{}
+	was := []any{zedThrough, biliServe, biliStop, biliServing}
+	zedThrough = func(a *agent.Agent, prefix string) error {
+		through = append(through, prefix)
+		b, _ := os.ReadFile(a.Path)
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			return err
+		}
+		m["language_models"].(map[string]any)["openai_compatible"].(map[string]any)["magpie"].(map[string]any)["api_url"] = prefix + gw
+		out, _ := json.Marshal(m)
+		return os.WriteFile(a.Path, out, 0o600)
+	}
+	biliServe = func(string) error { served++; serving = true; return nil }
+	biliStop = func() { stopped++; serving = false }
+	biliServing = func() bool { return serving }
+	t.Cleanup(func() {
+		zedThrough = was[0].(func(*agent.Agent, string) error)
+		biliServe = was[1].(func(string) error)
+		biliStop = was[2].(func())
+		biliServing = was[3].(func() bool)
+	})
+
+	if on, ok := biliOnFor(t)["zed"]; !ok || on {
+		t.Fatalf("Zed offered %v, on %v", ok, on)
+	}
+	v, err := SetBili("zed", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(v.Restart, []string{"zed"}) || v.Backup == "" {
+		t.Fatalf("restart %v, backup %q", v.Restart, v.Backup)
+	}
+	if !strings.Contains(read(t, zs), `"api_url":"`+biliPrefix+gw+`"`) || served != 1 {
+		t.Fatalf("served %d, settings:\n%s", served, read(t, zs))
+	}
+	if !biliOnFor(t)["zed"] {
+		t.Fatal("Zed isn't shown on")
+	}
+	// magpie restarted, bili start isn't answering: it's started again
+	serving = false
+	keepBiliServe(context.Background())
+	if served != 2 {
+		t.Fatalf("bili start run %d times, want 2", served)
+	}
+	if _, err := SetBili("zed", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read(t, zs), `"api_url":"`+gw+`"`) || stopped != 1 || biliOnFor(t)["zed"] {
+		t.Fatalf("stopped %d, settings:\n%s", stopped, read(t, zs))
+	}
+	if !slices.Equal(through, []string{biliPrefix, ""}) {
+		t.Fatalf("through %q", through)
+	}
+	// off, nothing starts it
+	keepBiliServe(context.Background())
+	if served != 2 || len(filter(f.runs, "plugin install", "plugin remove")) != 0 {
+		t.Fatalf("served %d, ran %v", served, f.runs)
+	}
+}
+
+// TestBiliHermesThroughPrefix (Duckb7si on X): Hermes on magpie had no
+// row on billion-context's page. bili's plugin for Hermes sets HTTPS_PROXY
+// alone, which magpie's http://127.0.0.1 provider never takes, so Hermes
+// goes through the /bili/ prefix as Zed does: switched on, bili start
+// answers and magpie's provider's base_url is behind the prefix; off, it is
+// on the gateway again and magpie's bili start ends. bili's plugin
+// installer never runs for it.
+func TestBiliHermesThroughPrefix(t *testing.T) {
+	h := sandbox(t)
+	f := newFakeBili(t, h)
+	t.Setenv("HERMES_HOME", "")
+	holdCLI(t, h, "hermes")
+	cfg := filepath.Join(appdir.HermesHome(), "config.yaml")
+	gw := gateway.URL() + "/v1"
+	write(t, cfg, "# mine\nmodel:\n  default: deepseek/pro\n  provider: magpie\nproviders:\n  magpie:\n    name: magpie\n    base_url: "+gw+"\n    api_key: magpie\n    api_mode: chat_completions\n")
+
+	serving, served, stopped := false, 0, 0
+	was := []any{biliServe, biliStop, biliServing}
+	biliServe = func(string) error { served++; serving = true; return nil }
+	biliStop = func() { stopped++; serving = false }
+	biliServing = func() bool { return serving }
+	t.Cleanup(func() {
+		biliServe = was[0].(func(string) error)
+		biliStop = was[1].(func())
+		biliServing = was[2].(func() bool)
+	})
+
+	if on, ok := biliOnFor(t)["hermes"]; !ok || on {
+		t.Fatalf("Hermes offered %v, on %v", ok, on)
+	}
+	v, err := SetBili("hermes", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(v.Restart, []string{"hermes"}) || v.Backup == "" {
+		t.Fatalf("restart %v, backup %q", v.Restart, v.Backup)
+	}
+	if !strings.Contains(read(t, cfg), "base_url: "+biliPrefix+gw+"\n") || !strings.Contains(read(t, cfg), "# mine") || served != 1 {
+		t.Fatalf("served %d, config:\n%s", served, read(t, cfg))
+	}
+	if !biliOnFor(t)["hermes"] {
+		t.Fatal("Hermes isn't shown on")
+	}
+	serving = false
+	keepBiliServe(context.Background())
+	if served != 2 {
+		t.Fatalf("bili start run %d times, want 2", served)
+	}
+	if _, err := SetBili("hermes", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read(t, cfg), "base_url: "+gw+"\n") || stopped != 1 || biliOnFor(t)["hermes"] {
+		t.Fatalf("stopped %d, config:\n%s", stopped, read(t, cfg))
+	}
+	if len(filter(f.runs, "plugin install", "plugin remove")) != 0 {
+		t.Fatalf("ran %v", f.runs)
+	}
+}
+
+// TestBiliVersionPastItsWarnings: `bili --version` is read with stderr,
+// and bili 0.1.213 on mote wrote a config warning before the version; the
+// card said "2026-11-09T23:44:06.211" for the version.
+func TestBiliVersionPastItsWarnings(t *testing.T) {
+	for out, want := range map[string]string{
+		"0.1.213 (133f3525c)":   "0.1.213",
+		"0.1.213 (133f3525c)\n": "0.1.213",
+		"2026-11-09T23:44:06.211 [warn] [v=0.1.213] [acp-config] ignoring unknown top-level config key(s): models\n0.1.213 (133f3525c)\n": "0.1.213",
+		"0.1.214-beta.1":                      "0.1.214-beta.1",
+		"[warn] something\r\n0.2.0 (abc)\r\n": "0.2.0",
+		"command not found":                   "",
+		"":                                    "",
+	} {
+		if got := biliVersion(out); got != want {
+			t.Errorf("biliVersion(%q) = %q, want %q", out, got, want)
+		}
 	}
 }

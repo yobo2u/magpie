@@ -235,6 +235,10 @@
         <div class="who"><div class="name" data-t>Open at login</div></div>
         <div id="loginSegs"></div>
       </div>
+      <div class="row pref app-only" id="gatewayPauseRow">
+        <div class="who"><div class="name" data-t>Gateway</div><div class="sub" data-t>Paused, agents are disconnected and use their own settings</div></div>
+        <div id="gatewayPauseSegs"></div>
+      </div>
       <div class="row pref app-only" id="quitAskRow">
         <div class="who"><div class="name" data-t>Ask before quitting</div><div class="sub" data-t>While agents go through magpie, Quit names them and asks first</div></div>
         <div id="quitAskSegs"></div>
@@ -339,6 +343,10 @@
         <div class="who"><div class="name" data-t>Proxy</div><div class="sub" id="proxySub"></div></div>
         <div id="proxySegs" class="proxy-segs"></div>
       </div>
+      <div class="row pref" id="pluginProxyRow">
+        <div class="who"><div class="name" data-t>Plugin downloads</div><div class="sub" id="pluginProxySub"></div></div>
+        <div id="pluginProxySegs" class="proxy-segs"></div>
+      </div>
     </div>
     <div class="row-head"><span class="label">GitHub</span></div>
     <div class="list prefs" id="githubList"></div>
@@ -353,10 +361,13 @@
     <div class="row-head"><span class="label" data-t>Local network</span></div>
     <div class="list prefs" id="lanList"></div>
     <div class="list prefs" id="allowList"></div>
+    <div class="list prefs" id="mtlsList"></div>
     <div class="row-head"><span class="label" data-t>Web pages</span></div>
     <div class="list prefs" id="corsList"></div>
     <div class="row-head" id="webPageHead"><span class="label" data-t>Browser access</span></div>
     <div class="list prefs" id="webPageList"></div>
+    <div class="row-head" id="remoteHead"><span class="label" data-t>Another magpie</span></div>
+    <div class="list prefs" id="remoteList"></div>
   </section>
   <section class="set-page" id="setPage-models" role="tabpanel" aria-labelledby="setTab-models">
     <div class="row-head"><span class="label" data-t>Images</span></div>
@@ -520,6 +531,10 @@
   <div class="row pref" id="codexAsyncRow">
     <div class="who"><div class="name" data-t>Codex background compaction</div><div class="sub" data-t>Codex 0.163 and later summarise while a turn goes on, past the share of the window typed (65% when empty); a value set in its own config stays</div></div>
     <div id="codexAsyncSegs"></div>
+  </div>
+  <div class="row pref" id="codexServiceTierRow">
+    <div class="who"><div class="name" data-t>Codex service tier</div></div>
+    <div class="val" id="codexServiceTierPick"></div>
   </div>
   <div class="row pref" id="codexTitlesRow">
     <div class="who"><div class="name" data-t>Codex thread titles</div></div>

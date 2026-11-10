@@ -25,13 +25,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -195,8 +195,13 @@ const ContextSmallest = -1
 
 // Group is a routing group.
 type Group struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Note is the user's own word on the group (ConatusMoon2222 on X:
+	// which key it is for, why it is ordered so): one line, shown under
+	// its name on the Routing page and by magpie group, never sent to an
+	// agent or a vendor. Empty shows nothing (CleanNote).
+	Note    string   `json:"note,omitempty"`
 	Members []string `json:"members"` // "provider/model[:effort]" or "group/<id>", in order (see MemberEffort)
 	// Former are the ids it had before a rename (RenameGroup), newest
 	// last: a request still asking group/<old> is routed to it, until a
@@ -533,6 +538,7 @@ func cloneGroups(gs []Group) []Group {
 			rs := make([]Rule, len(g.Rules))
 			for j, r := range g.Rules {
 				r.Agents, r.Folders, r.ExceptFolders, r.More = slices.Clone(r.Agents), slices.Clone(r.Folders), slices.Clone(r.ExceptFolders), slices.Clone(r.More)
+				r.Where = slices.Clone(r.Where)
 				if r.Time != nil {
 					t := *r.Time
 					t.Days = slices.Clone(t.Days)
@@ -727,6 +733,7 @@ func (g Group) own() Group {
 		g.Rules[i].Folders = slices.Clone(r.Folders)
 		g.Rules[i].ExceptFolders = slices.Clone(r.ExceptFolders)
 		g.Rules[i].More = slices.Clone(r.More)
+		g.Rules[i].Where = slices.Clone(r.Where)
 		if r.Time != nil {
 			w := *r.Time
 			w.Days = slices.Clone(w.Days)
@@ -789,7 +796,7 @@ func SetAutoGroups(on bool) error {
 // vendor spells it: "auto-claude-opus-5-5" for claude-opus-5.5.
 func AutoGroupID(model string) string { return "auto-" + Slug(sameModel(model)) }
 
-var groupDots = regexp.MustCompile(`\.{2,}`)
+var groupDots = lazyre.New(`\.{2,}`)
 
 // GroupSlug derives a group's own id from a name as Slug does, the dots
 // kept: "GPT 6.1 Sol" → "gpt-6.1-sol", so an agent sending group/<id> sends
@@ -1061,7 +1068,9 @@ func FallbackModels(p Provider) []Member {
 // can't take (every one held at its usage cap, or Codex's own sign-in out
 // of its allowance) goes on to these when nothing set as its fallback
 // takes it (adorable_piglet on Discord, v0.1.3354): the Codex app asks
-// Codex's own model, never the group built around it.
+// Codex's own model, never the group built around it. A request that
+// named the provider itself ("claude/…") is not sent on to these
+// (gateway's namedProvider, Anotiaww on X).
 func GroupsAfter(id string) []string {
 	var out []string
 	for _, gid := range MemberGroups()[id] {
@@ -1664,6 +1673,19 @@ func (e Entry) Quiet() bool {
 	return e.Reasonless || !e.Reasoning && len(e.Efforts) == 0 && !levelsUnknown(e)
 }
 
+// NoteLongest is how many characters a group's note keeps.
+const NoteLongest = 200
+
+// CleanNote is a group's note as stored: one line, its spaces and line
+// breaks run together, at most NoteLongest characters.
+func CleanNote(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > NoteLongest {
+		s = strings.TrimSpace(string(r[:NoteLongest]))
+	}
+	return s
+}
+
 // SaveGroup adds or replaces a group of the user's. Changing one magpie
 // found makes it the user's.
 func SaveGroup(g Group) error {
@@ -1680,6 +1702,7 @@ func SaveGroup(g Group) error {
 	if g.Name == "" {
 		g.Name = g.ID
 	}
+	g.Note = CleanNote(g.Note)
 	g.FirstToken = max(g.FirstToken, FirstTokenWait)
 	if g.Sink {
 		g.NoSink = false

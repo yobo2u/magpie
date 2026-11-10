@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/iconproxy"
+	"github.com/yetone/magpie/internal/lazyre"
 )
 
 // The market is where the page finds MCP servers and skills to add in one
@@ -413,12 +413,18 @@ func serverKey(s *Server) string {
 	if len(s.Args) == 2 && s.Args[0] == "mcp" && (s.Args[1] == "image" || s.Args[1] == "browser" || s.Args[1] == "search" || s.Args[1] == "vision" || s.Args[1] == "memory") {
 		return "magpie mcp " + s.Args[1] // magpie's own, wherever its binary is
 	}
-	for _, a := range s.Args {
+	uv := progName(s.Command) == "uvx"
+	for i := 0; i < len(s.Args); i++ {
+		a := s.Args[i]
+		if uv && a != "--from" && uvOpts[a] { // uvx -p 3.13: the value is not the package
+			i++
+			continue
+		}
 		if a == "" || strings.HasPrefix(a, "-") || a == "run" {
 			continue
 		}
-		if i := strings.LastIndex(a, "@"); i > 0 { // @scope/pkg@latest → @scope/pkg
-			a = a[:i]
+		if j := strings.LastIndex(a, "@"); j > 0 { // @scope/pkg@latest → @scope/pkg
+			a = a[:j]
 		}
 		return s.Command + " " + a
 	}
@@ -451,21 +457,7 @@ type registryServer struct {
 		URL     string        `json:"url"`
 		Headers []registryVar `json:"headers"`
 	} `json:"remotes"`
-	Packages []struct {
-		RegistryType string                `json:"registryType"`
-		Identifier   string                `json:"identifier"`
-		Transport    struct{ Type string } `json:"transport"`
-		Env          []registryVar         `json:"environmentVariables"`
-		Arguments    []struct {
-			Type        string `json:"type"`
-			Name        string `json:"name"`
-			Value       string `json:"value"`
-			Default     string `json:"default"`
-			ValueHint   string `json:"valueHint"`
-			Description string `json:"description"`
-			IsRequired  bool   `json:"isRequired"`
-		} `json:"packageArguments"`
-	} `json:"packages"`
+	Packages []registryPackage `json:"packages"`
 }
 
 type registryVar struct {
@@ -476,7 +468,7 @@ type registryVar struct {
 	IsSecret    bool   `json:"isSecret"`
 }
 
-var placeholderRe = regexp.MustCompile(`\{[^{}]*\}`)
+var placeholderRe = lazyre.New(`\{[^{}]*\}`)
 
 // listed is an active server the registry lists, as the market
 // offers it.
@@ -689,55 +681,23 @@ func fromRegistry(r *registryServer) (MarketServer, bool) {
 		}
 	}
 	for _, want := range []string{"npm", "pypi", "oci"} {
-		for _, p := range r.Packages {
+		for i, p := range r.Packages {
 			if p.RegistryType != want || p.Identifier == "" || (p.Transport.Type != "" && p.Transport.Type != "stdio") {
 				continue
 			}
-			s.Transport, m.Transport = "stdio", "stdio"
-			switch want {
-			case "npm":
-				s.Command, s.Args = "npx", []string{"-y", p.Identifier}
-			case "pypi":
-				s.Command, s.Args = "uvx", []string{p.Identifier}
-			case "oci":
-				s.Command, s.Args = "docker", []string{"run", "-i", "--rm"}
+			cmd, args, inputs, ok := launchLine(&r.Packages[i])
+			if !ok { // not a line magpie can start; another package may be
+				continue
 			}
-			m.Runs = s.Command
+			s.Transport, m.Transport = "stdio", "stdio"
+			s.Command, s.Args, m.Runs = cmd, args, cmd
 			for _, e := range p.Env {
 				if !e.IsRequired && !e.IsSecret {
 					continue
 				}
 				m.Inputs = append(m.Inputs, Input{Key: e.Name, Where: "env", Label: e.Name, Description: e.Description, Secret: e.IsSecret, Required: e.IsRequired})
-				if want == "oci" {
-					s.Args = append(s.Args, "-e", e.Name)
-				}
 			}
-			if want == "oci" {
-				s.Args = append(s.Args, p.Identifier)
-			}
-			for i, a := range p.Arguments {
-				v := a.Value
-				if v == "" {
-					v = a.Default
-				}
-				if placeholderRe.MatchString(v) {
-					v = ""
-				}
-				switch {
-				case v != "" && a.Type == "named":
-					s.Args = append(s.Args, a.Name, v)
-				case v != "":
-					s.Args = append(s.Args, v)
-				case a.IsRequired && a.Type != "named":
-					label := a.ValueHint
-					if label == "" {
-						label = fmt.Sprintf("Argument %d", i+1)
-					}
-					m.Inputs = append(m.Inputs, Input{Key: fmt.Sprintf("arg%d", i), Where: "arg", Label: label, Description: a.Description, Required: true})
-				case a.IsRequired:
-					return MarketServer{}, false // a named argument magpie can't fill
-				}
-			}
+			m.Inputs = append(m.Inputs, inputs...)
 			return m, true
 		}
 	}
@@ -975,7 +935,7 @@ var skillsShURL = "https://www.skills.sh"
 //go:embed market_skills.json
 var skillsSnapshot []byte
 
-var repoRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
+var repoRe = lazyre.New(`^[\w.-]+/[\w.-]+$`)
 
 var popular = struct {
 	sync.Mutex
@@ -1369,7 +1329,7 @@ func (e *SearchError) Unwrap() error { return e.Err }
 // variable for tests.
 var retryPause = time.Second
 
-var metaDescRe = regexp.MustCompile(`<meta\s+name="description"\s+content="([^"]*)"`)
+var metaDescRe = lazyre.New(`<meta\s+name="description"\s+content="([^"]*)"`)
 
 // metaDescription is what a page's <meta name="description"> says.
 func metaDescription(page []byte) string {

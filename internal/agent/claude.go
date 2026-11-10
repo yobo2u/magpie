@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"github.com/yetone/magpie/internal/desktopdir"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -177,7 +177,7 @@ const claudeEffortEnv = "CLAUDE_CODE_EFFORT_LEVEL"
 // claudeNameRe finds the Claude model an id names, as Claude Code matches it
 // to its settings: claude-opus-5-5 in claude-opus-5-5[1m], in a dated id or
 // under a provider's prefix (anthropic/…).
-var claudeNameRe = regexp.MustCompile(`claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:[^0-9]|$)`)
+var claudeNameRe = lazyre.New(`claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:[^0-9]|$)`)
 
 // claudeName is the Claude model a model id names, "" for another vendor's,
 // an alias (opus) or none. A version written with a dot (claude-opus-4.6)
@@ -2265,6 +2265,7 @@ func claudeIn(at place) *Agent {
 		Bin: "claude", Dir: filepath.Dir(path), Path: path,
 		Fields:       fields,
 		ModelAliases: claudeAliases,
+		Telemetry:    claudeTelemetry(at, path),
 		// Claude Code as it was before magpie: its default puts it back as
 		// installed, on Anthropic's endpoint, where this brings back the
 		// endpoint, token and model the user had
@@ -2435,9 +2436,11 @@ func claudeIn(at place) *Agent {
 			}
 			return wiringOff("Claude Code", path, getEnv, "ANTHROPIC_AUTH_TOKEN", at.gwKey())
 		},
-		// every prompt typed into Claude Code goes into history.jsonl
+		// every prompt typed into Claude Code goes into history.jsonl, and
+		// so does every one magpie's bridge gives it in magpie's own work
+		// folder, which went through magpie (ifccod7391564 on X)
 		LastUsed: func() time.Time {
-			return lastJSONLTime(filepath.Join(filepath.Dir(path), "history.jsonl"), "timestamp", "display")
+			return lastJSONLTime(filepath.Join(filepath.Dir(path), "history.jsonl"), "timestamp", "display", inMagpieWork)
 		},
 		// a session takes a new CLAUDE_CODE_EFFORT_LEVEL on its next
 		// request, but settings.json's effort and ultracode, and the env's
@@ -3084,4 +3087,18 @@ const claudeCustomOptionEnv = "ANTHROPIC_CUSTOM_MODEL_OPTION"
 func claudeNarrowed() bool {
 	_, hidden := provider.CatalogFor("claude")
 	return len(hidden) > 0
+}
+
+// inMagpieWork: a line of Claude Code's history.jsonl is a prompt magpie's
+// bridge gave it, in magpie's own work folder (os.TempDir()'s
+// magpie-claude-work, magpie-claude-work-<uid> off Windows), whatever the
+// path to it (/private/var/… on a Mac, C:/… or a WSL mount on Windows).
+func inMagpieWork(m map[string]json.RawMessage) bool {
+	var project string
+	if json.Unmarshal(m["project"], &project) != nil {
+		return false
+	}
+	base := strings.TrimRight(project, `/\`)
+	base = base[strings.LastIndexAny(base, `/\`)+1:]
+	return base == "magpie-claude-work" || strings.HasPrefix(base, "magpie-claude-work-")
 }

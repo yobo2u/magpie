@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"reflect"
-	"regexp"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/filememo"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
@@ -144,8 +144,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		// told so without the rows being made, encoded and hashed again,
 		// ~60% of an unchanged poll's ~22 MB over ~17k real sessions
 		logV, logKnown := usage.LogVersion()
-		aliases := provider.UsageAliases()
-		now := listTag{log: logV, drawn: drawn.String(), aliases: aliases}
+		now := listTag{log: logV, drawn: drawn.String(), names: provider.UsageNamesKey()}
 		made := -1
 		listTags.Lock()
 		if t, ok := listTags.m[n]; ok && logKnown && t.same(now) && r.Header.Get("X-Magpie-Had") == t.tag {
@@ -592,15 +591,15 @@ var listTags struct {
 var listsRowed atomic.Int64
 
 type listTag struct {
-	made    int    // sessions.ListUnless's listing
-	log     uint64 // usage.LogVersion
-	drawn   string // the agents' names and icons, and the folders
-	aliases map[string]string
-	tag     string
+	made  int    // sessions.ListUnless's listing
+	log   uint64 // usage.LogVersion
+	drawn string // the agents' names and icons, and the folders
+	names string // usage aliases and found groups' public ids
+	tag   string
 }
 
 func (t listTag) same(u listTag) bool {
-	return t.log == u.log && t.drawn == u.drawn && maps.Equal(t.aliases, u.aliases)
+	return t.log == u.log && t.drawn == u.drawn && t.names == u.names
 }
 
 // sameStats is whether a and b would be sent the same: a read again
@@ -643,6 +642,11 @@ var overviewsMade atomic.Int64
 const overviewsKept = 8
 
 func writeOverview(rw http.ResponseWriter, days int, agentID, model, cwd string) {
+	if model != "" {
+		if alias := provider.UsageAlias(); alias != nil {
+			model = alias(model)
+		}
+	}
 	st, gen := statsForGen(days)
 	key := overviewKey{days, gen, agentID, model, cwd}
 	overviews.Lock()
@@ -704,6 +708,7 @@ func statsFor(days int) sessions.Stats {
 
 func statsForGen(days int) (sessions.Stats, uint64) {
 	days = max(0, days)
+	keepStatsWhileAsked()
 	statsMemo.Lock()
 	if k := statsMemo.m[days]; k != nil {
 		statsMemo.asks++
@@ -762,6 +767,62 @@ func statsForGen(days int) (sessions.Stats, uint64) {
 	}
 	statsMemo.Unlock()
 	return st, gen
+}
+
+// statsIdle is how long the Sessions page's stats are kept after the last
+// ask. The page polls every 15 s while it is open; once it has been shut
+// for this long, every range's Stats (a Summary for each session ever:
+// ~15 MB of a 14k-session history), the overviews and the answers' tags
+// go. The parsed session files stay, so the next ask sums them up again
+// (~0.1 s a range) without reading a file.
+const statsIdle = 2 * time.Minute
+
+var statsIdleTimer struct {
+	sync.Mutex
+	t *time.Timer
+	// off: tests, which ask for stats over minutes, have it armed only
+	// when they ask for it
+	off bool
+}
+
+func init() { statsIdleTimer.off = testing.Testing() }
+
+// keepStatsWhileAsked puts off forgetIdleStats for statsIdle.
+func keepStatsWhileAsked() {
+	statsIdleTimer.Lock()
+	defer statsIdleTimer.Unlock()
+	if statsIdleTimer.off {
+		return
+	}
+	if statsIdleTimer.t != nil {
+		statsIdleTimer.t.Reset(statsIdle)
+		return
+	}
+	statsIdleTimer.t = time.AfterFunc(statsIdle, forgetIdleStats)
+}
+
+// forgetIdleStats lets go of what statsForGen and writeOverview kept, and
+// hands the pages back to the system at once; a range being read again
+// puts it off.
+func forgetIdleStats() {
+	statsMemo.Lock()
+	for _, k := range statsMemo.m {
+		if k.busy {
+			statsMemo.Unlock()
+			keepStatsWhileAsked()
+			return
+		}
+	}
+	statsMemo.m = nil
+	statsMemo.Unlock()
+	overviews.Lock()
+	overviews.m = nil
+	overviews.Unlock()
+	statsTags.Lock()
+	statsTags.m = nil
+	statsTags.Unlock()
+	sessions.ForgetKeptRanges()
+	debug.FreeOSMemory()
 }
 
 func combinedSessionStats(days int) sessions.Stats {
@@ -1119,7 +1180,7 @@ func agentLine(a *agent.Agent, launch, goos string) string {
 }
 
 // plainBin is a program name a distro's shell takes as it is.
-var plainBin = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+var plainBin = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
 // agentTerminal is openTerminal, a var so a test opens no terminal.
 var agentTerminal = openTerminal

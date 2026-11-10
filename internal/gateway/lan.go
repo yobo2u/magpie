@@ -554,6 +554,12 @@ func (s *Server) Relisten() error {
 // including a stale named key.
 func lanGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// with mTLS on, another machine's request needs magpie's client
+		// certificate before anything else is looked at, a callback's
+		// token and a gateway key included (mtls.go)
+		if refuseWithoutClientCert(w, r) {
+			return
+		}
 		if ownCallback(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -563,6 +569,8 @@ func lanGuard(next http.Handler) http.Handler {
 		// (wsl.go), is one of this computer's; one given the key in its
 		// path (Claude Science's) has it taken off first
 		r = takeWSLPathKey(r)
+		// an agent named in the path (AgentPath) is told by it
+		r = takeAgentPath(r)
 		if fromWSL(r) {
 			r = asFromLoopback(r)
 		}
