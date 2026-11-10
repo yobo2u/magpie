@@ -252,7 +252,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           const global = new Set();
           for (const sel of rules) for (const part of sel.split(",")) { const m = part.trim().match(/^\.([\w-]+)$/); if (m) global.add(m[1]); }
           const used = new Set();
-          for (const e of document.querySelectorAll("#ledDash *, #ledWrap .led-detail *")) for (const c of e.classList) used.add(c);
+          for (const e of document.querySelectorAll("#ledDash *, #ledReqPane .led-detail *")) for (const c of e.classList) used.add(c);
           const ok = new Set(["segs", "opt", "grow", "text", "sess-pick", "skeleton", "thumb", "on", "ic"]); // the page's shared parts, used as meant
           // the new parts' own, prefixed names are theirs; a short bare one may be anyone's
           const own = /^(led|pu|cx|rk|usage)-/;
@@ -283,7 +283,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
     for (const lang of ["en", "zh"]) await t.test(lang + ": a day filters details while keeping the whole chart", async () => {
       const { p, asked, exported, errors } = await open(lang, lang === "zh" ? "dark" : "light", { variant: "daily" });
-      await p.locator("#period .opt").nth(1).click();
+      await p.locator("#period .opt").nth(2).click();
       const days = p.locator("#ledChart .led-day");
       await days.nth(6).waitFor();
       const initial = await p.locator("#ledChart rect.col").evaluateAll((rs) => rs.map((r) => [r.dataset.day, r.dataset.k, r.getAttribute("height"), r.dataset.color]));

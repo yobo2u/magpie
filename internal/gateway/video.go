@@ -1093,7 +1093,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		r = heldByGroup(r, g) // held to the group's accounts, if it is
 	}
 	keyWho, keyHeld := keyHolds(r)
-	if keyHeld && named && (isGroup && !groupAllowed(keyWho, g, ms) || !isGroup && !modelAllowed(keyWho, p, model)) {
+	if named && (isGroup && !groupGiven(r, keyWho, keyHeld, g, ms) || keyHeld && !isGroup && !modelAllowed(keyWho, p, model)) {
 		fail(keyModelRefusal(w, keyWho, f.Model))
 		return
 	}
@@ -1173,7 +1173,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	for i, m := range tries {
 		model = m.Model
 		at := time.Now()
-		v, code, err = s.startVideo(ctx, r, m.Provider, m.Model, f)
+		v, code, err = s.startVideo(ctx, memberOn(r, g, m), m.Provider, m.Model, f)
 		p, call.Provider = v.p, v.p.ID
 		side.tryAt(candidateOf(v.p, m.Model), at)(code, err)
 		// a group's next member is asked as a chat's would be: while this

@@ -31,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"hash/maphash"
+	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -47,6 +49,7 @@ import (
 	"github.com/yetone/magpie/internal/beat"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -167,7 +170,7 @@ func dshAt(at place) *Agent {
 // dshModern says a dsh home's patch lists are its profiles' (dsh 0.1.5
 // on): it has one, or fresh names the one magpie makes.
 func dshModern(dir string, fresh func() string) bool {
-	return len(dshProfiles(dir)) > 0 || fresh() != ""
+	return len(dshProfilesHeld(dir)) > 0 || fresh() != ""
 }
 
 // dshOn is what a dsh home at dir is wired by, for the agent whose models
@@ -200,11 +203,11 @@ func dshOn(at place, dir, list string, fresh, lead func() string) *Agent {
 		// /model has magpie's models beside DeepSeek's (Fate on Discord:
 		// DSH went back to Not connected)
 		Joined: func() bool {
-			files := dshProfiles(dir)
+			files := dshProfilesHeld(dir)
 			if len(files) == 0 {
 				return false
 			}
-			_, items, err := dshRead(files[0])
+			_, items, err := dshLook(files[0]) // dshOver changes a copy
 			return err == nil && dshWired(dshOver(dir, items))
 		},
 		// connected so, Disconnect takes the route out, the start magpie
@@ -316,6 +319,15 @@ func dshProfiles(dir string) []string {
 		}
 	}
 	return append(web, rest...)
+}
+
+// dshProfilesHeld is dshProfiles looked at once while a request holds
+// what it reads (provider.Held), for the looks a state poll makes for
+// each row (dshModern, Joined, dshLead): each listed the profiles' folder
+// again, ~2.5 MB a 40 polls. Read only; a write goes through
+// dshProfiles.
+func dshProfilesHeld(dir string) []string {
+	return provider.Held("dsh profiles\x00"+dir, func() []string { return dshProfiles(dir) })
 }
 
 // dshProfileTemplate is the patch list dsh writes for a new profile
@@ -452,7 +464,7 @@ func dshHomePatch(dir string) string { return filepath.Join(dir, "cordis.patch.y
 // replaces the fields it supplies: config replaces the whole config, but
 // disabled:false alone leaves the profile's config intact. For reading only.
 func dshOver(dir string, items []dshItem) []dshItem {
-	_, home, err := dshRead(dshHomePatch(dir))
+	_, home, err := dshLook(dshHomePatch(dir))
 	if err != nil || len(home) == 0 {
 		return items
 	}
@@ -647,6 +659,27 @@ func dshRead(path string) ([]string, []dshItem, error) {
 	return dshParse(path, string(b))
 }
 
+// dshParsed is a patch list as dshParse gave it.
+type dshParsed struct {
+	head  []string
+	items []dshItem
+}
+
+// dshLook is dshRead for a look that writes nothing: parsed once each time
+// the file changes and shared, so read only. The window's 15s drift poll
+// read and parsed every profile's list again on each ask, a third of what
+// forty asks allocated with real accounts.
+func dshLook(path string) ([]string, []dshItem, error) {
+	d, err := filememo.Read("dsh list", path, func(b []byte) (dshParsed, error) {
+		head, items, err := dshParse(path, string(edit.TrimBOM(b)))
+		return dshParsed{head, items}, err
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil // as dshRead, whose edit.Read gives no bytes
+	}
+	return d.head, d.items, err
+}
+
 // dshWrite puts a patch list back together.
 func dshWrite(path string, head []string, items []dshItem) error {
 	out := append([]string{}, head...)
@@ -704,9 +737,12 @@ func dshNode(it dshItem) (*yaml.Node, error) {
 // An entry's text is parsed once and its node shared, so whoever gets it
 // only reads it; a caller changing the node takes dshNode's own copy.
 func dshNodeShared(it dshItem) (*yaml.Node, error) {
-	text := strings.Join(it.lines, "\n")
+	// keyed by a hash of the lines, checked against a copy of them, so a
+	// look that finds the entry allocates nothing: joining the lines into a
+	// key each time was most of what the drift poll's dsh check still made
+	key := dshLinesHash(it.lines)
 	dshNodes.Lock()
-	n, ok := dshNodes.m[text]
+	n, ok := dshNodes.find(key, it.lines)
 	dshNodes.Unlock()
 	if !ok {
 		var err error
@@ -714,10 +750,13 @@ func dshNodeShared(it dshItem) (*yaml.Node, error) {
 			n = nil
 		}
 		dshNodes.Lock()
-		if dshNodes.m == nil || len(dshNodes.m) >= dshNodesMax {
-			dshNodes.m = map[string]*yaml.Node{}
+		if dshNodes.m == nil || dshNodes.size >= dshNodesMax {
+			dshNodes.m, dshNodes.size = map[uint64][]dshNodeEntry{}, 0
 		}
-		dshNodes.m[text] = n
+		if _, there := dshNodes.find(key, it.lines); !there {
+			dshNodes.m[key] = append(dshNodes.m[key], dshNodeEntry{slices.Clone(it.lines), n})
+			dshNodes.size++
+		}
 		dshNodes.Unlock()
 	}
 	if n == nil {
@@ -730,10 +769,41 @@ func dshNodeShared(it dshItem) (*yaml.Node, error) {
 // entries, with room for the old text of ones just changed.
 const dshNodesMax = 512
 
-var dshNodes struct {
-	sync.Mutex
-	m map[string]*yaml.Node
+var dshNodeSeed = maphash.MakeSeed()
+
+// dshLinesHash hashes an entry's lines as the text they make.
+func dshLinesHash(lines []string) uint64 {
+	var h maphash.Hash
+	h.SetSeed(dshNodeSeed)
+	for _, l := range lines {
+		h.WriteString(l)
+		h.WriteByte('\n')
+	}
+	return h.Sum64()
 }
+
+type dshNodeEntry struct {
+	lines []string // a copy: a caller may change its own slice later
+	n     *yaml.Node
+}
+
+type dshNodeCache struct {
+	sync.Mutex
+	m    map[uint64][]dshNodeEntry
+	size int
+}
+
+// find is the node parsed from these lines; the caller holds the lock.
+func (c *dshNodeCache) find(key uint64, lines []string) (*yaml.Node, bool) {
+	for _, e := range c.m[key] {
+		if slices.Equal(e.lines, lines) {
+			return e.n, true
+		}
+	}
+	return nil, false
+}
+
+var dshNodes dshNodeCache
 
 // dshNodeLines writes an entry read with dshNode back as lines.
 func dshNodeLines(n *yaml.Node) ([]string, error) {
@@ -886,7 +956,7 @@ var dshModelLine = regexp.MustCompile(`^\s+model:\s*(.+?)\s*$`)
 // the Agents page showed a model the desktop app's sessions don't start
 // on, and picking what it showed changed nothing there (#5222).
 func dshLead(dir, lead string) string {
-	files := dshProfiles(dir)
+	files := dshProfilesHeld(dir)
 	if len(files) == 0 {
 		return ""
 	}
@@ -908,7 +978,7 @@ func dshGet(dir, lead string) string {
 	if f == "" {
 		return dshGetLegacy(filepath.Join(dir, "config.yaml"))
 	}
-	_, items, err := dshRead(f)
+	_, items, err := dshLook(f)
 	if err != nil {
 		return ""
 	}
@@ -949,7 +1019,7 @@ func dshStartSel(dir string, items []dshItem) map[string]string {
 
 // dshGetLegacy reads agent-loop's model from a config.yaml before 0.1.5.
 func dshGetLegacy(path string) string {
-	_, items, err := dshRead(path)
+	_, items, err := dshLook(path)
 	if err != nil {
 		return ""
 	}
@@ -980,7 +1050,7 @@ func dshCheck(dir, gw string) string {
 	files := dshProfiles(dir)
 	if len(files) == 0 {
 		path := filepath.Join(dir, "config.yaml")
-		_, items, _ := dshRead(path)
+		_, items, _ := dshLook(path)
 		base := ""
 		if i := dshFind(items, "llm-deepseek"); i >= 0 {
 			for _, l := range items[i].lines {
@@ -992,7 +1062,7 @@ func dshCheck(dir, gw string) string {
 		get := func(string) (string, bool) { return base, base != "" }
 		return wiringOff("DeepSeek Harness", path, get, "baseURL", gw+"/v1")
 	}
-	_, items, _ := dshRead(files[0])
+	_, items, _ := dshLook(files[0])
 	routeFile := files[0]
 	if dshHomeHas(dir, dshPiRow) {
 		routeFile = dshHomePatch(dir)
@@ -1011,7 +1081,7 @@ func dshCheck(dir, gw string) string {
 	// wiring, which dshSync moves rather than this round writing beside.
 	canWriteBack := len(sharedModels(dshListFor(dir))) > 0
 	for _, f := range files[1:] {
-		_, items, err := dshRead(f)
+		_, items, err := dshLook(f)
 		if err != nil || dshWired(dshOver(dir, items)) {
 			continue
 		}
@@ -1063,7 +1133,7 @@ func dshCheck(dir, gw string) string {
 	// way. Every profile carries a route of its own, and dsh runs whichever
 	// one its session names, so every profile is asked.
 	for _, f := range files {
-		_, it, err := dshRead(f)
+		_, it, err := dshLook(f)
 		if err != nil {
 			continue
 		}
@@ -2458,13 +2528,13 @@ var dshSumSeed = maphash.MakeSeed()
 func dshFilesSum(dir string, files []string) uint64 {
 	var h maphash.Hash
 	h.SetSeed(dshSumSeed)
+	bp := dshSumBufs.Get().(*[]byte)
+	defer dshSumBufs.Put(bp)
 	sum := func(f string) {
 		h.WriteString(f)
 		h.WriteByte(0)
-		switch b, err := os.ReadFile(f); {
+		switch err := dshSumFile(&h, f, *bp); {
 		case err == nil:
-			h.WriteByte(1)
-			h.Write(b)
 		case errors.Is(err, os.ErrNotExist):
 			h.WriteByte(2)
 		default:
@@ -2480,6 +2550,32 @@ func dshFilesSum(dir string, files []string) uint64 {
 	}
 	return h.Sum64()
 }
+
+// dshSumFile writes 1 and f's bytes into h, read through buf rather than
+// whole: a patch list names every model magpie serves, and each round of
+// both dsh homes read every file of them into memory again only to hash
+// it. The sum is the same as for the bytes written at once.
+func dshSumFile(h *maphash.Hash, f string, buf []byte) error {
+	r, err := os.Open(f)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	h.WriteByte(1)
+	for {
+		n, err := r.Read(buf)
+		h.Write(buf[:n])
+		switch {
+		case err == io.EOF:
+			return nil
+		case err != nil:
+			return err
+		}
+	}
+}
+
+// dshSumBufs are dshFilesSum's read buffers.
+var dshSumBufs = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
 
 // dshModelsSum sums the models a round writes the route from.
 func dshModelsSum(models []catalog.Model) uint64 {
@@ -2757,13 +2853,13 @@ func DshPatchFiles(dir string) []string { return dshFiles(dir) }
 func dshGetEffort(dir, lead string) string {
 	f := dshLead(dir, lead)
 	if f == "" {
-		_, items, err := dshRead(filepath.Join(dir, "config.yaml"))
+		_, items, err := dshLook(filepath.Join(dir, "config.yaml"))
 		if err != nil {
 			return ""
 		}
 		return dshEffortIn(items)
 	}
-	_, items, err := dshRead(f)
+	_, items, err := dshLook(f)
 	if err != nil {
 		return ""
 	}

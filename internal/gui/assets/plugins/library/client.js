@@ -35,6 +35,8 @@ magpie.plugin("library", (ctx) => {
 
   const GLYPH = {
     cmd: "M3 4.5h10v7H3z M5.5 7l1.5 1.2-1.5 1.3 M8.5 9.5h2",
+    // two arrows closing on a line: billion-context folding a context
+    fold: "M8 2v4 M6 4.2 8 6l2-1.8 M8 14v-4 M6 11.8 8 10l2 1.8 M3 8h10",
     web: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z M2.5 8h11 M8 2.5c1.6 1.7 2.3 3.5 2.3 5.5S9.6 11.8 8 13.5 M8 2.5C6.4 4.2 5.7 6 5.7 8s.7 3.8 2.3 5.5",
     skill: "M4 2.5h6.5L12 4v9.5H4z M6 6h4 M6 8.5h4 M6 11h2.5",
     doc: "M4 2.5h5.5L12 5v8.5H4z M9.5 2.5V5H12",
@@ -533,8 +535,9 @@ magpie.plugin("library", (ctx) => {
       // opening the page (its nav clicked, while on it too) draws it again
       // only for a change, or for RTK's tab, which is asked again: a page
       // drawn over again replaced the row under the reader's pointer (#3099)
-      if (quiet === "open" && seen(lib) === was && tab !== "rtk" && page.querySelector(":scope > .lib-body")) return;
+      if (quiet === "open" && seen(lib) === was && tab !== "rtk" && tab !== "bili" && page.querySelector(":scope > .lib-body")) return;
       rtk = null; // asked again when its tab is drawn: an agent may have been installed since
+      bili = null;
       piView = null;
       render();
     } catch (e) {
@@ -808,8 +811,10 @@ magpie.plugin("library", (ctx) => {
       ch.append(bar("26px", 26, "lib-sk-icon"), bar("150px", 11));
       card.append(ch, rows(1, false).firstChild);
       box.append(card, head("60px"), rows(6, true));
-    } else if (which === "rtk") {
-      box.append(rows(1, false), head("60px"), rows(5, true));
+    } else if (which === "rtk" || which === "bili") {
+      box.append(rows(1, false), head("60px"), rows(which === "rtk" ? 5 : 3, true));
+    } else if (which === "memory") {
+      box.append(rows(1, true), rows(6, false));
     } else if (which === "pi") {
       box.append(head("60px"), rows(4, true));
     } else {
@@ -824,8 +829,12 @@ magpie.plugin("library", (ctx) => {
     // RTK's count read afresh each time its tab is opened: an agent run
     // since adds to it (#741); the page keeps the last one until then
     if (id === "rtk" && rtk) loadRTK();
+    // and which agents have billion-context's plugin: bili switched outside magpie
+    if (id === "bili" && bili) loadBili();
     // Pi's extensions too: one installed or changed outside magpie since
     if (id === "pi" && piView) loadPi();
+    // memory too: agents save to it while the page is open
+    if (id === "memory" && mem) loadMemory();
     if (!lib) return page.querySelector(":scope > .lib-skel")?.replaceWith(skeleton(id));
     render(); syncLists();
   }
@@ -837,11 +846,13 @@ magpie.plugin("library", (ctx) => {
     const n = (k) => (counts?.[k] ? " · " + counts[k] : "");
     const tabs = segs(agentless() ? [["mcp", t("MCP servers") + n("mcp")]] : [
       ["instructions", t("Instructions")],
+      ["memory", t("Memory")],
       ["mcp", t("MCP servers") + n("mcp")],
       ["skills", t("Skills") + n("skills")],
       ["hooks", t("Hooks") + n("hooks")],
       ["subagents", t("Subagents") + n("subagents")],
       ["rtk", "RTK"],
+      ["bili", "billion-context"],
       ...(hasPi() ? [["pi", t("Pi packages")]] : []),
     ], tab, openTab);
     tabs.classList.add("lib-tabs");
@@ -910,6 +921,8 @@ magpie.plugin("library", (ctx) => {
     if (tab === "instructions") renderInstructions(body);
     else if (tab === "mcp") renderServers(body);
     else if (tab === "rtk") renderRTK(body);
+    else if (tab === "bili") renderBili(body);
+    else if (tab === "memory") renderMemory(body);
     else if (tab === "pi") renderPi(body);
     else if (tab === "hooks") renderHooks(body);
     else if (tab === "subagents") renderSubagents(body);
@@ -933,6 +946,317 @@ magpie.plugin("library", (ctx) => {
   }
 
   function intro(text) { return el("p", "lib-intro", text); }
+
+  // ---------- memory ----------
+
+  // What the agents know about the user and their projects, shared by all
+  // of them (internal/memory): agents search it and save to it through the
+  // Magpie Memory server, and the ones ticked for instructions read its
+  // digest. A memory an agent only guessed waits under Suggested until the
+  // user keeps it.
+  let mem = null;        // /api/memory
+  let dist = null;       // /api/memory/distill: conversations read into memory
+  let distPoll = 0;
+  let memLoading = false;
+  let memQ = "";         // the search typed
+  let memStatus = "active";
+  let memScope = "";     // "" every scope
+  let memOpen = null;    // the memory open to edit, or "new"
+  let memDraft = null;   // its fields as typed
+  let memRemoving = null; // the memory whose Delete was clicked once
+  const MEM_KINDS = ["profile", "preference", "rule", "reference", "fact", "procedure", "episode"];
+  const kindName = (k) => ({ profile: t("About you"), preference: t("Preference"), rule: t("Rule"), reference: t("Reference"), fact: t("Fact"), procedure: t("How-to"), episode: t("Decision") })[k] || k;
+  function scopeName(s) {
+    if (!s || s === "global") return t("Everywhere");
+    if (s.startsWith("project:")) {
+      const k = s.slice(8), p = mem?.projects?.[k];
+      return p?.name || k;
+    }
+    if (s.startsWith("agent:")) return t("Only {agent}", { agent: nameOf(s.slice(6)) });
+    return s;
+  }
+  async function loadMemory() {
+    if (memLoading) return;
+    memLoading = true;
+    try {
+      [mem, dist] = await Promise.all([api("memory"), api("memory/distill").catch(() => null)]);
+    } catch (e) {
+      status(e.message, "err");
+    }
+    memLoading = false;
+    if (tab === "memory" && mem) render();
+    distWatch();
+  }
+  function memDirty() {
+    if (!memOpen || !memDraft) return false;
+    const m = mem?.memories.find((x) => x.id === memOpen);
+    if (!m) return !!memDraft.text.trim();
+    return memDraft.text !== m.text || memDraft.why !== (m.why || "") || memDraft.tags !== (m.tags || []).join(", ") || memDraft.kind !== m.kind || memDraft.scope !== m.scope;
+  }
+  let memBusy = false;
+  async function memChange(path, body, done) {
+    if (memBusy) return false;
+    memBusy = true;
+    page.setAttribute("aria-busy", "true");
+    try {
+      const v = await api(path, body);
+      mem = v;
+      if (v.problem) status(v.problem, "err", 10000);
+      else if (done) status(done, "", 4000);
+      return true;
+    } catch (e) {
+      status(e.message, "err", 6000);
+      return false;
+    } finally {
+      memBusy = false;
+      page.removeAttribute("aria-busy");
+      render();
+    }
+  }
+  // a picker: the app's menu, never a <select>
+  function menuButton(text, cls, onclick) {
+    const b = el("button", "sess-pick lib-menu " + cls);
+    b.type = "button";
+    b.setAttribute("aria-haspopup", "menu");
+    b.append(el("span", "", text), svg(CHEV, 11, 1.6));
+    b.onclick = (e) => { e.stopPropagation(); onclick(e); };
+    return b;
+  }
+  const memTags = (s) => s.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+  function openMemory(m) {
+    memRemoving = null;
+    if (!m) { memOpen = "new"; memDraft = { text: "", why: "", tags: "", kind: "preference", scope: memScope || "global" }; return; }
+    memOpen = m.id;
+    memDraft = { text: m.text, why: m.why || "", tags: (m.tags || []).join(", "), kind: m.kind, scope: m.scope };
+  }
+  async function saveMemory() {
+    if (!memDraft || !memDraft.text.trim()) return;
+    const isNew = memOpen === "new";
+    const body = { text: memDraft.text.trim(), why: memDraft.why.trim(), tags: memTags(memDraft.tags), kind: memDraft.kind, scope: memDraft.scope };
+    if (!isNew) body.id = memOpen;
+    if (await memChange("memory", body, isNew ? t("Remembered") : t("Saved"))) { memOpen = null; memDraft = null; render(); }
+  }
+  // every scope a memory is kept in, and the places one can be put
+  function memScopes(withAgents) {
+    const out = ["global"];
+    for (const k of Object.keys(mem.projects || {})) out.push("project:" + k);
+    for (const m of mem.memories) if (!out.includes(m.scope) && (withAgents || !m.scope.startsWith("agent:"))) out.push(m.scope);
+    if (withAgents) for (const a of shownAgents()) if (!out.includes("agent:" + a.id.split("@")[0])) out.push("agent:" + a.id.split("@")[0]);
+    return out;
+  }
+  function renderMemory(body) {
+    body.append(intro(t("What your agents know about you and your projects, shared by all of them. They search it and save to it with Magpie Memory, and the agents switched on under Instructions read a summary of it.")));
+    if (!mem) {
+      loadMemory();
+      body.append(skeleton("memory").lastChild);
+      return;
+    }
+    const card = el("div", "list lib-list lib-memcard");
+    const row = el("div", "row lib-row lib-memdigest");
+    const who = el("div", "who");
+    who.append(el("div", "name", t("In the agents' instructions")));
+    who.append(el("div", "sub", mem.agents.length ? mem.agents.map(nameOf).join(", ") : t("No agent is switched on under Instructions")));
+    const sw = toggle(mem.digest, t("In the agents' instructions"), (on) => memChange("memory/digest", { on }, on ? t("The agents read the memories' summary") : t("The memories' summary is taken out of the agents' instructions")));
+    row.append(glyph(GLYPH.doc), who, sw);
+    card.append(row);
+    if (dist) card.append(distillRow(), dreamRow());
+    if (!lib.servers.some((s) => s.name === "magpie-memory")) {
+      const r = el("div", "row lib-row lib-memtools");
+      const w = el("div", "who");
+      w.append(el("div", "name", "Magpie Memory"), el("div", "sub", t("Add it for agents to search and save memories")));
+      r.append(glyph(GLYPH.search), w, button(t("Add"), "action", () => change("market/server", { id: "magpie-memory", values: {} }, t("{name} is in the library now", { name: "Magpie Memory" }))));
+      card.append(r);
+    }
+    body.append(card);
+
+    const all = mem.memories;
+    const count = (st) => all.filter((m) => st === "archived" ? m.status === "archived" || m.status === "superseded" : m.status === st).length;
+    const bar = el("div", "lib-membar");
+    const q = input(memQ, t("Search memories"));
+    q.type = "search";
+    q.className = "lib-memq";
+    q.dataset.lib = "memq";
+    q.oninput = () => { memQ = q.value; render(); };
+    q.onkeydown = (e) => e.stopPropagation();
+    const sugg = count("candidate");
+    const st = segs([
+      ["active", t("In use") + (count("active") ? " · " + count("active") : "")],
+      ...(sugg || memStatus === "candidate" ? [["candidate", t("To review") + (sugg ? " · " + sugg : "")]] : []),
+      ["archived", t("Archived") + (count("archived") ? " · " + count("archived") : "")],
+    ], memStatus, (v) => { memStatus = v; memOpen = null; render(); });
+    st.classList.add("lib-memstatus");
+    const sc = menuButton(memScope ? scopeName(memScope) : t("All"), "lib-memscope", () => openProtoMenu(sc, [{ v: "", name: t("Everywhere and every project"), literalName: true, note: "" }, ...memScopes(true).filter((s) => all.some((m) => m.scope === s)).map((s) => ({ v: s, name: scopeName(s), literalName: true, note: "" }))], memScope, (v) => { memScope = v; render(); }, "Where it applies"));
+    bar.append(q, sc, st, el("span", "grow"), button("+ " + t("Add"), "action lib-memadd", () => { openMemory(null); render(); }));
+    body.append(bar);
+
+    const words = memQ.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = all.filter((m) => (memStatus === "archived" ? m.status === "archived" || m.status === "superseded" : m.status === memStatus)
+      && (!memScope || m.scope === memScope)
+      && words.every((w) => [m.text, m.why || "", ...(m.tags || []), kindName(m.kind), scopeName(m.scope)].join(" ").toLowerCase().includes(w)))
+      .sort((a, b) => (!!b.pinned - !!a.pinned) || (b.updated > a.updated ? 1 : b.updated < a.updated ? -1 : 0));
+    const list = el("div", "list lib-list lib-mems");
+    if (memOpen === "new") list.append(memDetail(null));
+    for (const m of shown) list.append(...memRow(m));
+    if (!shown.length && memOpen !== "new") {
+      list.append(el("div", "lib-none", words.length || memScope ? t("No memory matches.")
+        : memStatus === "candidate" ? t("Nothing to review.")
+        : memStatus === "archived" ? t("Nothing archived.")
+        : t("Nothing remembered yet. Tell an agent “remember that…”, or add one here.")));
+    }
+    body.append(list);
+  }
+  // the model conversations are read and memory tidied with: the
+  // automatic one or one picked, shared by both rows
+  function memModelPick(d) {
+    const modelName = (id) => { const m = d.models.find((x) => x.id === id); return m ? (m.name || m.id) : id; };
+    const auto = d.auto ? t("Automatic") + " · " + modelName(d.auto) : t("Automatic");
+    const pick = menuButton(d.model ? modelName(d.model) : auto, "lib-distmodel", () => openProtoMenu(pick, [
+      { v: "", name: t("Automatic"), note: d.auto ? modelName(d.auto) : t("No models"), literalName: true },
+      ...d.models.map((m) => ({ v: m.id, name: m.name || m.id, note: m.providerName || "", literalName: true }))],
+    d.model || "", (v) => distChange("memory/distill", { on: d.on, model: v }), "Model", "", "left", false, d.models.length > 8 ? "Search models" : ""));
+    return pick;
+  }
+  // Conversations read into memory (internal/memdistill): what the
+  // agents' finished sessions say worth keeping waits under To review.
+  // Off until switched on; the model is the automatic one or one picked.
+  function distillRow() {
+    const d = dist;
+    const r = el("div", "row lib-row lib-memdistill");
+    const w = el("div", "who");
+    w.append(el("div", "name", t("Learn from conversations")));
+    let line = t("Reads each finished conversation for what to remember. You review each one before agents see it.");
+    let err = false;
+    if (d.on && d.running) line = t("Reading conversations…");
+    else if (d.on && d.error) { line = t("Stopped {when}: {error}", { when: ago(d.last), error: d.error }); err = true; }
+    else if (d.on && d.last) line = t("Read {when} · {k} new to review", { when: ago(d.last), k: d.added || 0 });
+    else if (d.on) line = t("Reads conversations quiet for 30 minutes, every hour");
+    w.append(el("div", "sub" + (err ? " err" : ""), line));
+    const acts = el("div", "lib-acts");
+    if (d.on) {
+      acts.append(memModelPick(d));
+      if (!d.running) acts.append(button(t("Read now"), "action lib-distnow", () => distChange("memory/distill/run", {})));
+    }
+    acts.append(toggle(d.on, t("Learn from conversations"), (on) => distChange("memory/distill", { on, model: d.model || "" })));
+    r.append(glyph(GLYPH.search), w, acts);
+    return r;
+  }
+  // The nightly tidy (memdistill's Dream): memories that repeat are
+  // merged, ones out of date set aside, the last night's undone at once.
+  // The model is the one picked above; with reading off, it is picked here.
+  function dreamRow() {
+    const d = dist;
+    const r = el("div", "row lib-row lib-memdream");
+    const w = el("div", "who");
+    w.append(el("div", "name", t("Tidy up every night")));
+    const ch = d.changes || [];
+    const merged = ch.filter((c) => c.action === "merge").length, aside = ch.length - merged;
+    let line = t("Merges memories that repeat and sets aside ones out of date. What you wrote or pinned stays.");
+    let err = false;
+    if (d.dreaming) line = t("Tidying…");
+    else if (d.dreamError) { line = t("Couldn't tidy: {error}", { error: d.dreamError }); err = true; }
+    else if (d.dreamt && d.undone) line = t("Tidied {when} · undone", { when: ago(d.dreamt) });
+    else if (d.dreamt && ch.length) line = t("Tidied {when} · {m} merged, {a} set aside", { when: ago(d.dreamt), m: merged, a: aside });
+    else if (d.dreamt) line = t("Nothing to tidy {when}", { when: ago(d.dreamt) });
+    w.append(el("div", "sub" + (err ? " err" : ""), line));
+    const acts = el("div", "lib-acts");
+    if (ch.length && !d.undone && !d.dreaming) acts.append(button(t("Undo"), "action lib-dreamundo", () => distChange("memory/dream/undo", {}, true)));
+    if (d.dream && !d.on) acts.append(memModelPick(d));
+    if (d.dream && !d.dreaming && !d.running) acts.append(button(t("Tidy now"), "action lib-dreamnow", () => distChange("memory/dream/run", {})));
+    acts.append(toggle(d.dream, t("Tidy up every night"), (on) => distChange("memory/dream", { on })));
+    r.append(glyph(GLYPH.backup), w, acts);
+    return r;
+  }
+  async function distChange(path, body, reload) {
+    try {
+      dist = await api(path, body);
+      if (reload) mem = await api("memory");
+    } catch (e) {
+      status(e.message, "err", 6000);
+    }
+    render();
+    distWatch();
+  }
+  // while a run goes, the row is read again every 2s; when it ends the
+  // memories are too, for what it proposed
+  function distWatch() {
+    clearTimeout(distPoll);
+    if (!dist?.running && !dist?.dreaming) return;
+    distPoll = setTimeout(async () => {
+      if (tab !== "memory") return;
+      try {
+        dist = await api("memory/distill");
+        if (!dist.running && !dist.dreaming) mem = await api("memory");
+      } catch {}
+      render();
+      distWatch();
+    }, 2000);
+  }
+  function memRow(m) {
+    const isOpen = memOpen === m.id;
+    const row = el("div", "row lib-row click lib-mem" + (isOpen ? " open" : ""));
+    row.dataset.id = m.id;
+    const who = el("div", "who");
+    who.append(el("div", "name", m.text));
+    const sub = [scopeName(m.scope), ...(m.tags || []).map((x) => "#" + x)];
+    const from = m.origin === "agent" || m.origin === "inferred" ? (m.sources || []).find((s) => s.agent)?.agent : "";
+    if (from) sub.push(t("from {agent}", { agent: nameOf(from) }));
+    who.append(el("div", "sub", sub.join(" · ")));
+    const tags = el("div", "lib-tags");
+    if (m.pinned) tags.append(tag(t("Pinned"), "", t("Given to the agents first")));
+    tags.append(tag(kindName(m.kind)));
+    const chev = el("span", "chev");
+    chev.append(svg(CHEV_R, 11, 1.7));
+    row.append(who, tags, chev);
+    row.onclick = () => { if (isOpen) { memOpen = null; memDraft = null; } else openMemory(m); render(); };
+    return isOpen ? [row, memDetail(m)] : [row];
+  }
+  function memDetail(m) {
+    const d = memDraft;
+    const det = el("div", "lib-detail lib-memdetail");
+    const ta = el("textarea", "lib-text small");
+    ta.dataset.lib = "mem:" + (m ? m.id : "new");
+    ta.value = d.text;
+    ta.placeholder = t("What to remember, in a sentence — e.g. Use pnpm, never npm, in this repo");
+    ta.oninput = () => { d.text = ta.value; };
+    ta.onkeydown = (e) => { e.stopPropagation(); if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "Enter")) { e.preventDefault(); saveMemory(); } };
+    autosize(ta, 52);
+    if (!m) queueMicrotask(() => ta.focus());
+    const pick = (label, value, opts, head, set) => {
+      const b = menuButton(label(value), "lib-mempick", () => openProtoMenu(b, opts.map((v) => ({ v, name: label(v), literalName: true, note: "" })), value, (v) => { set(v); render(); }, head));
+      return b;
+    };
+    const line = el("div", "lib-memline");
+    line.append(pick(kindName, d.kind, MEM_KINDS, "Kind", (v) => { d.kind = v; }), pick(scopeName, d.scope, memScopes(true), "Where it applies", (v) => { d.scope = v; }));
+    const tg = input(d.tags, t("Tags, separated by commas"));
+    tg.className = "lib-memtags grow";
+    tg.dataset.lib = "memtags:" + (m ? m.id : "new");
+    tg.oninput = () => { d.tags = tg.value; };
+    tg.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") saveMemory(); };
+    line.append(tg);
+    const why = input(d.why, t("Why (optional)"));
+    why.className = "lib-memwhy";
+    why.dataset.lib = "memwhy:" + (m ? m.id : "new");
+    why.oninput = () => { d.why = why.value; };
+    why.onkeydown = tg.onkeydown;
+    det.append(ta, line, why);
+    const acts = el("div", "lib-acts");
+    if (m) {
+      acts.append(button(m.pinned ? t("Unpin") : t("Pin"), "action", () => memChange("memory", { id: m.id, pinned: !m.pinned })));
+      if (m.status === "candidate") acts.append(button(t("Keep"), "action", () => memChange("memory", { id: m.id, status: "active" }, t("Kept"))));
+      else if (m.status === "active") acts.append(button(t("Archive"), "action", () => { memOpen = null; memChange("memory", { id: m.id, status: "archived" }, t("Archived")); }));
+      else acts.append(button(t("Restore"), "action", () => { memOpen = null; memChange("memory", { id: m.id, status: "active" }, t("Restored")); }));
+      const sure = memRemoving === m.id;
+      acts.append(button(sure ? t("Delete for good") : t("Delete"), sure ? "primary danger-fill" : "action danger", () => {
+        if (!sure) { memRemoving = m.id; render(); return; }
+        memRemoving = null; memOpen = null; memDraft = null;
+        memChange("memory/remove", { ids: [m.id] }, t("Deleted"));
+      }));
+    }
+    acts.append(el("span", "grow"), button(t("Cancel"), "", () => { memOpen = null; memDraft = null; memRemoving = null; render(); }), button(m ? t("Save") : t("Remember"), "primary", saveMemory));
+    det.append(acts);
+    det.onclick = (e) => e.stopPropagation();
+    return det;
+  }
 
   // ---------- RTK ----------
 
@@ -1132,6 +1456,107 @@ magpie.plugin("library", (ctx) => {
     rtkBusy.delete(a.id);
     render();
   }
+  // ---------- billion-context ----------
+
+  // billion-context (its CLI bili) folds an agent's older turns into
+  // summaries the model can open again, so a long session stays in the
+  // window. magpie runs bili's own installer for each agent switched on and
+  // its remover for one switched off, then puts back what the install
+  // changed in the agent's files (bili.go).
+  let bili = null;          // /api/library/bili
+  const biliBusy = new Set(); // agents being switched
+  let biliLoading = false, biliInstalling = false, biliInstallErr = "";
+  async function loadBili() {
+    if (biliLoading) return;
+    biliLoading = true;
+    try {
+      bili = await api("library/bili");
+    } catch (e) {
+      status(e.message, "err");
+    }
+    biliLoading = false;
+    if (tab === "bili" && bili) render();
+  }
+  function renderBili(body) {
+    body.append(intro(t("billion-context folds an agent's older turns into summaries the model can open again, so a long session stays inside its window. Switch it on for an agent and magpie runs billion-context's own installer for it.")));
+    if (!bili) {
+      body.append(el("div", "row skeleton"));
+      loadBili();
+      return;
+    }
+    const card = el("div", "list lib-card lib-bili");
+    const ttl = el("div", "lib-cardhead");
+    ttl.append(glyph(GLYPH.fold), el("b", "", "billion-context"), el("span", "grow"));
+    card.append(ttl);
+    if (bili.path) {
+      ttl.append(el("span", "note mono", bili.version ? "v" + bili.version : tilde(bili.path)));
+      card.append(el("p", "lib-rtk-gain", t("An agent switched on here can't also run billion-context-pi or opencode-acp.")));
+      if (bili.listErr) card.append(el("p", "lib-rtk-note lib-rtk-err", t("magpie couldn't read which agents have it: {why}", { why: bili.listErr })));
+    } else {
+      card.append(el("p", "lib-rtk-gain", biliInstalling
+        ? t("Installing billion-context… this can take a minute.")
+        : t("billion-context isn't installed. magpie can install it for you, or get it from its site.")));
+      if (bili.install) card.append(el("p", "lib-rtk-cmd", bili.install));
+      if (biliInstallErr && !biliInstalling) card.append(el("p", "lib-rtk-note lib-rtk-err lib-bili-install-err", t("The install failed: {why}", { why: biliInstallErr })));
+      const acts = el("div", "lib-acts");
+      if (bili.install) {
+        const ib = button(biliInstalling ? t("Installing…") : t("Install billion-context"), "action", installBili);
+        ib.disabled = biliInstalling;
+        acts.append(ib);
+      }
+      acts.append(button(t("Get billion-context"), bili.install ? "" : "action", () => browse(bili.url)), button(t("Check again"), "", () => { bili = null; render(); }));
+      card.append(acts);
+    }
+    body.append(card);
+    const rh = el("div", "row-head");
+    rh.append(el("span", "label", t("Agents")), el("span", "grow"), el("span", "note", t("restart an agent after switching it")));
+    body.append(rh);
+    const list = el("div", "list lib-list");
+    const rows = bili.agents.filter((a) => !isHidden(a));
+    for (const a of rows) {
+      const row = el("div", "row lib-row");
+      const who = el("div", "who");
+      who.append(el("div", "name", a.name));
+      row.append(icon(a.icon), who, el("span", "grow"));
+      // bili lists it as neither on nor off: partly there, broken
+      if (a.status) row.append(tag(t("Not whole"), "warn", t("bili plugin list says: {status}. Switch it off to take out what is there.", { status: a.status })));
+      const on = a.on || !!a.status;
+      const sw = toggle(on, t("{agent} folds its context with billion-context", { agent: a.name }), (v) => setBili(a, v));
+      if ((!bili.path) || biliBusy.has(a.id) || biliInstalling) sw.disabled = true;
+      row.append(sw);
+      list.append(row);
+    }
+    if (!rows.length) list.append(el("div", "lib-none", t("None of your agents is one billion-context has a plugin for that works with magpie: Pi, omp, OpenCode or Claude Code.")));
+    body.append(list);
+  }
+  async function setBili(a, on) {
+    biliBusy.add(a.id);
+    render();
+    try {
+      bili = await api("library/bili", { agent: a.id, on });
+      const names = (bili.restart || [a.id]).map((id) => bili.agents.find((x) => x.id === id)?.name || id).join(", ");
+      status(on ? t("billion-context is on for {agent} — restart it to use it", { agent: names }) : t("billion-context is off for {agent} — restart it to see it", { agent: names }), "ok", 6000);
+    } catch (e) {
+      status(e.message, "err", 8000);
+    }
+    biliBusy.delete(a.id);
+    render();
+  }
+  async function installBili() {
+    biliInstalling = true;
+    biliInstallErr = "";
+    render();
+    try {
+      bili = await api("library/bili/install", {});
+      status(t("billion-context is installed — switch it on for your agents below"), "ok", 6000);
+    } catch (e) {
+      biliInstallErr = e.message;
+      status(e.message, "err", 10000);
+    }
+    biliInstalling = false;
+    render();
+  }
+
   // ---------- Pi extensions ----------
 
   // Each Pi here (this computer's, and each WSL distro's) with the
@@ -1475,6 +1900,7 @@ magpie.plugin("library", (ctx) => {
   }
   async function discard(force = false) {
     if (force !== true && dirty() && !(await confirmDiscard())) return;
+    if (force === true) { memOpen = null; memDraft = null; }
     for (const k of Object.keys(texts)) delete texts[k];
     for (const k of Object.keys(extras)) delete extras[k];
     render();
@@ -5791,7 +6217,14 @@ magpie.plugin("library", (ctx) => {
       }
       nm.append(b);
     } else if (c?.status === "unknown") {
-      nm.append(tag(t("Not checked"), "lib-unchecked", checkError(c)));
+      const b = tag(t("Not checked"), "lib-unchecked", checkError(c));
+      // GitHub's limit without a token: the tag leads to where one is
+      // added, Settings › Network and sharing's GitHub row
+      if (c.limited && !c.limited.token) {
+        b.classList.add("link");
+        b.onclick = (e) => { e.stopPropagation(); openSettingsAt(e, "network", "#githubList .row"); };
+      }
+      nm.append(b);
     }
     // changed here since it was fetched from GitHub (#1449): an update asks
     // before it replaces that
@@ -6961,7 +7394,9 @@ magpie.plugin("library", (ctx) => {
   // unsaved text, or a lookup under way.
   // What changed there changes what the market calls added, too: take asks it again.
   async function quietLoad() {
-    if (page.hidden || modal || dirty() || probing) return;
+    if (page.hidden || modal || dirty() || memDirty() || probing) return;
+    // what agents saved meanwhile
+    if (tab === "memory" && mem) loadMemory();
     await load(true);
   }
   const shelf = () => JSON.stringify([lib?.servers?.map((x) => x.name), lib?.skills?.map((x) => x.name)]);
@@ -6981,7 +7416,7 @@ magpie.plugin("library", (ctx) => {
         if (!confirmationPending && modal && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeLibModal(); }
       }, true);
       // leaving the page with the shared text not saved asks first
-      window.addEventListener("beforeunload", (e) => { if (lib && dirty()) e.preventDefault(); });
+      window.addEventListener("beforeunload", (e) => { if (lib && (dirty() || memDirty())) e.preventDefault(); });
       page.addEventListener("scroll", () => page.querySelector(".lib-head")?.classList.toggle("stuck", page.scrollTop > 0), { passive: true });
       document.addEventListener("visibilitychange", () => { if (!document.hidden) quietLoad(); });
       window.addEventListener("focus", quietLoad);
@@ -7009,7 +7444,7 @@ magpie.plugin("library", (ctx) => {
     redraw: () => { if (lib) render(); },
     // the reader leaving the page: its dialog closed, and what isn't saved
     close: () => { if (modal) closeLibModal(true); else closeModal(); },
-    dirty: () => !!lib && dirty(),
+    dirty: () => !!lib && (dirty() || memDirty()),
     discard: () => discard(true),
   });
 });

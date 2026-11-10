@@ -198,6 +198,10 @@ type Group struct {
 	ID      string   `json:"id"`
 	Name    string   `json:"name"`
 	Members []string `json:"members"` // "provider/model[:effort]" or "group/<id>", in order (see MemberEffort)
+	// Former are the ids it had before a rename (RenameGroup), newest
+	// last: a request still asking group/<old> is routed to it, until a
+	// group takes that id for its own (xinvxueyuan on Discord).
+	Former []string `json:"former,omitempty"`
 	// Match are patterns its models are found by as well (#766): a glob
 	// over the "provider/model" id with * in it ("openrouter/*:free"), or
 	// a regular expression after "re:". Kept apart from Members, so the
@@ -316,6 +320,16 @@ type Group struct {
 	// of a provider it names, a provider it names none of on every
 	// account it has. Empty, every account of every member serves.
 	Accounts []string `json:"accounts,omitempty"`
+	// Keys bind the group to some gateway keys (access.Key.ID; Xerxes754
+	// on X: a group for one or two keys alone). Set, a request with
+	// another key may neither use the group nor see it in a model list,
+	// whatever models that key may use; a key issued under one of them
+	// may, as it may what its issuer may. A request with no key (this
+	// computer's own) is held by no key and passes. Empty, every key the
+	// group is given passes, as before. Saved, nil keeps the group's
+	// (SaveGroup), so a caller that doesn't know of them leaves them be;
+	// empty clears them.
+	Keys []string `json:"keys,omitempty"`
 	// Auto is set on a group magpie found: one model served by several
 	// providers. It is derived, never stored.
 	Auto bool `json:"auto,omitempty"`
@@ -369,6 +383,11 @@ type Member struct {
 	// Fast is set on a member the group sends in its vendor's fast mode
 	// (Group.Fast), where its model has one.
 	Fast bool
+	// Account is the one account or key of Provider the member is sent
+	// on, "<provider>/<stable id>", as Group.Accounts has them
+	// ("provider/model#<id>", groupaccount.go); "" for every one the
+	// groups it is in allow.
+	Account string
 	// At is where the walk down the group met it, counting every model of
 	// every group in it, the same model's later places too: a group's own
 	// models are met in its own order.
@@ -435,7 +454,7 @@ func (m Member) Groups() []string {
 // Below is the member as the group at depth (0 the group itself, 1 the
 // group in it Path[0] names, …) has it.
 func (m Member) Below(depth int) Member {
-	out := Member{ID: m.Path[depth], Path: m.Path[depth:], Via: m.Via[depth:], Provider: m.Provider, Model: m.Model, Effort: m.Effort, Levels: m.Levels, EffortMap: m.EffortMap, Fast: m.Fast, At: m.At}
+	out := Member{ID: m.Path[depth], Path: m.Path[depth:], Via: m.Via[depth:], Provider: m.Provider, Model: m.Model, Effort: m.Effort, Levels: m.Levels, EffortMap: m.EffortMap, Fast: m.Fast, Account: m.Account, At: m.At}
 	// its other places in the same group at depth
 	for _, o := range m.Also {
 		if len(o.Path) > depth && slices.Equal(o.Path[:depth], m.Path[:depth]) {
@@ -473,6 +492,25 @@ func sharedGroups() []Group {
 	return heldFrom("groups", providerEntries(), buildGroupsIn)
 }
 
+// sharedGroupsIn is groupsIn without the copy, for a caller that only
+// reads them: a group found in it is copied alone (cloneGroup). A routing
+// group's lookup (FindGroup, GroupFinder) copied every group and its
+// rules for the one it wanted, each time: 4 MB of the window's 15-second
+// drift poll, and once per request on a group.
+func sharedGroupsIn(entries []Entry) []Group {
+	return heldFrom("groups", entries, buildGroupsIn)
+}
+
+// cloneGroup is g with nothing shared with it (cloneGroups).
+func cloneGroup(g Group) Group { return cloneGroups([]Group{g})[0] }
+
+// GroupsBound says some routing group is bound to gateway keys
+// (Group.Keys), read from the groups held for the catalog, no copy made:
+// a model list for a key no group binds needs no other look.
+func GroupsBound() bool {
+	return slices.ContainsFunc(sharedGroups(), func(g Group) bool { return len(g.Keys) > 0 })
+}
+
 // cloneGroups is gs with nothing shared with it: no slice, map or pointer
 // of a group or its rules.
 func cloneGroups(gs []Group) []Group {
@@ -483,7 +521,8 @@ func cloneGroups(gs []Group) []Group {
 	for i, g := range gs {
 		g.Members, g.Match, g.Matched, g.Placed = slices.Clone(g.Members), slices.Clone(g.Match), slices.Clone(g.Matched), slices.Clone(g.Placed)
 		g.Off, g.Levels, g.Fast = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast)
-		g.Accounts, g.Seen = slices.Clone(g.Accounts), slices.Clone(g.Seen)
+		g.Accounts, g.Seen, g.Keys = slices.Clone(g.Accounts), slices.Clone(g.Seen), slices.Clone(g.Keys)
+		g.Former = slices.Clone(g.Former)
 		g.Weights = maps.Clone(g.Weights)
 		g.EffortMaps = renamedEffortMaps(g.EffortMaps, func(m string) string { return m })
 		if g.IntentSure != nil {
@@ -677,7 +716,9 @@ func (g Group) own() Group {
 	g.Levels = slices.Clone(g.Levels)
 	g.Fast = slices.Clone(g.Fast)
 	g.Accounts = slices.Clone(g.Accounts)
+	g.Keys = slices.Clone(g.Keys)
 	g.Seen = slices.Clone(g.Seen)
+	g.Former = slices.Clone(g.Former)
 	g.Weights = maps.Clone(g.Weights)
 	g.EffortMaps = renamedEffortMaps(g.EffortMaps, func(m string) string { return m })
 	g.Rules = slices.Clone(g.Rules)
@@ -1111,9 +1152,10 @@ func GroupFinder() func(id string) (Group, []Member, bool) {
 		}
 		if !read {
 			entries, read = providerEntries(), true
-			all, find = groupsIn(entries), entriesBy(entries)
+			all, find = sharedGroupsIn(entries), heldFrom("entries by", entries, entriesBy)
 		}
-		if g, ok := groupOf(all, gid); ok && !g.Disabled {
+		if g, ok := routedGroupOf(all, gid); ok && !g.Disabled {
+			g = cloneGroup(g)
 			return g, membersFound(entries, find, all, g, disabledNow(), nil), true
 		}
 		return Group{}, nil, false
@@ -1141,9 +1183,10 @@ func FindGroupAlso(id string, also func(p Provider, model string) bool) (Group, 
 		return Group{}, nil, false
 	}
 	entries := providerEntries()
-	all := groupsIn(entries)
-	if g, ok := groupOf(all, gid); ok && !g.Disabled {
-		return g, membersFound(entries, entriesBy(entries), all, g, disabledNow(), also), true
+	all := sharedGroupsIn(entries)
+	if g, ok := routedGroupOf(all, gid); ok && !g.Disabled {
+		g = cloneGroup(g)
+		return g, membersFound(entries, heldFrom("entries by", entries, entriesBy), all, g, disabledNow(), also), true
 	}
 	return Group{}, nil, false
 }
@@ -1156,6 +1199,33 @@ func groupOf(all []Group, id string) (Group, bool) {
 		}
 	}
 	return Group{}, false
+}
+
+// routedGroupOf is the group a request for group/<id> goes to: the group
+// of that id, or else the one renamed from it (Former), so an agent or a
+// script still on the old id keeps working after a rename. A group of
+// that id, switched off too, holds the id; one magpie found that is
+// removed (Hidden, as a rename leaves a found group's old id) does not.
+func routedGroupOf(all []Group, id string) (Group, bool) {
+	if g, ok := groupOf(all, id); ok {
+		return g, true
+	}
+	for _, g := range all {
+		if !g.Hidden && slices.Contains(g.Former, id) {
+			return g, true
+		}
+	}
+	return Group{}, false
+}
+
+// dropFormer takes id out of every group's Former: a group took it for
+// its own, and group/<id> is that group's now.
+func dropFormer(gs []Group, id string) {
+	for i := range gs {
+		if slices.Contains(gs[i].Former, id) {
+			gs[i].Former = slices.DeleteFunc(slices.Clone(gs[i].Former), func(x string) bool { return x == id })
+		}
+	}
 }
 
 // membersIn are a group's models, ready now, in its order: a group in it
@@ -1177,30 +1247,45 @@ func membersOff(entries []Entry, all []Group, g Group, off func(pid, model strin
 // most of what the Providers page spent on groups. A model also says is
 // the group's whatever p's picks are (FindDrawingGroup); nil for none.
 func membersFound(entries []Entry, find entryOf, all []Group, g Group, off func(pid, model string) bool, also func(p Provider, model string) bool) []Member {
-	var out []Member
-	seen := map[string]int{} // where in out
+	// made at the group's own count: a Member is large, and growing out
+	// by append was 9 MB of what forty polls of the Providers page
+	// allocated with real accounts. A group in it can add more.
+	n := len(g.Members)
+	if g.Routing == Manual {
+		n = 1
+	}
+	out := make([]Member, 0, n)
+	seen := make(map[string]int, n) // where in out
 	at := 0
 	var walk func(g Group, path []string, via []Group, in []string)
 	walk = func(g Group, path []string, via []Group, in []string) {
 		for _, id := range g.routes() {
-			here := append(slices.Clone(path), id)
 			if gid, ok := strings.CutPrefix(id, GroupPrefix); ok {
 				sub, ok := groupOf(all, gid)
 				if !ok || sub.Disabled || slices.Contains(in, gid) || len(via) >= maxNest {
 					continue // gone, switched off, a loop, or deeper than anyone nests
 				}
-				sub = sub.Within(g)
-				walk(sub, here, append(slices.Clone(via), sub.Live()), append(slices.Clone(in), gid))
+				// its own copy: all may be the groups held (sharedGroupsIn),
+				// and a member's Via and EffortMap are its caller's
+				sub = cloneGroup(sub).Within(g)
+				walk(sub, append(slices.Clone(path), id), append(slices.Clone(via), sub.Live()), append(slices.Clone(in), gid))
 				continue
 			}
 			model, effort := memberEffortIn(entries, id)
 			p, m, ok := resolveIn(entries, model)
-			key := WithMemberEffort(p.ID+"/"+m, effort)
 			if !ok || unpicked(find, p, m) && (also == nil || !also(p, m)) {
 				continue // none serves it, or the user unchecked it (#3911)
 			}
+			// on one account of its own (EastonXvii on X): the same model
+			// on another account is another member, asked in its own place
+			_, acct := MemberAccount(id)
+			if acct != "" {
+				acct = p.ID + "/" + acct
+			}
+			key := WithMemberAccount(WithMemberEffort(p.ID+"/"+m, effort), acct)
+			here := append(slices.Clone(path), id)
 			fixed, levels := MemberLevels(effort)
-			mem := Member{ID: here[0], Path: here, Via: via, Provider: p, Model: m, Effort: fixed, Levels: levels, Fast: g.IsFast(id), At: at}
+			mem := Member{ID: here[0], Path: here, Via: via, Provider: p, Model: m, Effort: fixed, Levels: levels, Fast: g.IsFast(id), Account: acct, At: at}
 			if fixed == "" && levels == nil {
 				mem.EffortMap = g.MemberEffortMap(id)
 			}
@@ -1219,6 +1304,9 @@ func membersFound(entries []Entry, find entryOf, all []Group, g Group, off func(
 		}
 	}
 	walk(g, nil, nil, []string{g.ID})
+	if len(out) == 0 {
+		return nil // none, as before it was made at its size
+	}
 	return out
 }
 
@@ -1627,6 +1715,9 @@ func SaveGroup(g Group) error {
 	if err := cleanFast(entries, &g); err != nil {
 		return err
 	}
+	if err := checkMemberAccounts(g.Members, wasMembers(f.Groups, g.ID)); err != nil {
+		return err
+	}
 	for i, m := range g.Members {
 		if model, effort := memberEffortIn(entries, m); effort != "" && IsGroupRef(model) {
 			return fmt.Errorf("%s is a group: its models reason as it says, so it takes no effort of its own (:%s)", model, effort)
@@ -1665,9 +1756,18 @@ func SaveGroup(g Group) error {
 	if err := cleanEffortMaps(entries, &g); err != nil {
 		return err
 	}
-	var was []string
+	var was, keysWas, formerWas []string
 	if i := slices.IndexFunc(f.Groups, func(x Group) bool { return x.ID == g.ID }); i >= 0 {
-		was = f.Groups[i].Accounts
+		was, keysWas, formerWas = f.Groups[i].Accounts, f.Groups[i].Keys, f.Groups[i].Former
+	}
+	if g.Former == nil {
+		g.Former = slices.Clone(formerWas) // a caller that doesn't know of them
+	}
+	g.Former = slices.DeleteFunc(cleanList(g.Former), func(id string) bool { return id == g.ID })
+	if g.Keys == nil {
+		g.Keys = slices.Clone(keysWas) // a caller that doesn't know of them
+	} else if g.Keys, err = cleanGroupKeys(g.Keys); err != nil {
+		return err
 	}
 	if g.Accounts, err = cleanGroupAccounts(g.Accounts, was); err != nil {
 		return err
@@ -1752,6 +1852,7 @@ func SaveGroup(g Group) error {
 		g.Seen = seenIn(g.ID, was, own, entries)
 	}
 	g.Disabled = false
+	dropFormer(f.Groups, g.ID)
 	for i := range f.Groups {
 		if f.Groups[i].ID == g.ID {
 			g.Disabled = f.Groups[i].Disabled && !f.Groups[i].Hidden
@@ -1770,6 +1871,24 @@ func SaveGroup(g Group) error {
 // held already and its provider has no more (an account signed out, a key
 // rotated) is kept as it was, matching nothing, so the group stays held
 // rather than let off to every account; a new one must be one magpie has.
+// cleanGroupKeys is a group's Keys trimmed, each once: nil for none.
+func cleanGroupKeys(in []string) ([]string, error) {
+	var out []string
+	for _, k := range in {
+		if k = strings.TrimSpace(k); k == "" || slices.Contains(out, k) {
+			continue
+		}
+		if len(k) > 200 {
+			return nil, errors.New("a group's gateway key is its id, at most 200 characters")
+		}
+		out = append(out, k)
+	}
+	if len(out) > 500 {
+		return nil, errors.New("a group can be bound to at most 500 gateway keys")
+	}
+	return out, nil
+}
+
 func cleanGroupAccounts(in, was []string) ([]string, error) {
 	var out []string
 	for _, a := range in {
@@ -2120,7 +2239,9 @@ func RenameGroup(from, to string) error {
 	}
 	found := slices.ContainsFunc(foundGroups(providerEntries()), func(o Group) bool { return o.ID == from })
 	g.ID, g.Auto, g.Hidden = to, false, false
+	g.Former = append(slices.DeleteFunc(slices.Clone(g.Former), func(id string) bool { return id == from || id == to }), from)
 	f.Groups = slices.DeleteFunc(f.Groups, func(o Group) bool { return o.ID == from })
+	dropFormer(f.Groups, to)
 	if found {
 		f.Groups = append(f.Groups, Group{ID: from, Hidden: true})
 	}

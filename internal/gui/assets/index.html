@@ -63,6 +63,8 @@
     <span>magpie</span>
   </div>
   <h1 class="sr-only" id="pageTitle" data-t>Agents</h1>
+  <!-- back to the page a link into a setting came from (app.js jumpFrom) -->
+  <button type="button" class="icon nav-back" id="navBack" hidden data-tt style="--wails-draggable:no-drag"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M10 3.25 5.25 8 10 12.75" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   <div class="crumb" id="crumb" aria-hidden="true" hidden></div>
   <nav class="seg" id="nav" aria-label="Main navigation" data-ta style="--wails-draggable:no-drag">
     <span class="nav-gl" data-t>Work</span>
@@ -285,7 +287,7 @@
         <div class="who"><div class="name" data-t>Menu bar pace</div><div class="sub" data-t>Each window's Pace number beside its figure, as on the Usage page: +12% is 12% more of the window used than an even pace would have used by now, −8% that much less</div></div>
         <div id="trayPaceSegs"></div>
       </div>
-      <div class="row pref" id="trayCostRow">
+      <div class="row pref app-only" id="trayCostRow">
         <div class="who"><div class="name" data-t>Menu bar cost</div><div class="sub" data-t>What magpie's requests cost, beside their tokens in the menu bar and its tooltip; off, the tokens alone</div></div>
         <div id="trayCostSegs"></div>
       </div>
@@ -293,7 +295,7 @@
         <div class="who"><div class="name" data-t>Tray icon number</div><div class="sub" data-t>The first allowance's figure as magpie's tray icon, used or left as Allowance display has it, every one when pointing at it; off, magpie's icon</div></div>
         <div id="trayNumberSegs"></div>
       </div>
-      <div class="row pref">
+      <div class="row pref" id="quotaLeftRow">
         <div class="who"><div class="name" data-t>Allowance display</div><div class="sub" data-t>How much of each window is used, or how much is left, on the Usage page, the panel and the menu bar</div></div>
         <div id="quotaLeftSegs"></div>
       </div>
@@ -309,6 +311,10 @@
         <div class="who"><div class="name" data-t>Number units</div><div class="sub" data-t>How a large count of tokens or requests is shortened on the Usage page and the panel</div></div>
         <div id="unitsSegs"></div>
       </div>
+      <div id="provPrefLinks"></div>
+    </div>
+    <div class="row-head" id="alertHead"><span class="label" data-t>Alerts</span></div>
+    <div class="list prefs" id="alertList">
       <div class="row pref" id="usageAlertRow">
         <div class="who"><div class="name" data-t>Allowance alert</div><div class="sub" id="usageAlertSub"></div></div>
         <div id="usageAlertSegs" class="warm-at"></div>
@@ -325,7 +331,6 @@
         <div class="who"><div class="name" data-t>Task done alert</div><div class="sub" id="turnDoneSub"></div></div>
         <div id="turnDoneSegs"></div>
       </div>
-      <div id="provPrefLinks"></div>
     </div>
   </section>
   <section class="set-page" id="setPage-network" role="tabpanel" aria-labelledby="setTab-network">
@@ -344,10 +349,6 @@
         <div class="who"><div class="name" data-t>Model ids without the provider</div><div class="sub" data-t>The gateway’s model list also names each model by its own id, as gpt-5.6-sol beside codex/gpt-5.6-sol, for apps moved from another proxy. One that several providers serve goes to them in the Providers order</div></div>
         <div id="bareIdsSegs"></div>
       </div>
-      <div class="row pref" id="busyLoadRow">
-        <div class="who"><div class="name" data-t>Busy models last</div><div class="sub" data-t>A model its plugin says is busier than this goes after the others a request could go to, as its vendor makes it wait. One with no load reported in the last 5 minutes keeps its place</div></div>
-        <div id="busyLoadSegs"></div>
-      </div>
     </div>
     <div class="row-head"><span class="label" data-t>Local network</span></div>
     <div class="list prefs" id="lanList"></div>
@@ -364,6 +365,13 @@
     <div class="list prefs" id="searchList"></div>
     <div class="row-head"><span class="label" data-t>Replies</span></div>
     <div class="list prefs" id="replyList"></div>
+    <div class="row-head"><span class="label" data-t>Routing</span></div>
+    <div class="list prefs" id="routeList">
+      <div class="row pref" id="busyLoadRow">
+        <div class="who"><div class="name" data-t>Busy models last</div><div class="sub" data-t>A model its plugin says is busier than this goes after the others a request could go to, as its vendor makes it wait. One with no load reported in the last 5 minutes keeps its place</div></div>
+        <div id="busyLoadSegs"></div>
+      </div>
+    </div>
     <div class="row-head"><span class="label" data-t>Disabled models</span></div>
     <div class="list prefs" id="disabledModelsList"></div>
   </section>
@@ -454,6 +462,7 @@
       <div id="warmNowBox"></div>
     </div>
   </div>
+  <div class="list prefs" id="claudeRunList"></div>
   <div class="list prefs" id="claudeWarmList" data-feature="warmups">
     <div class="row pref">
       <div class="who"><div class="name" data-t>Warm up on reset</div><div class="sub" id="claudeWarmSub" title="Nothing is sent while the computer sleeps: a window that resets then starts when it wakes, and counts from then." data-tt></div></div>

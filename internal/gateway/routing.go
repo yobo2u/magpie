@@ -829,6 +829,11 @@ type Rest struct {
 	// asked, it answers from its own hold at once, or from what it serves
 	// now
 	there bool
+	// out, outHeader: a ChatGPT account's refusal as the backend gave it
+	// (codexOutRefusal) and its x-codex-* windows, for a turn held on it
+	// (timedHeld) to be told as Codex is told on its own sign-in
+	out       []byte
+	outHeader http.Header
 }
 
 // asksAt is when r, a key's rest out of its allowance or credit, has it
@@ -869,6 +874,9 @@ func renewed(agent, user string) {
 // stands started again in fact, or a reset was spent.
 func restarted(agent, user string) {
 	liftRests(agent, user, true)
+	if agent == "codex" {
+		liftCodexHold(user)
+	}
 }
 
 // liftRests lifts an account's rests out of quota, or of a window read
@@ -1478,6 +1486,15 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// the vendor's words, for quotaHeld to give again
 		r.said = provider.APIError(body, http.StatusText(status))
 	}
+	if codexOutRefusal(c.p, provider.Responses, status, body) {
+		r.out = append([]byte(nil), body...)
+		r.outHeader = http.Header{}
+		for k, vs := range header {
+			if strings.HasPrefix(strings.ToLower(k), "x-codex-") {
+				r.outHeader[k] = slices.Clone(vs)
+			}
+		}
+	}
 	switch why {
 	case failCredit:
 		d, r.By, guessed = creditRest, "credit", true
@@ -1920,6 +1937,13 @@ func backingOff(key string, now time.Time) bool {
 	return ok && now.Before(until) && restingUntil.note[key].Why == failOther
 }
 
+// vendorSaidWhen says whether a 429's headers or body name a time it is
+// limited till, as rateRest reads them.
+func vendorSaidWhen(header http.Header, body []byte) bool {
+	now := time.Now()
+	return max(retryAfter(header, now), resetsNoted(header, now), resetsAt(body, now)) > 0
+}
+
 // rateRest is how long a rate-limited candidate sits out: as long as the
 // vendor says (Retry-After, a reset header or a reset time in its error),
 // and a minute when it says nothing. One limited again as soon as its rest
@@ -2096,6 +2120,19 @@ func keepRetryOut(dst, src http.Header, body []byte) {
 // keyLimitThereHeader carries, from keepRetry to restAfter, that another
 // magpie refused with its gateway key's own limit (remoteKeyLimitHeader).
 const keyLimitThereHeader = "X-Magpie-Key-Limit-There"
+
+// routedThere says a failure was another magpie's (a Remote magpie's)
+// answer after its own routing had its turn: its same-one retries, its
+// patience and its group's other members, which it was asked in full
+// (answeredThereHeader). Asked again from here, every one of them ran
+// again: one agent request sent the vendor 35 asks over 174s where the
+// remote alone would have made 7 over 33s (YeYaka88 on X). It isn't asked
+// again by this magpie's same-one retries or patience; this magpie's own
+// other members still are, and a remote that couldn't be reached, or
+// refused before routing (its key, its limit), is asked again as before.
+func routedThere(header http.Header) bool {
+	return header.Get(answeredThereHeader) != ""
+}
 
 // answeredThereHeader carries, from keepRetry to restAfter, the provider
 // another magpie named on its refusal (providerHeader): the refusal is
