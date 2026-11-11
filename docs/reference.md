@@ -117,7 +117,7 @@ line; agents connected to magpie lose it when it quits.
 | Zoo Code (VS Code) | VS Code's `Code/User/settings.json` (and each profile's): `zoo-code.autoImportSettingsPath` names `globalStorage/zoocodeorganization.zoo-code/settings/magpie-import.json` beside it | model (one provider profile `magpie`, OpenAI Compatible, imported by Zoo Code at start-up) |
 | Copilot (JetBrains) | `byok.json` in `~/.config/github-copilot` (`$XDG_CONFIG_HOME/github-copilot` when set, `%USERPROFILE%\AppData\Local\github-copilot` on Windows), the Copilot language server's own file, which Xcode's and Eclipse's Copilot read too | provider (a `magpie` custom endpoint provider beside the user's: every magpie model at the gateway's `/v1/chat/completions`, sent with `magpie-copilot-jetbrains`; a model hidden in Manage Models stays hidden through a sync; off removes magpie's three keys alone). Found by the `github-copilot-intellij` plugin in a JetBrains IDE or Android Studio. Listed after the IDE restarts, and only while Copilot is signed in to GitHub on a plan with Bring Your Own Key (Free, Pro, Pro+; Business and Enterprise when the organisation allows it); the model is picked in Copilot Chat |
 | JetBrains Air | `acp.json` in `~/Library/Application Support/JetBrains/Air` (`~/.config/JetBrains/Air` on Linux, `%APPDATA%\JetBrains\Air` on Windows) + `magpie-opencode.json` beside it | model (a `Magpie` ACP agent: OpenCode's `opencode acp` on magpie's provider alone, its models and routing groups in Air's model menu; needs OpenCode installed) |
-| Air (JetBrains IDEs) | `~/.jetbrains/acp.json` (`%USERPROFILE%\.jetbrains\acp.json` on Windows; the Air plugin in 2026.2+ IDEs, shared with AI Assistant's custom agents) + `magpie-opencode.json` beside it | model (the same `Magpie` ACP agent as the Air app's, in Air's agent menu in the IDE; needs OpenCode installed) |
+| Air (JetBrains IDEs) | `~/.jetbrains/acp.json` (`%USERPROFILE%\.jetbrains\acp.json` on Windows; the Air plugin in 2026.2+ IDEs, shared with AI Assistant's custom agents) + `magpie-opencode.json` beside it | model (the same `Magpie` ACP agent as the Air app's, in Air's agent menu in the IDE; needs OpenCode installed; a `Magpie (WSL <distro>)` agent too for each running WSL distro that has OpenCode, for WSL projects) |
 | Copilot CLI  | `~/.copilot/settings.json`        | model           |
 | Crush        | `~/.config/crush/crush.json`      | large, small    |
 | DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie, its key `MAGPIE_GATEWAY_KEY` in `~/.dsh/.env` and dsh's own key store `~/.dsh/.credentials.yaml`, which the desktop app reads; on one of magpie's models its `web-search-deepseek` row also goes to the gateway, which searches with the model or Settings › Web search, unless dsh has a `DEEPSEEK_API_KEY` or a row of your own), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
@@ -2492,7 +2492,8 @@ forwarding header (frp's `tcp`, `ssh -R`, socat, an nginx `proxy_pass`
 without `X-Forwarded-For`) reaches it from loopback, so magpie can't tell
 it from an agent on this computer and never answers it as one;
 `MAGPIE_TRUST_PROXY=1` doesn't change that. The page's sign-in cookie is
-no gateway key, and the page and its `/api` still need the page's key.
+no gateway key, and the page and its `/api` still need the page's key (or
+on a LazyCat box the box's sign-in, see [LazyCat](#lazycat)).
 Agents on this computer call the gateway's own port (`127.0.0.1:3425`),
 which needs no key from loopback. Ollama's `/api/*` and Claude Desktop's
 `/api/hello` are the page's own namespace on that port, so a client of
@@ -3292,6 +3293,11 @@ make release-windows  # dist/: the Windows app, amd64 and arm64 (cross-compiles)
 make release-linux    # dist/: the Linux app for this machine's arch
 ```
 
+The release targets and `make app` pack the UI's files into one zip first
+(`make assets-pack`, `build/assetpack`; embedded by `-tags packedassets`),
+which takes about 6 MB off each binary. `make build`, `make cli` and the
+tests embed the tree as it is.
+
 Linux needs `libgtk-3-dev` and `libwebkit2gtk-4.1-dev` for the app build
 (the Makefile adds the `gtk3` tag; with plain `go build`, pass `-tags gtk3`);
 Windows uses the WebView2 runtime that ships with the OS.
@@ -3533,6 +3539,102 @@ Watchtower to update at most daily (with Renovate, pin its digest);
 `stable` is the desktop app's Stable channel, one a week. `0.1.N` is one
 release, `0.1` the newest of its line, and `edge` every change on `main`.
 
+#### LazyCat
+
+On a [LazyCat](https://lazycat.cloud) box (懒猫微服) magpie runs as an
+app's service with `magpie web`. With `MAGPIE_WEB_SIGN_IN=lazycat` the page
+takes the box's own sign-in for its key: the box's administrators open
+magpie from the box's app list (`https://magpie.<box>.heiyu.space`), signed
+in to the box, with nothing to paste. The page sets them no cookie of its
+own, so signing out of the box signs them out of the page; a browser signed
+in with the key's link keeps its cookie. A manifest (`lzc-manifest.yml`) for
+it:
+
+```yaml
+application:
+  subdomain: magpie
+  upstreams:
+    - location: /
+      backend: http://magpie:3430/
+  # the gateway's client routes (clientPrefixes, internal/gateway/oneport.go),
+  # for agents that aren't signed in to the box: the gateway checks them as
+  # everywhere
+  public_path:
+    - /v1
+    - /v1beta
+    - /models
+    - /chat/completions
+    - /responses
+    - /messages
+    - /images
+    - /embeddings
+    - /rerank
+    - /decisions
+    - /audio
+    - /videos
+    - /muse-code/models
+    - /backend-api/codex
+    - /alpha/search
+    - /mcp
+    - /me
+    - /join
+    - /magpie-ca.crt
+services:
+  magpie:
+    image: ghcr.io/yetone/magpie:0.1.N
+    command: web --addr 0.0.0.0:3430 --no-open
+    environment:
+      - MAGPIE_WEB_SIGN_IN=lazycat
+    binds:
+      # the app's own folder, which the box keeps across updates and the
+      # image's user (uid 65532) can write: a folder the box makes for a
+      # bind, as /lzcapp/var/config, is root's alone
+      - /lzcapp/var:/config
+```
+
+The box's ingress sends a browser that isn't signed in to the box's login
+page, and puts on every request it passes the app who sent it, in place of
+whatever the caller sent: the account (`X-HC-User-ID`), its role
+(`X-HC-User-Role`) and what sent it (`X-HC-Source`, `client` for a
+browser). The page takes an account whose role is `ADMIN`, from a browser,
+each named once, for a request the page itself made or a browser opening
+the page in a tab of its own (its Fetch Metadata: `Sec-Fetch-Site`
+`same-origin` or `none`, or a navigation to the page from another): the
+box's sign-in is the box's cookie, which a browser may send with a request
+another app's page on the box makes. Another account, a request another app
+or the box itself sent, one with no account, one another page made and one
+from a browser that doesn't say where it came from are turned away and told
+why; the link with the key, in the app's log, still signs a browser in.
+`magpie web` won't start with `MAGPIE_WEB_SIGN_IN=lazycat` without
+`LAZYCAT_APP_DOMAIN`, which LazyCat sets in an app's containers, so the
+setting isn't taken somewhere else by mistake; that is all magpie can check
+of where it runs. The setting says the box's ingress is the only way to the
+page's port. The box's sign-in stands in for no gateway key: the gateway's
+client routes ask for theirs as everywhere. magpie sends none of the box's
+`X-HC-*` headers on to a vendor, the ChatGPT backend or an MCP server,
+unless a provider's `PassHeaders` names one.
+
+A `public_path` entry opens its path and what is under it to callers that
+aren't signed in to the box (`/v1` opens `/v1/chat/completions`, not
+`/v1x`). Keep `/` out of it, so a browser that isn't signed in is sent to
+the box's login page. Let nothing but the box's ingress reach the page's
+port (3430): not a TCP ingress (`application.ingress`) or the box's LAN port
+forwarding. There the box passes every header as the caller wrote it, and
+anyone who reaches that port could say they are the box's administrator.
+magpie turns away a peer on a public address whatever it sends, but it
+can't tell a private one from the ingress: LazyCat's docs
+(developer.lazycat.cloud/en/http-request-headers.html) say the ingress sets
+`X-HC-*` after authenticating and clears them when it fails, and name no
+address for it.
+Another app's container reaches the app through the ingress alone, unless
+its manifest puts it in the box's own network (`network_mode: host`, as
+some of the box's own apps are): from there, as from the box itself, the
+page's port can be reached, so such an app is trusted as the box's
+administrators are. The gateway's port (3425) can be published: the
+gateway checks what reaches it as everywhere, and the box's sign-in
+stands in for none of it. magpie takes the app's address from
+`LAZYCAT_APP_DOMAIN`, so `MAGPIE_PUBLIC_URL` isn't needed.
+
 ### Developing
 
 ```sh
@@ -3562,6 +3664,7 @@ magpie tray                     # menu bar icon only (use this in your login ite
 magpie tui                      # the same thing, in the terminal; serves the gateway while open when no other magpie does
 magpie web                      # the app's window in a browser (WSL, a server over SSH); --lan, --addr, --no-open, --gateway, --tls-cert/--tls-key
                                 # (a new key each run; MAGPIE_WEB_KEY keeps one, for a page run as a service)
+                                # (in a LazyCat app, MAGPIE_WEB_SIGN_IN=lazycat lets the box's administrators in without it)
                                 # (behind a reverse proxy, MAGPIE_WEB_URL=https://<the page there> prints the link through it)
 magpie serve                    # the gateway alone, no window; --web[=host:port] serves the page too, from the same process
                                 # --tls-cert <file> --tls-key <file>: https:// for other computers (see HTTPS under sharing)

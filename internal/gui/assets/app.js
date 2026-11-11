@@ -360,7 +360,7 @@ function toneCheck(img) {
     swap();
   }, { once: true });
 }
-const pngIcons = new Set(["crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "mothx", "zoo-code", "kimi-code-desktop", "openbot", "avibe", "kun"]);
+const pngIcons = new Set(["crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "openbot", "avibe", "kun"]);
 
 // lazy: a picture in a long list (Plugins' rows) is asked for near the
 // screen: each SVG an <img> draws is a ~0.6 MB webview document, kept (#909)
@@ -6789,6 +6789,7 @@ function segs(items, current, onPick) {
   for (const [id, name] of items) {
     const b = el("button", "opt" + (id === current ? " on" : ""), name);
     b.type = "button";
+    b.dataset.seg = id;
     b.setAttribute("aria-pressed", String(id === current));
     b.onclick = () => {
       for (const x of box.querySelectorAll(".opt")) {
@@ -11535,8 +11536,6 @@ function renderModels(p) {
     if (!ids.length) { names.append(el("span", "hint", t("Pick a model first."))); return; }
     const prefs = draft.modelPrefs = draft.modelPrefs || {};
     draft.onModelPrefs = drawNames;
-    // how the agents' lists will call them (#868), and that the setting is
-    // every provider's, on Settings (joe on Discord)
     const sfx = el("div", "msuffix suffix-said");
     const sfxSaid = el("span", "hint");
     const first = p.models.find((x) => x.id === ids[0]) || { id: ids[0], name: ids[0] };
@@ -11561,12 +11560,10 @@ function renderModels(p) {
     sfx.append(sfxSaid, el("span", "where", t("“Provider in model names” is one setting for every provider")), where);
     sfx.append(noNamesLine("span", "said"));
     names.append(sfx);
-    // the APIs a model can be asked on (modelAPIs)
     const apis = modelAPIs(p);
     for (const id of ids) {
       const m = p.models.find((x) => x.id === id) || { id, name: id };
       const own = m.default || m.name || m.id;
-      // what is staged for it, and what it is saved as
       const pref = () => prefs[id] = prefs[id] || {};
       const savedName = m.default ? m.name : "";
       const levels = m.efforts || [];
@@ -11603,6 +11600,8 @@ function renderModels(p) {
       same.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") same.blur(); else if (e.key === "Escape") { same.value = sameNow(); same.blur(); } };
       sameBox.append(el("span", "", t("Same as")), same);
       row.append(sameBox);
+      // its models.dev picker, in modellimits.js
+      window.modelSamePick ? modelSamePick(sameBox, same) : import("./modellimits.js").then(() => modelSamePick(sameBox, same), () => {});
       // the id it is listed by here, asked for by its own (zeewell on X)
       const savedID = m.vendor ? m.id : "";
       const idNow = () => prefs[id]?.id ?? savedID;
@@ -11638,7 +11637,6 @@ function renderModels(p) {
       const shown = (n) => String(Math.round(n * 1e6) / 1e6);
       const listTier = m.list?.tiers?.[0];
       const priceBox = el("div", "mprice");
-      // a Remote magpie's model is listed at what that magpie counts it at
       priceBox.title = m.remoteList
         ? t("What {id} costs, in US dollars per million tokens, as the Usage page counts it; empty: what the other magpie counts it at, shown greyed. A price set here isn't multiplied by the provider's price rate", { id: m.id })
         : t("What {id} costs, in US dollars per million tokens, as the Usage page counts it; empty: its list price, shown greyed. A price set here isn't multiplied by the provider's price rate", { id: m.id });
@@ -21717,7 +21715,7 @@ function renderReplies(s, keep) {
   // a Claude run's, in its provider's editor (PROV_PREFS)
   $("#claudeRunList").replaceChildren(c, u);
   $("#claudeRunList").classList.toggle("gw", gatewayMode);
-  $("#routeList").replaceChildren(f, a, k, $("#busyLoadRow"));
+  $("#routeList").replaceChildren(f, a, k, $("#busyLoadRow"), $("#contextCapRow"));
 }
 
 // renderDisabledModels: models turned off for every request (#1867), a row per
@@ -23831,6 +23829,8 @@ var NAV_SUBS = {
   plugins: () => $("#view-plugins .lib-tabs"),
   settings: () => $("#setTabs"),
 };
+// each tab's mark, from navicons.js (loaded with the first list)
+var NAV_SUB_IC;
 function navSubItems(v) { return [...(NAV_SUBS[v]?.()?.querySelectorAll(":scope > button") || [])].filter((b) => !b.hidden); }
 var navSubsAt = "";
 function navSubs() {
@@ -23854,6 +23854,7 @@ function navSubs() {
   const above = at?.id === "prefs";
   // another page's list folds away as this one's opens, both at once
   if (box && (!want || box.dataset.view !== view || (above ? box.nextElementSibling : box.previousElementSibling) !== at)) { navSubLeave(box); box = null; }
+  if (want && !NAV_SUB_IC) import("./navicons.js").then(() => { navSubsAt = ""; navSubs(); }, () => {});
   if (want) {
     const fresh = !box;
     if (fresh) {
@@ -23882,21 +23883,18 @@ function navSubs() {
       s.classList.toggle("cur", cur);
       s.setAttribute("aria-selected", String(cur));
       s.tabIndex = cur ? 0 : -1;
-      s.append(el("span", "", name));
+      const ic = NAV_SUB_IC?.[view]?.[b.dataset.seg || b.dataset.set];
+      s.append(ic ? svg(ic, 14, 1.4) : el("i", "nav-s-ic"), el("span", "", name));
       if (b.dataset.sub === "installed" && pluginUpdates) {
         const up = el("em", "up", t(pluginUpdates === 1 ? "1 update" : "{n} updates", { n: pluginUpdates }));
         s.title = t("Newer versions of your plugins are out: update them under Installed");
         s.append(up);
       } else if (n) s.append(el("em", "", n));
-      // the selection goes as the finger comes down, as iOS's does, not once
-      // the page has drawn the tab; let go off the row, it goes back
+      // the selection goes as the finger comes down, as iOS's does
       s.onpointerdown = (e) => { if (e.button === 0) navSubGlide(box, s); };
       s.onpointercancel = () => navSubGlide(box, box.querySelector(".nav-s.cur"));
       s.onpointerleave = (e) => { if (e.buttons & 1) navSubGlide(box, box.querySelector(".nav-s.cur")); };
-      // the page draws its strip again as it likes: the one there now is
-      // clicked at once, so what is typed next goes to the tab picked.
-      // Another tab opens at its top: the page's tabs share its one scroll,
-      // which would otherwise keep the place reached in the tab before.
+      // the strip's tab is clicked at once; another tab opens at its top
       s.onclick = (e) => {
         navSubGlide(box, s);
         for (const o of box.querySelectorAll(".nav-s")) o.classList.toggle("cur", o === s);

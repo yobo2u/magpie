@@ -709,6 +709,7 @@ type dshParsed struct {
 // read and parsed every profile's list again on each ask, a third of what
 // forty asks allocated with real accounts.
 func dshLook(path string) ([]string, []dshItem, error) {
+	dshUsed()
 	d, err := filememo.Read("dsh list", path, func(b []byte) (dshParsed, error) {
 		head, items, err := dshParse(path, string(edit.TrimBOM(b)))
 		return dshParsed{head, items}, err
@@ -779,6 +780,7 @@ func dshNodeShared(it dshItem) (*yaml.Node, error) {
 	// keyed by a hash of the lines, checked against a copy of them, so a
 	// look that finds the entry allocates nothing: joining the lines into a
 	// key each time was most of what the drift poll's dsh check still made
+	dshUsed()
 	key := dshLinesHash(it.lines)
 	dshNodes.Lock()
 	n, ok := dshNodes.find(key, it.lines)
@@ -2504,8 +2506,20 @@ func (s *dshSaidOnce) first(trouble string) bool {
 // dshModelsFor is how long a round takes magpie's models as built before
 // while provider.StampNow says nothing changed: what the stamp can't see
 // (another app rewriting an account's file, a model retired by its date)
-// reaches dsh's lists within it.
-const dshModelsFor = 5 * time.Minute
+// reaches dsh's lists within it, and a new day builds them again for the
+// models retired by date. At 5 minutes each build (~42 MB allocated with a
+// real catalog) was most of what an idle magpie allocated.
+const dshModelsFor = 30 * time.Minute
+
+// dshModelsStale says whether models built at at are to be built again now.
+func dshModelsStale(at, now time.Time) bool {
+	if now.Sub(at) >= dshModelsFor {
+		return true
+	}
+	y1, m1, d1 := at.Date()
+	y2, m2, d2 := now.Date()
+	return y1 != y2 || m1 != m2 || d1 != d2
+}
 
 // dshHomesRounds are a round for each dsh home magpie keeps wired: dsh's
 // own, and DS Bot's, whose app runs its own dsh on a home of its own
@@ -2663,7 +2677,7 @@ func (r *dshRounds) once() string {
 	// the stamp is read before the models are built: a change while they
 	// are moves it past the one kept, and the next round builds them again
 	var models []catalog.Model
-	if stamp := provider.StampNow(); !r.built || stamp != r.stamp || time.Since(r.at) >= dshModelsFor {
+	if stamp := provider.StampNow(); !r.built || stamp != r.stamp || dshModelsStale(r.at, time.Now()) {
 		models = magpieModels(list)
 		r.stamp, r.at, r.built = stamp, time.Now(), true
 		key.models = dshModelsSum(models)

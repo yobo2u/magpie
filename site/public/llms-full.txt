@@ -312,7 +312,7 @@ Users report that this works. Trae keeps custom models in your Trae account, on 
 
 The model id is magpie’s (`magpie models`). Sharing lets other computers on your network in with a gateway key; see [Remote magpie](https://usemagpie.ai/docs/remote#share).
 
-An error from the gateway? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting). Stuck, or have a setup worth sharing? Ask on [Discord](https://discord.gg/vGSnD3ZKQF). Vendors who want to hand their users a ready-made provider: see [Add to magpie](https://usemagpie.ai/docs/import).
+An error from the gateway? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting). Stuck, or have a setup worth sharing? Ask on [Discord](https://discord.gg/vGSnD3ZKQF). Chatting in Cherry Studio? See [Every model in Cherry Studio](https://usemagpie.ai/docs/cherry-studio). Vendors who want to hand their users a ready-made provider: see [Add to magpie](https://usemagpie.ai/docs/import).
 
 ---
 
@@ -449,7 +449,7 @@ Yes. Sign in to Claude in magpie and its models are `claude/…` in the same pic
 
 Pick one of Claude Code’s own models in magpie, or run `magpie claude default`. What magpie wrote comes out, and what it replaced comes back.
 
-Using Codex too? See [Use any model in Codex](https://usemagpie.ai/docs/codex-models). Stuck? Ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+Using Codex too? See [Use any model in Codex](https://usemagpie.ai/docs/codex-models). On Claude Desktop? See [Claude Desktop on any model](https://usemagpie.ai/docs/claude-desktop). Stuck? Ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 
@@ -1153,7 +1153,7 @@ OpenCode’s config in ~/.config/opencode (or $OPENCODE_CONFIG_DIR): the first o
 
 Pick one of OpenCode’s own models on its row in magpie, or run `magpie opencode default`. It puts back the model and `small_model` you had and removes magpie’s provider.
 
-Other agents: [Models in Claude Code](https://usemagpie.ai/docs/claude-code-models), [Models in Codex](https://usemagpie.ai/docs/codex-models), [Models in Gemini CLI](https://usemagpie.ai/docs/gemini-cli-models). Stuck? Ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+Other agents: [Models in Claude Code](https://usemagpie.ai/docs/claude-code-models), [Models in Codex](https://usemagpie.ai/docs/codex-models), [Models in Gemini CLI](https://usemagpie.ai/docs/gemini-cli-models), [OpenClaw on any model](https://usemagpie.ai/docs/openclaw). Stuck? Ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 
@@ -3180,6 +3180,334 @@ A value the task needs as it is, such as a team address or a test key, goes in N
 - **Rules find shapes..** A phone number in another country’s format or a name in free text needs Find with a local model, or your own Masked words and Masking rules. Try your own text in Try it first.
 
 See also [Privacy](https://usemagpie.ai/docs/privacy) for everything magpie sends by itself. The code is [internal/redact](https://github.com/yetone/magpie/tree/main/internal/redact) and [internal/masking](https://github.com/yetone/magpie/blob/main/internal/masking/masking.go).
+
+---
+
+Source: https://usemagpie.ai/docs/claude-desktop
+
+# Claude Desktop on any model
+
+Claude Desktop has a third-party gateway mode: no Anthropic sign-in, and its Code and Cowork tabs work on any plan. magpie sets Desktop up in that mode with magpie’s gateway, so Desktop runs on any model you have in magpie: DeepSeek, Kimi, GLM, Qwen, an OpenAI key, or a ChatGPT or Copilot subscription.
+
+In its gateway mode Claude Desktop sends every request to one address instead of Anthropic. magpie writes that mode and a profile named magpie, pointing at its gateway, `http://127.0.0.1:3425`, into Desktop’s configuration folders. The gateway speaks Anthropic’s Messages API and translates each request for the model you picked, streaming, tool calls and reasoning included. It works on macOS, Windows (the Store package too) and Linux.
+
+## Turn it on
+
+1. **Add providers in magpie.** In the Providers tab, add an API key or sign in to a subscription.
+2. **Choose magpie on Claude Desktop’s row.** In the Agents tab, Claude Desktop’s row offers magpie: Desktop’s third-party gateway, Code and Cowork on magpie’s models, no Anthropic sign-in.
+3. **Quit and reopen Claude Desktop.** Desktop reads this only as it starts.
+
+```
+magpie claude-desktop magpie      # Desktop on magpie's gateway
+magpie claude-desktop default     # back to the Anthropic sign-in
+```
+
+## Pick a model
+
+Desktop lists the gateway’s models when it starts, so its model picker shows the models you have in magpie. A model with a 1M context window is listed once, as its 1M entry. After you add a provider in magpie, quit and reopen Desktop to see its models.
+
+## The Code tab’s tiers
+
+The Code tab runs Claude Code, which asks for models by tier: opus, sonnet, haiku. Left unset, a tier runs on the chat’s model. Pick a model for a tier on Claude Desktop’s row, or from a terminal, and restart Desktop after a change:
+
+```
+magpie claude-desktop sonnet deepseek/deepseek-v4-pro
+magpie claude-desktop haiku deepseek/deepseek-v4-flash
+```
+
+A picked model runs with the prompt of the Claude model of its tier. The row also has a subagent model, which takes effect without a restart.
+
+## Your chats and projects
+
+Desktop keeps its gateway mode in a profile of its own, so chats and projects from your Anthropic sign-in don’t show while it runs on magpie. Nothing is deleted, and switching back brings them back. To go on with them on magpie, use Settings → Import in Desktop, which copies in your Claude.ai chats and projects and leaves the originals as they are.
+
+## A separate Claude Magpie app (Mac)
+
+On a Mac, magpie can run Desktop’s gateway mode in a folder of its own, started by `~/Applications/Claude Magpie.app`. Your own Claude Desktop stays signed in with Anthropic, and both run side by side. It is off by default.
+
+```
+magpie claude-desktop launcher add      # make Claude Magpie.app
+magpie claude-desktop launcher remove
+```
+
+## Switch back
+
+Take Claude Desktop’s row off magpie, or run `magpie claude-desktop default`, then quit and reopen Desktop. magpie puts Desktop’s files back as they were, and your chats from before are there again.
+
+## FAQ
+
+### Do I need a Claude subscription for Cowork and the Code tab?
+
+No. In gateway mode, Desktop’s Code and Cowork tabs work without an Anthropic sign-in, on whatever model magpie serves.
+
+### Can I use my ChatGPT subscription in Claude Desktop?
+
+Yes. Sign in to ChatGPT in magpie, and its GPT models appear in Desktop’s model picker after a restart.
+
+### Why doesn’t Claude Desktop show a new model?
+
+Desktop reads the model list as it starts. Quit and reopen it.
+
+### Why is Claude Desktop in English on magpie?
+
+Desktop’s gateway-mode window has no translation of its own. Switching back brings your language back.
+
+### Are my old chats gone?
+
+No. They stay in Desktop’s own profile and come back when you switch back, or you can import them with Settings → Import.
+
+The same models in the terminal: [Models in Claude Code](https://usemagpie.ai/docs/claude-code-models) and [ChatGPT in Claude Code](https://usemagpie.ai/docs/claude-code-chatgpt). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+
+---
+
+Source: https://usemagpie.ai/docs/openclaw
+
+# OpenClaw on any model
+
+OpenClaw answers you on WhatsApp, Telegram, Discord and more, on whatever model its config names. magpie adds itself to OpenClaw as one provider, so OpenClaw can run on any model you have in magpie: DeepSeek, Kimi, GLM, Qwen, an OpenAI key, or a ChatGPT or Copilot subscription, with no key pasted into OpenClaw.
+
+OpenClaw keeps its settings in `~/.openclaw/openclaw.json`. magpie adds a provider named magpie there: its gateway’s `/v1` address, OpenAI’s chat completions API, a key of OpenClaw’s own, and one entry per model you have in magpie. Then it makes the model you pick OpenClaw’s default. The gateway translates each request for that model’s provider, tool calls and reasoning included.
+
+## Connect OpenClaw
+
+1. **Add providers in magpie.** In the Providers tab, add an API key or sign in to a subscription.
+2. **Pick a model on OpenClaw’s row.** In the Agents tab, choose a model on OpenClaw’s row. OpenClaw takes it up without a restart.
+
+```
+magpie openclaw deepseek/deepseek-v4-pro    # OpenClaw on DeepSeek
+magpie openclaw                             # what OpenClaw runs on now
+```
+
+## Pick a model
+
+In OpenClaw a model is named `provider/model`, so magpie’s models show up as `magpie/deepseek/deepseek-v4-pro`, `magpie/openai/gpt-6.1` and so on. magpie sets the primary model and keeps your fallbacks. If your config has a list of allowed models, magpie adds `magpie/*` to it so its models aren’t refused. A model whose context magpie doesn’t know is given 128K.
+
+## Chats that already have a model
+
+A change to the default model reaches new chats at once. A chat that already has a model keeps it: send `/model default` in that chat to move it onto the new one.
+
+## What magpie writes
+
+Only `models.providers.magpie`, the default model, and the allow list when you have one. Your other providers, channels and keys stay as you wrote them, and so do keys you add to magpie’s provider yourself (headers, timeoutSeconds, a model’s maxTokens). A model set for one agent (`agents.entries.*.model`) stays yours, and a config split with `$include` isn’t changed.
+
+magpie finds the file where OpenClaw does: `$OPENCLAW_CONFIG_PATH`, else `openclaw.json` in `$OPENCLAW_STATE_DIR`, else `~/.openclaw-<profile>` for `$OPENCLAW_PROFILE`, else `~/.openclaw`. A file written in JSON5 that isn’t plain JSON is left alone, and magpie says so.
+
+## Switch back
+
+Take OpenClaw’s row off magpie, or run `magpie openclaw default`. magpie removes its provider and puts back the model OpenClaw ran on before, as long as magpie’s model is still the default; a model you picked since stays.
+
+## FAQ
+
+### Can OpenClaw use my ChatGPT subscription?
+
+Yes. Sign in to ChatGPT in magpie and pick a GPT model on OpenClaw’s row. OpenClaw sends its requests to magpie, which uses the subscription.
+
+### Do I need to restart OpenClaw?
+
+No. OpenClaw’s gateway takes up a change of models and default model by itself. Chats that already have a model keep it until you send /model default there.
+
+### Does magpie touch my channels or other providers?
+
+No. It writes only its own provider, the default model and, if you have one, the allow list.
+
+### I use an OpenClaw profile. Does magpie find it?
+
+Yes. It reads OPENCLAW_PROFILE, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH and OPENCLAW_HOME the way OpenClaw does.
+
+More agents on the same models: [Models in OpenCode](https://usemagpie.ai/docs/opencode-models), [Hermes Agent on any model](https://usemagpie.ai/docs/hermes) and [Models in Claude Code](https://usemagpie.ai/docs/claude-code-models). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+
+---
+
+Source: https://usemagpie.ai/docs/hermes
+
+# Hermes Agent on any model
+
+Hermes Agent, from Nous Research, runs on the model its config.yaml names. magpie adds itself to Hermes as one provider, so Hermes and each of its bots can run on any model you have in magpie: DeepSeek, Kimi, GLM, Qwen, an OpenAI key, or a ChatGPT or Copilot subscription, with no key pasted into Hermes.
+
+Hermes keeps its settings in `~/.hermes/config.yaml` (`%LOCALAPPDATA%\hermes` on Windows, or `$HERMES_HOME`). magpie adds a provider named magpie to its `providers`: the gateway, spoken to as chat completions, with your models in magpie as its models. Then it points `model.provider` at it and sets `model.default` to the model you pick. The provider and model you had are kept aside and put back when you switch back.
+
+## Connect Hermes
+
+1. **Add providers in magpie.** In the Providers tab, add an API key or sign in to a subscription.
+2. **Pick a model on Hermes Agent’s row.** In the Agents tab, choose a model on Hermes Agent’s row.
+3. **Restart open Hermes sessions.** Hermes reads its settings as it starts.
+
+```
+magpie hermes deepseek/deepseek-v4-pro    # Hermes on DeepSeek
+magpie hermes                             # what Hermes runs on now
+```
+
+## Model and reasoning effort
+
+In Hermes’s own model picker, magpie’s models are named `magpie/<provider>/<model>`. The row also sets the reasoning effort, the same setting as Hermes’s `/reasoning`: none, minimal, low, medium, high or xhigh. Left unset, Hermes asks for medium.
+
+```
+magpie hermes effort high
+magpie hermes effort default    # back to Hermes's own
+```
+
+## Bots and profiles
+
+Each Hermes bot is a profile with a config.yaml of its own. magpie connects the profile `hermes` starts in: the one `$HERMES_HOME` names, else the one `hermes profile use` made sticky, else the default. It also adds its provider to every other profile, so magpie’s models are in every bot’s picker. A bot’s own model is left as you set it. With more than one profile, each other bot gets a model picker of its own on the Agents page; a bot still on the model magpie last set follows the next one, until you pick one for it.
+
+## Your own models stay
+
+Pick one of your own models in Hermes, or on the Agents page, and Hermes runs on it, but magpie’s provider stays: Hermes is still connected, and its picker still offers magpie’s models beside yours. Only switching back takes the provider out.
+
+Hermes inside WSL on Windows is found too: magpie writes the distro’s `~/.hermes`, with the gateway at the address the distro reaches it.
+
+## Switch back
+
+Take Hermes Agent’s row off magpie, or run `magpie hermes default`. magpie removes its provider from every profile, puts back the provider and model you had, and leaves each bot on a model it can start with. Connecting again puts the bots back on the models they had.
+
+## FAQ
+
+### Can Hermes Agent use my ChatGPT subscription?
+
+Yes. Sign in to ChatGPT in magpie and pick a GPT model on Hermes Agent’s row. Hermes sends its requests to magpie, which uses the subscription.
+
+### I picked a model in magpie but my bot still uses the old one.
+
+Restart the bot’s Hermes session: Hermes reads config.yaml as it starts. A bot you gave a model of its own on the Agents page doesn’t follow the main one.
+
+### Why does Hermes still say connected after I picked my own model?
+
+magpie’s provider stays so its models remain in Hermes’s picker. Switch back to take it out.
+
+### Does magpie touch my other Hermes providers?
+
+No. It adds its own provider and changes only model.provider, model.default and, when you set it, the reasoning effort.
+
+More agents on the same models: [OpenClaw on any model](https://usemagpie.ai/docs/openclaw), [Models in OpenCode](https://usemagpie.ai/docs/opencode-models) and [Cline on any model](https://usemagpie.ai/docs/cline). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+
+---
+
+Source: https://usemagpie.ai/docs/cline
+
+# Cline on any model
+
+Cline runs on the provider and model in its settings. magpie sets Cline’s built-in OpenAI-compatible provider to magpie’s gateway, so Cline’s CLI, VS Code extension and desktop app can run on any model you have in magpie: DeepSeek, Kimi, GLM, Qwen, an OpenAI key, or a ChatGPT or Copilot subscription, with no key pasted into Cline.
+
+Cline keeps its providers in `~/.cline/data/settings/providers.json` (or under `$CLINE_DIR`). magpie sets Cline’s own openai-compatible provider to the gateway’s address with a key of Cline’s own, makes it the provider in use, and lists magpie’s models for it in `models.json`, in place of the one model that provider lists by itself. What was there, and the provider you used, are kept aside and put back when you switch back. The gateway translates each request for the model’s provider, tool calls and reasoning included.
+
+## Connect Cline
+
+1. **Add providers in magpie.** In the Providers tab, add an API key or sign in to a subscription.
+2. **Pick a model on Cline’s row.** In the Agents tab, choose a model on Cline’s row.
+3. **Start a new Cline session.** Cline reads its provider as a session starts: open sessions keep the model they have, new ones use this.
+
+```
+magpie cline deepseek/deepseek-v4-pro    # Cline on DeepSeek
+magpie cline                             # what Cline runs on now
+```
+
+## Model and reasoning effort
+
+The row also sets the reasoning effort Cline asks for: none, low, medium, high or xhigh. None turns thinking off, as Cline’s own picker does.
+
+```
+magpie cline effort high
+magpie cline effort default    # back to Cline's own
+```
+
+## The VS Code extension
+
+Cline’s VS Code extension uses the same folder but reads the provider, model, address and key from its own state first: the Act and Plan modes’ provider and model, and the OpenAI-compatible key. magpie sets those too, keeping what they were. The extension reads them once, as it starts, so after a change run Developer: Reload Window in VS Code.
+
+## The desktop app
+
+Cline’s desktop app keeps the model and effort you pick in its own composer and doesn’t read them from these files. magpie’s models are in its picker, under magpie: pick one there. magpie’s row sets the CLI and the VS Code extension.
+
+## Switch back
+
+Take Cline’s row off magpie, or run `magpie cline default`. magpie puts back the provider you used, the model list, and the extension’s settings as they were.
+
+## FAQ
+
+### Can Cline use my ChatGPT subscription?
+
+Yes. Sign in to ChatGPT in magpie and pick a GPT model on Cline’s row. Cline sends its requests to magpie, which uses the subscription.
+
+### I changed the model but Cline still uses the old one.
+
+A session keeps the model it started with. Start a new one; for the VS Code extension, reload the window.
+
+### Why doesn’t magpie add its own provider to Cline?
+
+Cline refuses a provider it doesn’t know when a session starts, so magpie uses Cline’s built-in OpenAI-compatible provider instead.
+
+### Does this work in Cline’s desktop app?
+
+Its picker lists magpie’s models under magpie; pick the model there, since the app doesn’t read it from Cline’s files.
+
+More agents on the same models: [Models in OpenCode](https://usemagpie.ai/docs/opencode-models), [Models in Claude Code](https://usemagpie.ai/docs/claude-code-models) and [Hermes Agent on any model](https://usemagpie.ai/docs/hermes). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+
+---
+
+Source: https://usemagpie.ai/docs/cherry-studio
+
+# Every model in Cherry Studio, through magpie
+
+Cherry Studio is a desktop chat client that takes any OpenAI-compatible provider. magpie adds itself there as one provider, named magpie, so every model you have in magpie shows up in Cherry Studio: providers with an API key and the Claude, ChatGPT or Copilot subscriptions you signed in to.
+
+magpie runs a gateway on your computer at `http://127.0.0.1:3425`. It speaks the OpenAI Chat Completions API and translates each request for the provider behind the model, Anthropic’s, Google’s or a subscription’s, with streaming, tool calls and reasoning. Cherry Studio sees one OpenAI-compatible provider at `http://127.0.0.1:3425/v1`.
+
+Cherry Studio keeps its providers in its own database, and magpie never writes to it. It adds itself through Cherry Studio’s add-provider link instead, and you confirm it in Cherry Studio. This works in Cherry Studio 1.x and 2.x.
+
+## Add magpie to Cherry Studio
+
+1. **Add providers in magpie.** In the Providers tab, add an API key (DeepSeek, Kimi, GLM, Qwen, OpenRouter…) or sign in to a subscription.
+2. **Open the Agents tab.** magpie lists Cherry Studio once it has run on this computer, including a data folder you moved elsewhere.
+3. **Click Add magpie.** On Cherry Studio’s row, press Add magpie. Cherry Studio opens its model provider settings with magpie filled in: name magpie, type OpenAI, the gateway’s address and a key.
+4. **Confirm it in Cherry Studio.** Nothing is added until you do.
+
+If nothing opens, no app on this computer handles Cherry Studio’s links yet: open Cherry Studio once, or install it again, then click Add magpie again.
+
+## Pick the models
+
+Cherry Studio lists a provider’s models from `/v1/models`, so the magpie provider offers every model magpie has, named `provider/model` (for example `deepseek/deepseek-v4-pro`). Add the ones you want to the magpie provider in Cherry Studio, and choose them in a chat like any other model.
+
+A provider you add in magpie later shows up the next time Cherry Studio fetches the list; there is nothing to change in Cherry Studio. Several accounts behind one model, rest periods after a 429 and failover work as they do for every agent.
+
+## From a terminal
+
+```
+magpie cherrystudio add      # opens Cherry Studio to add magpie, confirm it there
+```
+
+`cherry-studio` works as the name too.
+
+## How magpie knows it was added
+
+Once Cherry Studio has a provider at the gateway’s address, the row shows magpie instead of the button. magpie reads Cherry Studio 2.x’s database for this, read-only. Cherry Studio 1.x keeps providers where magpie doesn’t read them, so there the button stays.
+
+## Usage and keys
+
+On a gateway that isn’t shared, the key in the link is Cherry Studio’s own, so its requests are counted as Cherry Studio’s in magpie’s Usage, apart from your coding agents. When the gateway is shared on your network with gateway keys, the link carries a key that works there.
+
+## FAQ
+
+### Do I need an API key to use Claude or ChatGPT in Cherry Studio?
+
+No. Sign in to a Claude, ChatGPT or Copilot subscription in magpie, and its models appear in the magpie provider in Cherry Studio.
+
+### Does magpie change Cherry Studio’s settings?
+
+No. magpie opens Cherry Studio’s own add-provider dialog, and you confirm it. It only reads Cherry Studio’s database to show whether magpie was added.
+
+### What address and type does the magpie provider use?
+
+Type OpenAI, at http://127.0.0.1:3425/v1, or the gateway address you set in magpie.
+
+### Why don’t I see a new model in Cherry Studio?
+
+Cherry Studio shows models you added to the provider. Fetch the magpie provider’s model list again and add the new one.
+
+### Cherry Studio isn’t in magpie’s Agents tab.
+
+magpie lists it once Cherry Studio has run on this computer. Open Cherry Studio once, then look again.
+
+Using a coding agent too? See [Subscriptions in any agent](https://usemagpie.ai/docs/subscriptions) and [Get started](https://usemagpie.ai/docs/start). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 

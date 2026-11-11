@@ -10,7 +10,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -150,9 +149,6 @@ var cliBehindVal string
 
 // Version is the build's version string, shown in Settings.
 var Version = "dev"
-
-//go:embed assets
-var assets embed.FS
 
 // Windows is what the API needs from the host application.
 type Windows interface {
@@ -1883,6 +1879,20 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			err = provider.SetCompactAt(*in.At)
 		}
 		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// the longest context window any model is told (settings.ContextCap):
+	// At 0 takes the cap away; a model's or provider's own window stays
+	mux.HandleFunc("POST /api/settings/context-cap", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ At int }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetContextCap(in.At); err != nil {
 			fail(rw, err)
 			return
 		}

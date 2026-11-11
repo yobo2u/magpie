@@ -192,6 +192,20 @@ protocol, never by a key's name.**
   looks most like what it lets through.
 - Seen 2× (2026-10-09, 2026-10-28).
 
+**When one access list must sit inside another, prove the containment
+for each pair of entry kinds; never try one entry on the other's text.**
+- bf4d8f3e5 (11-11) let a gateway key's model be a `re:` pattern and
+  judged an issued key's glob by matching the issuer's pattern against
+  the glob's text. `[^-]` and `.` take the `*`, so an issuer held to
+  `re:^openai/[^-]*$` issued `openai/*` and the issued key used
+  openai/gpt-4o; `re:^gr` covered `gr*` and with it group/… ids. Its body
+  said only that each test was red with the match switched off, and no
+  test put an issued glob under an issuer's pattern. Fixed in 08cca7311.
+- List the kinds (exact id, glob, pattern, group, account-derived) and
+  test each child kind under each issuer kind with an id the issuer may
+  not use. When containment can't be shown, refuse it.
+- Seen 1× (2026-11-11).
+
 **A security gap a doc names is an open bug, not a description.**
 - docs/subsystems/gateway-routing.md said "There is no `Host` check, so a
   page whose own name resolves to 127.0.0.1 (DNS rebinding) counts as
@@ -424,6 +438,16 @@ push.**
   "WIP", "TODO", "rewritten" or a template's placeholder.
 - Seen 1× (2026-11-11).
 
+**A new file's name is checked against the tree before it is written.**
+- 8fa91a852 (11-11) wrote its idle test to internal/agent/dsh_idle_test.go,
+  which already held 544b91ca8's streamIdleTimeoutMs tests, and they went
+  with it. 1c3056a2e put them back minutes later. ac2340d lost
+  three tests the same way.
+- Before pushing, `git diff --stat` a "new" test file: it shows
+  insertions only. Deletions in a file you meant to create are someone
+  else's tests.
+- Seen 1× (2026-11-11).
+
 **A test that reads a dependency's source needs the dependency on disk.**
 - 884dbdb2's TestTrayMenuOpenFrameIsWails read Wails' source through
   `go list -m` Dir. CI's fresh module cache hasn't unpacked it, so main was
@@ -549,6 +573,10 @@ cause:
   CI at f191d6423 and was fixed with that patch (50a703190). #2737 got
   three "Not taking it; recording the numbers" comments before a3b48e0f7
   fixed it.
+- 11-11: the same on a third occasion. #5433 had skygunner's patch, with
+  a test red on the old code, for three days with no owner. It went red
+  on ubuntu CI at 296a9292c and was landed unchanged in 855b97a40. A
+  patch on an open red issue is reviewed in the tick it is posted.
   - One test's subtests were filed three times: #2169, #2711 and #2737
     are all TestTranslatedStreamKeepsClientAlive. Search the test's name
     before filing, and file per test.
