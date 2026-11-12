@@ -14604,6 +14604,10 @@ function quotaAllJS() {
   return (quotaAllJS.p ||= import("./quotaall.js").then(() => renderQuotas(), () => {}));
 }
 const quotaAllOf = (...a) => window.quotaAll ? quotaAll(...a) : void quotaAllJS();
+// quotatable.js: the allowances as a table, loaded once chosen. Cards or
+// table is the reader's own pick on this computer, cards until then.
+let quotaView = kept("quotaView", "cards");
+const quotaTableJS = () => (quotaTableJS.p ||= import("./quotatable.js").then(() => renderQuotas(), () => {}));
 // tiersText: a family's windows, one a line, for its tooltip.
 function tiersText(w) {
   return (w.tiers || []).map((x) => t(x.name) + " " + quotaText(x)
@@ -15983,6 +15987,16 @@ function renderQuotas(lazy) {
     }
     slide(pick, "quotaMode");
   }
+  const views = $("#quotaView");
+  views.hidden = !quotas?.length;
+  if (!views.hidden) {
+    views.replaceChildren(...[["cards", "Cards"], ["table", "Table"]].map(([v, name]) => {
+      const b = el("button", "opt" + (v === quotaView ? " on" : ""), t(name));
+      b.onclick = () => { if (v !== quotaView) { quotaView = v; keep("quotaView", v); renderQuotas(); } };
+      return b;
+    }));
+    slide(views, "quotaView");
+  }
   renderQuotaTrend();
   renderQuotaHid();
   if (!quotas) {
@@ -16000,6 +16014,19 @@ function renderQuotas(lazy) {
   // less the ones hidden from it (overviewCards, the Usage page's)
   const shown = overviewCards(quotas);
   subscriptions.hidden = !shown.length;
+  // the table: a row an account, in the cards' order
+  const rows = quotaView === "table" && shown.length && (window.quotaTable ? quotaTable(byUsageOrder(keyCards(shown))) : void quotaTableJS());
+  subscriptions.classList.toggle("tabled", !!rows);
+  if (rows) {
+    usagePack.disconnect();
+    usagePacked = null;
+    subscriptions.classList.remove("packed");
+    subscriptions.style.gridTemplateColumns = "";
+    subscriptions.append(rows);
+    restoreFlash();
+    restoreRefresh();
+    return;
+  }
   // an agent with several accounts is one card, a section per account
   const groups = [];
   keepIcons(...was);
@@ -16773,13 +16800,17 @@ function drawQuotaPlot(g, lines, x0, x1, w, h, now, thin) {
     const s = i % 7, color = `var(--c${s + 1})`;
     const c = l.cycle || quotaCycle(l, now);
     // a window far shorter than the span (a 5-hour one over a week) is
-    // drawn faint, without its even burn, an all but upright dash
+    // drawn without its even burn, an all but upright dash
     const short = !thin && c.reset && c.reset - c.start < (x1 - x0) / 12;
     if (c.reset && c.start < c.reset && !short) {
       const e = sv("line", { x1: X(c.start), y1: 0, x2: X(c.reset), y2: h, class: "qc-even", "data-series": s }, { stroke: color });
       g.append(e);
     }
-    const d = quotaPaths(l.points, x0, x1, w, h);
+    // and only its current cycle: the cycles before it, each a drop of its
+    // own, crawled across the week like a comb of bugs (@xxxxxthhh on X)
+    let pts = l.points;
+    if (short) { const now1 = pts.filter((p) => p.at >= c.start); pts = now1.length ? now1 : pts.slice(-1); }
+    const d = quotaPaths(pts, x0, x1, w, h);
     if (d) g.append(sv("path", { d, class: "qc-line" + (short ? " qc-short" : ""), "data-name": l.name, "data-series": s }, { stroke: color }));
   });
   // a spark ends at now already, and in 16px the dotted now line read as a
