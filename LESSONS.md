@@ -508,6 +508,18 @@ push.**
   can't be spelled by a port, an id, a time or a hash.
 - Seen 2× (2026-10-10, 2026-11-10).
 
+**A script Settings loads runs in every mode the GUI has: the window,
+the panel and gateway mode.**
+- 22f2759d7 (11-11) added navpages.js, which read `$("#nav")` before
+  checking the mode. The panel has no #nav, so each Settings draw there
+  threw, and openAgentPrefs, which waits on that draw, opened no sheet
+  from the panel's menu. agent-prefs was red in both engines and all
+  five languages for two days. #6139 got two "seen again" comments and
+  a duplicate (#6311) before 41e330bdf fixed it.
+- Run the GUI files that open Settings in the panel too (`?mode=panel`),
+  and read the `pageerror` stack before calling a timeout load.
+- Seen 1× (2026-11-13).
+
 **Playwright's WebKit is not WebKitGTK.** A GUI change with motion or a new
 browser API is tried in the real Linux app too.
 - 18e82adc6 (10-11) traded the layouts in a view transition. The GUI suite
@@ -588,6 +600,20 @@ Two habits from them:
   TestProviderListReadsSettingsOnce's 2s bar, now a count of parses
   (a36319d60), and TestCursorEditorCopiedOncePerChange's 100ms linger
   (2efb71ea0).
+
+**A test that breaks a shared file puts its bytes back, and its cleanup
+checks the write.**
+- ea3dee96a (10-16) had TestFetchPrivateEntries write "{not json" to the
+  gateway package's shared settings.json and restore it with
+  `t.Cleanup(func() { settings.Save(was) })`. Save refuses to write over
+  a file it can't parse, and the cleanup dropped the error, so the
+  broken file waited for the next test that saved settings without
+  fresh(t). TestRemoteMagpieAskedToFollow went red on ubuntu CI at
+  836d074f1 (11-12), and the two tests run alone were red every time.
+  aa744b9ed writes back the bytes it read, and reports a failed write.
+- A cleanup that goes through the code under test inherits its guards.
+  Restore with the bytes read before, or give the test its own HOME.
+- Seen 1× (2026-11-13).
 
 **A value put in a request's context lives as long as anything that
 holds the context, a stopped timer included.**
@@ -915,6 +941,10 @@ is read back before the push.**
   pushing.
 - Seen 2× (2026-10-15, 2026-11-12).
 
+**A commit's `--stat` names only the files its change touched** is in
+the code standards since 11-13. See
+[Moved to the code standards](#moved-to-the-code-standards).
+
 **A community PR that changes how a page looks is not merged on review
 alone.**
 - #1354 (Nxir) rearranged the Routing page with no issue asking for it. It
@@ -931,6 +961,10 @@ standards since 10-18, widened to a worktree and its logs. See
 
 ## Moved to the code standards
 
+- **A commit's `--stat` names only the files its change touched; any
+  other file is a stale tree** (11-11, 11-12, 11-13). On 11-13 8c7328f3a
+  (remote quotas) wrote 21 files back to 35aaaa4b9^ and took out three
+  commits; 926b1e7df put them back.
 - **A red's issue is read to its last comment, and a patch on it is
   taken first** (10-12, 10-17, 10-27, 10-28). On 10-28 JoeyWu-tech's
   #3568 patch sat three days until CI went red on it again (11c427eaa).
