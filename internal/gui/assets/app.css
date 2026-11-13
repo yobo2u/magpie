@@ -396,6 +396,9 @@ body:not(.side-nav) #nav button[data-view="groups"], body.side-nav .rt-togroups 
    tabs under it, Settings and the gateway at the foot; the same #nav that
    is the header's tabs otherwise */
 .nav-gl, .nav-ic, .side-l, .crumb { display: none; }
+.nav-pic { width: 16px; height: 16px; }
+.nav-pic > * { display: block; width: 100%; height: 100%; object-fit: contain; }
+.nav-pic > .mask { background: currentColor; -webkit-mask: var(--i) center / contain no-repeat; mask: var(--i) center / contain no-repeat; }
 /* at any width the reader picks it (app.js layoutNav); in a narrow window
    it gives the page more of the room */
 body.side-nav { --side-w: 212px; padding-left: var(--side-w); }
@@ -3498,12 +3501,20 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .sheet .row-head .custom { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
 .sheet .row-head .custom:hover, .sheet .row-head .custom.on { color: var(--accent); background: var(--accent-soft); }
 .sheet .add-tools { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* the search as wide as its hint (app.js wholeHint) */
+#addSheet .add-tools > .find { width: var(--hint-w, 160px); max-width: 100%; }
 /* narrow: the tools on a line of their own */
 @media (max-width: 760px) {
   .sheet .row-head { flex-wrap: wrap; height: auto; row-gap: 8px; }
   .sheet .row-head::after { content: ""; order: 1; flex-basis: 100%; }
   .sheet .add-tools { order: 2; flex: 1 1 100%; }
   .sheet .row-head .find { flex: 1; width: auto; min-width: 0; }
+}
+/* phone-wide: the search keeps room for its short hint (app.js wholeHint),
+   and Import… goes to the next line rather than cut it */
+@media (max-width: 760px) {
+  #addSheet .add-tools:not(.afloat) { flex-wrap: wrap; row-gap: 8px; }
+  #addSheet .add-tools:not(.afloat) > .find { min-width: min(100%, var(--hint-s, 0px)); }
 }
 /* scrolled out of sight beside the sidebar, the tools show in the title
    bar's empty right, where Settings' search is (app.js addToolsFloat) */
@@ -3514,7 +3525,7 @@ body.side-nav #addSheet .add-tools.afloat {
 }
 body.side-nav.mac #addSheet .add-tools.afloat { padding-top: calc(2px / var(--zoom, 1)); }
 body.side-nav #addSheet .add-tools.afloat > * { pointer-events: auto; --wails-draggable: no-drag; flex: none; }
-body.side-nav #addSheet .add-tools.afloat > .find { flex: 0 1 180px; min-width: 120px; }
+body.side-nav #addSheet .add-tools.afloat > .find { flex: 0 1 var(--hint-w, 180px); min-width: 120px; }
 /* a narrow window has no room in its bar: the sheet's head stays at the
    top while the sheet is under it, as Settings' does */
 body:not(.side-nav) #addSheet > .row-head { position: sticky; top: 0; z-index: 5; --bleed-l: 12px; --bleed-r: 12px; }
@@ -5128,6 +5139,10 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .row.agent.conn > .ag-conn { margin-left: 4px; align-self: center; cursor: pointer; }
 .row.agent.conn > .ag-link + .ag-conn { margin-left: 4px; }
 .row.agent.conn > .who + .ag-conn, .row.agent.conn > .who + .ag-add, .row.agent.conn > .who + .ag-cant { margin-left: auto; }
+.row.agent.conn > .who + span[hidden] + .ag-conn { margin-left: auto; }
+.row.agent.conn > .ag-twin { margin-left: 8px; align-self: center; }
+.row.agent.conn > .ag-twin + .ag-conn { margin-left: 10px; }
+.row.agent.conn > .who + .ag-twin { margin-left: auto; }
 .row.agent.conn > .ag-conn:disabled { opacity: .4; cursor: default; }
 /* the model it starts on, beside the switch: one width down the list, so
    the pickers and the switches line up */
@@ -5178,15 +5193,20 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .ag-longest, .ag-isolated, .ag-iso-claude { cursor: pointer; }
 .ag-longest-say, .ag-isolated-say, .ag-iso-claude-say { color: var(--fg-2); }
 /* the Claude Magpie app's own Claude Code folder (#6459), folded under Advanced */
-.ag-iso-more > summary { font-size: 12px; line-height: 18px; color: var(--fg-2); list-style: none; display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; border-radius: 4px; cursor: pointer; transition: color .12s ease; }
-.ag-iso-more > summary::-webkit-details-marker { display: none; }
-.ag-iso-more > summary::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--muted); transition: transform .2s cubic-bezier(.23, 1, .32, 1), background-color .12s ease;
+.ag-iso-more > summary, .prefs-more > summary { font-size: 12px; line-height: 18px; color: var(--fg-2); list-style: none; display: inline-flex; align-items: center; gap: 5px; padding: 3px 0; border-radius: 4px; cursor: pointer; transition: color .12s ease; }
+.ag-iso-more > summary::-webkit-details-marker, .prefs-more > summary::-webkit-details-marker { display: none; }
+.ag-iso-more > summary::before, .prefs-more > summary::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--muted); transition: transform .2s cubic-bezier(.23, 1, .32, 1), background-color .12s ease;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3.6 1.6 7 5 3.6 8.4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
           mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M3.6 1.6 7 5 3.6 8.4' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
-.ag-iso-more[open] > summary::before { transform: rotate(90deg); }
-@media (hover: hover) and (pointer: fine) { .ag-iso-more > summary:hover { color: var(--fg); } }
-.ag-iso-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .ag-iso-more > summary, .ag-iso-more > summary::before { transition: none; } }
+.ag-iso-more[open] > summary::before, .prefs-more[open] > summary::before { transform: rotate(90deg); }
+@media (hover: hover) and (pointer: fine) { .ag-iso-more > summary:hover, .prefs-more > summary:hover { color: var(--fg); } }
+.ag-iso-more > summary:focus-visible, .prefs-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .ag-iso-more > summary, .ag-iso-more > summary::before, .prefs-more > summary, .prefs-more > summary::before { transition: none; } }
+/* a settings page's rarely changed rows, folded under Advanced (the menu
+   bar's currency, onkashiko on X) */
+.prefs-more { margin: 10px 0 0; }
+.prefs-more > summary { margin-left: 2px; }
+.prefs-more > .list { margin-top: 6px; }
 /* which copy is left on the old list: a sentence that wraps as one, under the warning's words */
 .ag-vl.ag-stale-copy { display: block; padding-left: 14px; font-size: 12px; line-height: 1.6; color: var(--fg-2); }
 /* Codex's daemon: restarted from its line, a button that sits in the sentence */

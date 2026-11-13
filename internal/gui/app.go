@@ -315,17 +315,21 @@ func (h *host) zoomWindows() {
 // a folder a portable magpie must not leave behind (#508). Installed, it
 // stays there, so what the pages kept isn't lost. The browser arguments
 // the user set in WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which Wails' loader
-// blanks before WebView2 can read them, are merged into Wails' own (#2753).
+// blanks before WebView2 can read them, are merged into Wails' own (#2753),
+// after magpie's own (sharedFrameProcess).
 // Display changes are read with a callback made once (screens_windows.go).
+// Chromium's occlusion tracking is off (occlusionOff).
 func windowsOptions() application.WindowsOptions {
 	disabled, enabled, other := webView2Args(webview2env.Args)
+	disabled = sharedFrameProcess(disabled, enabled)
+	disabled = occlusionOff(disabled, enabled)
 	return application.WindowsOptions{
 		DisableQuitOnLastWindowClosed: true,
 		WebviewUserDataPath:           appdir.WebView(),
 		DisabledFeatures:              disabled,
 		EnabledFeatures:               enabled,
 		AdditionalBrowserArgs:         other,
-		WndProcInterceptor:            screensWndProc,
+		WndProcInterceptor:            appWndProc,
 	}
 }
 

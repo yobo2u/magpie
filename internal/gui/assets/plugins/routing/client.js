@@ -946,7 +946,7 @@ function routingPage(part) {
         // read it for this request (Weighed.price)
         const p = f.price;
         if (p) {
-          const price = t("{in} in, {out} out a million tokens", { in: fmtCost({ cost: p.input }), out: fmtCost({ cost: p.output }) });
+          const price = t("{in} in, {out} out a million tokens", { in: fmtCost({ cost: p.input }, f.provider), out: fmtCost({ cost: p.output }, f.provider) });
           if (p.peak) return restedTo(t("it costs least now, even at its peak price — {price}.", { price }))
             || t("Cheapest first: {model} costs least on {who} now, even at its peak price — {price}.", { model: f.model, who: w, price });
           return restedTo(t("it costs least now — {price}.", { price }))
@@ -4130,10 +4130,17 @@ function routingPage(part) {
     return said ? ledCredits({ credits: n, credited: said }).textContent : "";
   }
   const creditsNote = () => t("What it cost in its plan's credits, as the reply said");
+  // the one provider a request's cost is of, for Settings' currency "By
+  // provider": none (a sum, in the totals' currency) when its tries went to
+  // more than one
+  function routeProvider(r) {
+    const ids = new Set((r.tries || []).map((tr) => tr.id).filter(Boolean));
+    return ids.size === 1 ? [...ids][0] : !ids.size && !r.group ? r.provider : "";
+  }
   function routeCost(r) {
     const credits = routeCredits([r]);
     if (!r.priced) return credits || "—";
-    return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }) + (r.unpriced ? "+" : "") + (credits ? " · " + credits : "");
+    return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }, routeProvider(r)) + (r.unpriced ? "+" : "") + (credits ? " · " + credits : "");
   }
   // byKey: grouped by the gateway key each came with, one sent with none
   // (from this computer, or kept before routes named their key) a group of
@@ -4344,7 +4351,7 @@ function routingPage(part) {
     // all the row says, and its titles
     const title = reqTitle(r, how, tr);
     const sig = JSON.stringify([lang, said, how, title, r.time, r.agent, name, ag?.icon, r.model, r.provider, tagKind(r), r.effort,
-      tr?.effort, tr?.picked, tr?.fixed, tr?.fast, tr?.entry, tr?.entryWhy, tr?.swapped && tr.done && tryOk(tr) ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tryOk(tr) ? tr.served : 0, tr?.done && tryOk(tr) ? tr.upstream : 0, meta, metrics, cost]);
+      tr?.effort, tr?.picked, tr?.fixed, tr?.fast, r.tier, tr?.tier, tr?.tierServed, tr?.done, tr?.entry, tr?.entryWhy, tr?.swapped && tr.done && tryOk(tr) ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tryOk(tr) ? tr.served : 0, tr?.done && tryOk(tr) ? tr.upstream : 0, meta, metrics, cost]);
     s = { lang, shows, name, icon, cost, said, how, tr, ag, meta, metrics, title, sig };
     rowSaid.set(r, s);
     return s;
@@ -4643,6 +4650,23 @@ function routingPage(part) {
     kids.forEach((k, i) => { if (i < was.length) morphRow(was[i], k); else old.append(k); });
     for (let i = kids.length; i < was.length; i++) was[i].remove();
   }
+  // rowTier: the service tier a request's row says it went at, in the
+  // words its tag takes ("fast", "ultrafast", "flex"), "" for the usual
+  // one. The try's own tier once it has gone out (what was sent, a tier
+  // its provider drops included), the one asked for while it is on its way.
+  const TIER_TAG = { priority: "fast", fast: "fast", ultrafast: "ultrafast", flex: "flex" };
+  function rowTier(r, tr) {
+    const v = tr?.tier || (tr?.done ? "" : r.tier) || "";
+    return TIER_TAG[String(v).toLowerCase()] || "";
+  }
+  function tierNote(r, tr, tier) {
+    const word = tr?.tier || r.tier;
+    const said = tr?.fast ? t("Sent in its vendor's fast mode, as the group says")
+      : tier === "flex" ? t("Sent at its vendor's flex tier (service tier {tier}): slower, at a lower price", { tier: word })
+      : t("Sent in its vendor's fast mode (service tier {tier}): quicker, at a higher price", { tier: word });
+    const served = tr?.tierServed && tr.tierServed !== tr.tier ? t("Its reply said it ran at {tier}.", { tier: tr.tierServed }) : "";
+    return served ? `${said}\n${served}` : said;
+  }
   function reqRow(r, said, how, tr, ag, meta, metrics, title) {
     const b = el("button", "rt-req " + how);
     const when = el("span", "at", rowClock(r.time));
@@ -4680,10 +4704,13 @@ function routingPage(part) {
       ef.title = effortNote(r, tr);
       to.append(ef);
     }
-    if (tr?.fast) {
-      // sent in its vendor's fast mode, as the group's member is
-      const ft = el("span", "ef", t("fast"));
-      ft.title = t("Sent in its vendor's fast mode, as the group says");
+    const tier = rowTier(r, tr);
+    if (tr?.fast || tier) {
+      // sent in its vendor's fast mode, as the group's member is, or at
+      // the service tier the request went out at: Codex's /fast asks
+      // for priority (Anotiaww on X), Claude's for speed "fast"
+      const ft = el("span", "ef tier", tier === "ultrafast" ? t("Ultrafast") : tier === "flex" ? t("flex") : t("fast"));
+      ft.title = tierNote(r, tr, tier);
       to.append(ft);
     }
     if (tr?.entry) {
