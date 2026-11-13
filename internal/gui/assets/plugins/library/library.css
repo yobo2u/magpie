@@ -282,6 +282,8 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 
 /* an agent's instructions, opened */
 .lib-detail { padding: 4px 14px 14px 50px; background: var(--card-2); display: flex; flex-direction: column; gap: 8px; border-top: 0 !important; animation: content-in .2s var(--ease); }
+/* open before the render that drew it again: no second entrance */
+.lib-detail.kept { animation: none; }
 .lib-lab { font-size: 11.5px; color: var(--muted); }
 .lib-detail .lib-aside { margin: 0; }
 .lib-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

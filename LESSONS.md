@@ -1281,6 +1281,33 @@ each one.
     f97415bc0. Its body lists the gui tests and vet it ran, and neither
     guard's package. A new package-level var runs `go test .`; a new
     route runs internal/cli's parity test.
+- **11-13, criteria still missed.**
+  - A budget's pass recorded at a tree it wasn't run at: 5a0e0378c's
+    body says TestCoreScriptBudget passed "rebased on 7583ed65c", but
+    the core had 40 bytes of room there and the commit added 344 to
+    plugins.js. Main was red on it from 06:00 (CI first at e9e63c6d7)
+    until 5a44051eb moved the hook into plugingrid.js. The budget is
+    pure arithmetic over the files: a copy of codeBytes over `git show`
+    gives the number for any sha in a second, so "passes" can be
+    checked at the pushed head without a build.
+  - ee1553913 wrote its "+1,112" budget reason twice in one comment for
+    one raise. A reason that is in the line twice reads as two raises.
+  - A patch on a red's issue taken first: yinwu01 posted 86e12bbd on
+    #5948 (TestGroupFailoverTimesEachTry, a fixed 80ms gap) on 11-10,
+    with every injected red written out. Nobody ported it for three
+    days, and it went red on macos CI at dbb2e5dd2 in a shape the issue
+    hadn't named (Millis == FirstText at :264). It was ported unchanged
+    as ff865b47a, the CI shape reproduced on mica with a 240ms hold.
+  - A size budget raised to fit: 2f34649a6 (Sign in on another
+    computer) was pushed 328 bytes over coreScriptBudget, so it and
+    4b3402035 are red at their own trees. dd9b2bcef then raised the
+    budget by exactly what was over, saying no page was left to move it
+    to, the reason 11-12's four raises gave. That is three raises today
+    (5a44051eb's +168 moved a hook out first; this one moved nothing).
+    The guard is sub-second over `git show` and is run before the push.
+  - A record that points elsewhere: 2f34649a6's body is "Run: see push
+    notes", and 8f82e08b4's "(see below)" has nothing below it; neither
+    says whether what it ran passed. A pointer is not a record (10-14).
 - **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
   diffed staticcheck's U1000 against its base for dead code, b98f906b1
   was red on the old code for an own-account gap, and 8 subscriptions

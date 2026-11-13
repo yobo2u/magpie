@@ -994,6 +994,10 @@ magpie.plugin("library", (ctx) => {
     const top = page.scrollTop;
     const focus = document.activeElement?.dataset?.lib; // keep the caret where the reader is typing
     const caret = focus ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+    // an editor open before is open still, not opened again: drawn anew
+    // it would fade and slide in on every render, which a poll's made a
+    // jitter every 2s (Nietzsche_Li on X)
+    const had = new Set([...page.querySelectorAll(".lib-detail[data-detail]")].map((d) => d.dataset.detail));
     page.replaceChildren();
     fits = [];
     // the MCP servers alone with no agent to write to; the tab the reader
@@ -1025,6 +1029,7 @@ magpie.plugin("library", (ctx) => {
     else renderSkills(body);
     page.append(body);
     for (const n of body.querySelectorAll(".row-head .note")) n.title = n.textContent;
+    for (const d of page.querySelectorAll(".lib-detail[data-detail]")) if (had.has(d.dataset.detail)) d.classList.add("kept");
     for (const f of fits.splice(0)) f();
     page.scrollTop = top;
     syncLists(); // a long list's rows where the view is, before it's painted
@@ -1518,9 +1523,9 @@ magpie.plugin("library", (ctx) => {
     if (!s?.on || !(s.downloading || s.reading || (s.installed && s.read < s.of && !s.failed))) return;
     semPoll = setTimeout(async () => {
       if (tab !== "memory") return;
-      const was = s.installed;
+      const was = s.installed, before = JSON.stringify(sem);
       try { sem = await api("memory/semantic"); } catch {}
-      render();
+      if (JSON.stringify(sem) !== before) redrawRow(".lib-memsem", semRow);
       semWatch();
       if (!was && sem.installed) rankSoon();
     }, 2000);
@@ -1555,13 +1560,22 @@ magpie.plugin("library", (ctx) => {
     if (!dist?.running && !dist?.dreaming) return;
     distPoll = setTimeout(async () => {
       if (tab !== "memory") return;
+      const before = JSON.stringify(dist), memWas = JSON.stringify(mem);
       try {
         dist = await api("memory/distill");
         if (!dist.running && !dist.dreaming) mem = await api("memory");
       } catch {}
-      render();
+      if (JSON.stringify(mem) !== memWas) render();
+      else if (JSON.stringify(dist) !== before) { redrawRow(".lib-memdistill", distillRow); redrawRow(".lib-memdream", dreamRow); }
       distWatch();
     }, 2000);
+  }
+  // a poll's news drawn in its own row of the memory card, so the
+  // memories under it, and the one open to edit, stay as they are
+  function redrawRow(sel, make) {
+    const old = page.querySelector(".lib-memcard > " + sel);
+    if (old) old.replaceWith(make());
+    else render();
   }
   function memRow(m) {
     const isOpen = !memPicking && memOpen === m.id;
@@ -1600,6 +1614,7 @@ magpie.plugin("library", (ctx) => {
   function memDetail(m) {
     const d = memDraft;
     const det = el("div", "lib-detail lib-memdetail");
+    det.dataset.detail = "mem:" + (m ? m.id : "new");
     const ta = el("textarea", "lib-text small");
     ta.dataset.lib = "mem:" + (m ? m.id : "new");
     ta.value = d.text;
@@ -1607,7 +1622,9 @@ magpie.plugin("library", (ctx) => {
     ta.oninput = () => { d.text = ta.value; };
     ta.onkeydown = (e) => { e.stopPropagation(); if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "Enter")) { e.preventDefault(); saveMemory(); } };
     autosize(ta, 52);
-    if (!m) queueMicrotask(() => ta.focus());
+    // a new one's text takes the focus when it opens, not on every render
+    // after (the reader may be in its tags)
+    if (!m) queueMicrotask(() => { if (!det.classList.contains("kept")) ta.focus(); });
     const pick = (label, value, opts, head, set) => {
       const b = menuButton(label(value), "lib-mempick", () => openProtoMenu(b, opts.map((v) => ({ v, name: label(v), literalName: true, note: "" })), value, (v) => { set(v); render(); }, head));
       return b;
@@ -2394,6 +2411,7 @@ magpie.plugin("library", (ctx) => {
     if (!isOpen) return [row];
 
     const det = el("div", "lib-detail");
+    det.dataset.detail = "set:" + x.id;
     const nm = input(setName(x), t("Name"));
     nm.dataset.lib = "setname:" + x.id;
     nm.className = "lib-setname";
@@ -2533,6 +2551,7 @@ magpie.plugin("library", (ctx) => {
     if (!isOpen) return [row];
 
     const det = el("div", "lib-detail");
+    det.dataset.detail = "agent:" + a.agent;
     if (a.override) {
       const w = el("div", "lib-warn");
       w.append(el("span", "", t("{agent} reads {file} instead of this file while it has anything in it.", { agent: a.name, file: tilde(a.override) }) + " "), pathLink(a.override));
@@ -2743,6 +2762,15 @@ magpie.plugin("library", (ctx) => {
         p.dataset.why = k;
         out.push(p);
       }
+    }
+    // skills in an agent's own folder that the library doesn't have are not
+    // listed, so each stays in its prompt
+    const mine = skillAgents().filter((a) => !a.gone && (a.skillRouter === "on" || a.skillRouter === "none")
+      && lib.foundSkills.some((f) => !f.manual && f.agents.includes(a.id))).map((a) => a.name).join(", ");
+    if (mine) {
+      const p = el("p", "lib-aside lib-hub-why", t("{agents} has skills of its own that aren't in the library, so the router doesn't list them: bring them in below.", { agents: mine }));
+      p.dataset.why = "found";
+      out.push(p);
     }
     return out;
   }
@@ -6531,7 +6559,9 @@ magpie.plugin("library", (ctx) => {
     bar.append(el("span", "label", t("Put skills in")), segs([["agents", t("Each agent's own folder")], ["shared", "~/.agents/skills"]], where, (w) => {
       if (w !== where) change("skills/where", { how: w }, w === "shared" ? t("Every skill is in ~/.agents/skills now") : t("Skills go to the agents they're ticked for now"));
     }));
-    bar.append(el("span", "note", where === "shared"
+    bar.append(el("span", "note", where === "shared" && lib.skillRouter
+      ? t("The skill router lists nothing while every skill is in ~/.agents/skills: choose each agent's own folder.")
+      : where === "shared"
       ? t("Every skill on here is linked into ~/.agents/skills too: each agent that reads that folder has every skill, whatever is ticked. The files stay in the library.")
       : t("Each agent gets the skills ticked for it, in its own folder.")));
     return bar;
@@ -6563,6 +6593,7 @@ magpie.plugin("library", (ctx) => {
       ["shared", "{agents} reads ~/.agents/skills, which other agents read too, so it keeps each skill of its own."],
       ["taken", "A skill in the library is called magpie-skills, so {agents} keeps each skill of its own: give that skill another name for the router to be used."],
       ["own", "{agents} has a skill called magpie-skills of its own, which magpie leaves as it is, so it keeps each skill of its own."],
+      ["none", "No skill of the library's is listed for {agents}: tick one for it, or list one kept out of the router."],
     ];
     for (const [k, text] of why) {
       const n = names(k);
@@ -6571,6 +6602,15 @@ magpie.plugin("library", (ctx) => {
         p.dataset.why = k;
         out.push(p);
       }
+    }
+    // skills in an agent's own folder that the library doesn't have are not
+    // listed, so each stays in its prompt
+    const mine = skillAgents().filter((a) => !a.gone && (a.skillRouter === "on" || a.skillRouter === "none")
+      && lib.foundSkills.some((f) => !f.manual && f.agents.includes(a.id))).map((a) => a.name).join(", ");
+    if (mine) {
+      const p = el("p", "lib-aside lib-hub-why", t("{agents} has skills of its own that aren't in the library, so the router doesn't list them: bring them in below.", { agents: mine }));
+      p.dataset.why = "found";
+      out.push(p);
     }
     return out;
   }
@@ -7385,6 +7425,7 @@ magpie.plugin("library", (ctx) => {
     if (readers) ed.append(el("p", "lib-confirm", one
       ? t("{agents} read ~/.agents/skills themselves. They keep it, ticked here, and you can turn it off for any of them, or on this computer only.", { agents: readers })
       : t("{agents} read ~/.agents/skills themselves. They keep them, ticked here, and you can turn each off for any of them, or on this computer only.", { agents: readers })));
+    if (lib.sharedSkills) ed.append(el("p", "lib-confirm", t("Every skill is kept in ~/.agents/skills now, which can't go with choosing agents. That setting goes off: magpie's links there are taken away, your own entries stay.")));
     ed.append(el("p", "lib-confirm lib-muted", one
       ? t("To put it back: {cmd}", { cmd: "magpie library skill hand-back " + s.name })
       : t("To put one back: {cmd}", { cmd: "magpie library skill hand-back <name>" })));
