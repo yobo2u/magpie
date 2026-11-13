@@ -330,7 +330,7 @@ function routingPage(part) {
   }).observe(node);
   byWidth(box, { max560: (w) => w <= 560 });
   byWidth(list, { max460: (w) => w <= 460, max560: (w) => w <= 560 });
-  byWidth(more, { max520: (w) => w <= 520, min1150: (w) => w >= 1150 });
+  byWidth(more, { max520: (w) => w <= 520 });
   for (const col of [colA, colB]) byWidth(col, { max440: (w) => w <= 440, max760: (w) => w <= 760 });
   // A request's numbers on a line of their own, under where it went, where
   // they no longer fit their column on one line (#2288): a list of about
@@ -340,6 +340,10 @@ function routingPage(part) {
   // the frame is drawn: measured under, they can fit their column's share
   // and still wrap beside a wide model, and the row would flip each frame.
   // The rows are shorter on one line, so what scrolls keeps its place.
+  const metaWraps = () => [...reqs.querySelectorAll(".rt-req .meta:not([hidden])")].some((m) => {
+    const k = m.children;
+    return k.length > 1 && k[k.length - 1].getBoundingClientRect().top - k[0].getBoundingClientRect().top > 2;
+  });
   let metaFitting = 0;
   const metaFit = () => { if (!metaFitting) metaFitting = requestAnimationFrame(() => {
     metaFitting = 0;
@@ -349,10 +353,7 @@ function routingPage(part) {
     colA.classList.remove("meta-under");
     inMetaFit = true;
     fitCols(); // the rows' columns for the layout measured, not the one before
-    const wraps = [...reqs.querySelectorAll(".rt-req .meta:not([hidden])")].some((m) => {
-      const k = m.children;
-      return k.length > 1 && k[k.length - 1].getBoundingClientRect().top - k[0].getBoundingClientRect().top > 2;
-    });
+    const wraps = metaWraps();
     colA.classList.toggle("meta-under", wraps);
     fitCols();
     inMetaFit = false;
@@ -365,6 +366,40 @@ function routingPage(part) {
   // Out of sight (0 wide) is no new width: back, nothing is measured (#4652)
   let metaW = -1;
   new ResizeObserver(() => { const w = colA.clientWidth; if (w && w !== metaW) { metaW = w; metaFit(); } }).observe(colA);
+  // The accounts beside the requests (min1150) only where the requests
+  // still keep each on one line there: put beside by the page's width
+  // alone (1150px), a page kept to 1200px left the requests ~850px, and a
+  // wider window showed each request on two lines where a narrower one,
+  // the accounts under the requests, showed it on one (normalcoder_ on X).
+  // Tried beside and measured before the frame is drawn, as metaFit does;
+  // again when the page's width or the rows' shapes change.
+  let sideFitting = 0;
+  const sideFit = () => { if (!sideFitting) sideFitting = requestAnimationFrame(() => {
+    sideFitting = 0;
+    const w = more.clientWidth;
+    if (!w) return; // out of sight: the layout it had (#4652)
+    const was = more.classList.contains("min1150");
+    let side = w >= 1150;
+    if (side && reqs.offsetParent && !hist.classList.contains("solo") && reqs.querySelector(".rt-req")) {
+      const narrow = colA.classList.contains("max760"), under = colA.classList.contains("meta-under"), kept = [];
+      for (let p = reqs; p; p = p.parentElement) if (p.scrollTop) kept.push([p, p.scrollTop]);
+      more.classList.add("min1150");
+      inMetaFit = true;
+      colA.classList.toggle("max760", colA.clientWidth <= 760);
+      colA.classList.remove("meta-under");
+      fitCols();
+      side = !colA.classList.contains("max760") && !metaWraps();
+      colA.classList.toggle("max760", narrow);
+      colA.classList.toggle("meta-under", under);
+      more.classList.toggle("min1150", was);
+      fitCols();
+      inMetaFit = false;
+      for (const [p, top] of kept) if (p.scrollTop !== top) p.scrollTop = top;
+    }
+    if (side !== was) more.classList.toggle("min1150", side);
+  }); };
+  let sideW = -1;
+  new ResizeObserver(() => { const w = more.clientWidth; if (w && w !== sideW) { sideW = w; sideFit(); } }).observe(more);
 
   const path = () => { const p = document.createElementNS(NS, "path"); wires.appendChild(p); return p; };
   const setText = (e, s) => { if (e.textContent !== s) e.textContent = s; };
@@ -611,8 +646,12 @@ function routingPage(part) {
     const out = x ? runsOutText(x) : "";
     return out ? " · " + out : "";
   };
+  // the window the share is of before it, when the account has more than
+  // one (Weighed.UsedWindow): its fullest, which sets it aside under every
+  // routing, In turn's too: "7d 41% used", not a bare 41% read as its
+  // five hours (Wing8Aqua on X)
   const quota = (w, used, left, vars) => w.balance != null ? t(left, { n: balText(w), ...vars }) + lapses(w)
-    : (w.limit > 0 ? quotaCount(w) + " · " : "") + t(quotaLeft ? left : used, { n: pct(share(w)), ...vars });
+    : (w.usedWindow ? shortWindow(w.usedWindow) + " " : "") + (w.limit > 0 ? quotaCount(w) + " · " : "") + t(quotaLeft ? left : used, { n: pct(share(w)), ...vars });
   const fill = (w) => Math.max(0, Math.min(100, share(w))) + "%";
   const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood", sight: "images not taken", proxy: "proxy not reachable", offline: "network down", overloaded: "servers overloaded", effort: "reasoning effort not in its plan", overflow: "too long for its model", room: "reply asked past the window left", slow: "slow to start", prompt: "agent's prompt turned away", restricted: "account restricted by the vendor" };
   // a refusal the vendor called a rate limit, resting as out of quota
@@ -633,7 +672,8 @@ function routingPage(part) {
     "": ["Smart", "Smart: of the accounts with quota to spare, the one whose allowance renews soonest goes first — what it has left would be lost at the reset. The week decides; an account with five hours and no week goes by its five hours, and one whose month its weeks can no longer use up before it renews by its week. One at 90% or more waits until the others can't answer; one resting after a failure goes last."],
     order: ["In order", "In order: the first answers everything until it can't; then the next."],
     drain: ["Until used up", "Until used up: one answers everything until its quota is used up; then the next, which keeps them even after the one before renews."],
-    rotate: ["In turn", "In turn: each conversation's next turn goes to the account after the one that answered its last, and a new conversation starts one further along; the requests within a turn stay put, keeping the prompt cache."],
+    // the unit that goes round is the user's message (Wing8Aqua on X)
+    rotate: ["In turn", "In turn: each message you send goes to the next account, round the list; the agent's tool calls for it stay on the same one. With Stays on Session, a whole conversation stays on one instead."],
     usage: ["Least used", "Least used first: the account with the most of its allowance left goes first; a key by the tokens magpie sent it lately."],
     pace: ["Use before expiry", "Use before expiry: the account with the most left per hour until it is lost goes first — at its reset, or, when credits in it expire sooner, by those that expire first; an account with five hours and no week by what its five hours have left per hour. One at 90% or more waits until the others can't answer; a key by the tokens magpie sent it lately."],
     manual: ["Manual", "Manual: every request goes to the model picked on the group's card, over its own accounts or keys."],
@@ -1055,8 +1095,14 @@ function routingPage(part) {
     : t("{who} is left out: its plan doesn't list {model}.", { who: who(x), model: x.model });
 
   // asides: the others' places, where they say something
+  // Each line about one member says which (out.about): its logo is that
+  // member's, not another's of the same name (tmr11235 on X: a ChatGPT API
+  // account's "not known yet" line wore its Codex twin's logo, so the
+  // Codex row read as known above and unknown below).
   function asides(r) {
     const out = [];
+    out.about = []; // by the line's place: two may say the same words
+    const of = (x, s) => { out.about[out.length] = x; out.push(s); };
     const told = new Set(); // the members told as behind by weight or order
     const aff = affWhy(r, true) ? null : affWhy(r, false);
     if (aff) out.push(aff);
@@ -1088,7 +1134,7 @@ function routingPage(part) {
       // a group by weight, its accounts at 91%, read as passed over)
       if (x.creditsLast && f0 && !f0.creditsLast) {
         // behind everything not on its credits, as the user set it
-        out.push(t("{who} has used up its allowance and goes on on its credits, which it is set to spend only after everything else: it is tried after every other account, key and fallback.", { who: who(x) }));
+        of(x, t("{who} has used up its allowance and goes on on its credits, which it is set to spend only after everything else: it is tried after every other account, key and fallback.", { who: who(x) }));
         continue;
       }
       const by = !x.rest && !x.sunk && f0 ? memberSplit(r, f0, x) : null;
@@ -1101,20 +1147,20 @@ function routingPage(part) {
         }
         continue;
       }
-      if (x.sunk && !x.rest) out.push(t("{who} was rate limited at {time} while it had quota left, so it went to the back: it comes round again once those ahead of it are rate limited in turn.", { who: who(x), time: clock(x.sunk) }));
-      else if (x.rest) out.push(t("{who} is resting — {why}, {when} — so it waits at the back.", { who: who(x), why: `${x.rest.status} · ${failWord(x.rest.why, x.rest)}`, when: restWhen(x.rest, at(r.time)) }));
-      else if (smart(x) && x.known && group(x) === "spent" && x.credits) out.push(t("{who} is at {n} of its allowance but goes on on its credits — ahead of those used up with nothing to go on with, after those with allowance left.", { who: who(x), n: pct(x.used) }));
-      else if (smart(x) && x.known && group(x) === "spent" && weighedWith(r, x).length > 1) out.push(t("{who} is at {n} — all but used up, it answers only when nothing else can.", { who: who(x), n: pct(x.used) }));
-      else if (smart(x) && x.known && group(x) === "low" && weighedWith(r, x).length > 1) out.push(t("{who} is at {n} — kept for when the others can't.", { who: who(x), n: pct(x.used) }));
-      else if (smart(x) && x.learns && someKnown(x)) out.push(t("{who}: what it has left isn't known yet, and its answer tells, so it goes before those known.", { who: who(x) }));
-      else if (smart(x) && !x.known && someKnown(x)) out.push(t("{who}: what it has left isn't known yet, so it goes after those known.", { who: who(x) }));
+      if (x.sunk && !x.rest) of(x, t("{who} was rate limited at {time} while it had quota left, so it went to the back: it comes round again once those ahead of it are rate limited in turn.", { who: who(x), time: clock(x.sunk) }));
+      else if (x.rest) of(x, t("{who} is resting — {why}, {when} — so it waits at the back.", { who: who(x), why: `${x.rest.status} · ${failWord(x.rest.why, x.rest)}`, when: restWhen(x.rest, at(r.time)) }));
+      else if (smart(x) && x.known && group(x) === "spent" && x.credits) of(x, t("{who} is at {n} of its allowance but goes on on its credits — ahead of those used up with nothing to go on with, after those with allowance left.", { who: who(x), n: pct(x.used) }));
+      else if (smart(x) && x.known && group(x) === "spent" && weighedWith(r, x).length > 1) of(x, t("{who} is at {n} — all but used up, it answers only when nothing else can.", { who: who(x), n: pct(x.used) }));
+      else if (smart(x) && x.known && group(x) === "low" && weighedWith(r, x).length > 1) of(x, t("{who} is at {n} — kept for when the others can't.", { who: who(x), n: pct(x.used) }));
+      else if (smart(x) && x.learns && someKnown(x)) of(x, t("{who}: what it has left isn't known yet, and its answer tells, so it goes before those known.", { who: who(x) }));
+      else if (smart(x) && !x.known && someKnown(x)) of(x, t("{who}: what it has left isn't known yet, so it goes after those known.", { who: who(x) }));
     }
     const pooled = r.order.find((x) => !x.aside && x.kind === "key");
     // held back, the provider's accounts at once taken by those before it
     // in the list (01huadalang on Discord, ZCode)
-    for (const x of r.order.filter((x) => x.reserve)) out.push(t("{who} is in reserve: {n} of its provider's accounts or keys take requests at once, the first in the list, so it's tried only once they have all failed.", { who: who(x), n: x.reserve }));
-    for (const x of r.order.filter((x) => x.aside && !x.reserve)) out.push(t("{who} is made for {api}, not {other} as the keys routed over are, so it isn't one of them: it's tried after them.", { who: who(x), api: API[x.speaks] || x.speaks || t("any API"), other: API[pooled?.speaks] || pooled?.speaks || t("any API") }));
-    for (const x of r.left || []) out.push(leftWhy(x));
+    for (const x of r.order.filter((x) => x.reserve)) of(x, t("{who} is in reserve: {n} of its provider's accounts or keys take requests at once, the first in the list, so it's tried only once they have all failed.", { who: who(x), n: x.reserve }));
+    for (const x of r.order.filter((x) => x.aside && !x.reserve)) of(x, t("{who} is made for {api}, not {other} as the keys routed over are, so it isn't one of them: it's tried after them.", { who: who(x), api: API[x.speaks] || x.speaks || t("any API"), other: API[pooled?.speaks] || pooled?.speaks || t("any API") }));
+    for (const x of r.left || []) of(x, leftWhy(x));
     return out;
   }
 
@@ -2537,7 +2583,7 @@ function routingPage(part) {
     let f = folds.get(key);
     if (!f) {
       const li = el("li", "rt-fold"), b = el("b"), st = el("em"), tg = el("span", "tag");
-      const n = el("span", "n"), chev = el("span", "chev"), bar = el("div", "bar"), bi = el("i");
+      const n = el("span", "n"), chev = el("span", "chev"), bar = el("div", "bar quota-track"), bi = el("i");
       chev.append(svg(CHEV, 12, 1.7));
       bar.append(bi);
       li.append(el("i", "dot"), b, st, chev, bar, tg);
@@ -2582,7 +2628,8 @@ function routingPage(part) {
       b.append(f);
     }
     if (w.fallback) b.append(el("small", "fb", t("fallback")));
-    const st = el("em"), bar = el("div", "bar"), bi = el("i"), tg = el("span", "tag");
+    // its bar is Usage's .quota-track, coloured alike (normalcoder_ on X)
+    const st = el("em"), bar = el("div", "bar quota-track"), bi = el("i"), tg = el("span", "tag");
     bar.append(bi);
     // what the row says, cut short beside the model (routing.css), is read
     // whole over it (yi_time on Discord). Measured as the pointer comes,
@@ -3364,8 +3411,12 @@ function routingPage(part) {
     ctxShown = r.id;
     const card = ctxBox.firstElementChild;
     const draw = card?.ctxUpdate && (still || !pinned) ? card.ctxUpdate : (r, o) => ctxBox.replaceChildren(window.ctxCard(r, o));
+    // the session's last answered request before this one, with usage:
+    // its cache stands for a request under way's till that one is read
+    const prev = !r.done && series ? sessionReqs.filter((x) => same(x) && x.done && x.id < r.id && x.usage?.length).sort((a, b) => b.id - a.id)[0] : null;
     draw(r, {
       still, series, tab: ctxTab, place: "routing", foldable: true,
+      session: sk || r.conv || series?.[0]?.id, prev,
       open: ctxFor === r.id, onFold: () => { ctxFor = 0; },
       onTab: (id) => { ctxTab = id; },
       crumbs: [agentName(r.agent), sess && (sess.length > cut ? sess.slice(0, cut - 2) + "…" : sess), "#" + r.id],
@@ -3504,9 +3555,10 @@ function routingPage(part) {
       : "This subagent task is encrypted. Only ChatGPT accounts can read it."), "aside"]);
     items.push([affWhy(r, true) || ruleWhy(r, true) || firstWhy(r), "why"]);
     for (const s of nestedWhy(r)) items.push([s, "why"]);
-    // the member a line is about, where it is one: a skipped one's line, a try's
-    const skipped = new Map((r.left || []).map((x) => [leftWhy(x), x]));
-    for (const a of asides(r)) items.push([a, "aside", undefined, skipped.get(a)]);
+    // the member a line is about, where it is one: a skipped one's line,
+    // an order member's, a try's
+    const as = asides(r);
+    as.forEach((a, i) => items.push([a, "aside", undefined, as.about[i]]));
     r.tries.forEach((tr, i) => {
       items.push([tryWhy(r, i), tr.done ? (tryOk(tr) ? "ok" : "bad") : "wait", undefined, tried(r, tr)]);
       // where its time went, once it is done: the first try's has the
@@ -4415,7 +4467,7 @@ function routingPage(part) {
       reqs.style.setProperty("--rt-cols", px.join(" "));
     }
     redrawList(); // the rows' heights measured in the columns before are dropped (listKey)
-    if (!inMetaFit) metaFit(); // new columns, not metaFit's own: whether the numbers fit asked again
+    if (!inMetaFit) { metaFit(); sideFit(); } // new columns, not metaFit's own: whether the numbers fit asked again
   };
   // told a frame later: the rows taking their columns can move the list's
   // scrollbar and with it the probes, which within the observer's own turn
@@ -4440,12 +4492,20 @@ function routingPage(part) {
     const was = probeShapes.get(r);
     if (was && was.key === key) return was.s;
     const how = outcome(r)[1], meta = r.tries.length > 1 ? t("{n} tries", { n: r.tries.length }) : "";
+    // a request in flight's numbers too (60 B, ≈ tokens, ago): measured
+    // without them, its column was as wide as no numbers, and they were
+    // drawn past the list's edge, cut off (normalcoder_ on X)
     const s = ["t" + digits(rowClock(r.time)), "a" + JSON.stringify([r.model, tagKind(r) ? kindName(tagKind(r)) : ""]),
-      "m" + digits(JSON.stringify([meta, requestMetrics(r, how).map((m) => [m[0], m[2]])]))];
+      "m" + digits(JSON.stringify([meta, requestMetrics(r, how).map((m) => [m[0], m[2]]), liveParts(probeOf(r)).map((p) => p[0])]))];
     probeShapes.set(r, { key, s });
     return s;
   }
   // fillSizer: a probe of each shape the rows have, in the sizer
+  // probeOf: a request in flight measured as quiet for 59 min, the widest
+  // its "ago" says in the hour: measured as it was then ("3 s ago"), the
+  // row's numbers wrapped a line once it said "13 s ago", between two of
+  // the gateway's answers, and stayed two lines at any width
+  const probeOf = (r) => r.done || !r.contentAt ? r : { ...r, contentAt: Date.now() - 3540e3 };
   function fillSizer(rs) {
     const key = document.documentElement.lang + "|" + visibleMetrics.join(), seen = new Set(), want = new Map();
     for (const r of rs) {
@@ -4460,7 +4520,7 @@ function routingPage(part) {
       let p = probes.get(id);
       if (!p) {
         const [said, how, tr] = outcome(r), meta = r.tries.length > 1 ? [t("{n} tries", { n: r.tries.length })] : [];
-        const b = reqRow(r, said, how, tr, agentOf(r.agent), meta, requestMetrics(r, how), "");
+        const b = reqRow(probeOf(r), said, how, tr, agentOf(r.agent), meta, requestMetrics(r, how), "");
         p = el("div", b.className.replace(/^rt-req /, "rt-probe ") + " probe"); // not a row to anything that asks for one
         p.append(...b.childNodes);
         probes.set(id, p);
@@ -4996,7 +5056,7 @@ function routingPage(part) {
         fix.append(again);
       }
       if (w.known && w.balance == null) {
-        const bar = el("div", "bar"), bi = el("i");
+        const bar = el("div", "bar quota-track"), bi = el("i");
         bi.style.width = fill(w);
         bar.append(bi);
         row.append(bar);
@@ -5994,7 +6054,7 @@ function routingPage(part) {
     "": "Smart, over the members' accounts and keys together: of the subscriptions with quota to spare, the one whose allowance renews soonest goes first — the week decides, and an account with five hours and no week (Claude Enterprise) goes by its five hours, so ahead of every week renewing later, and one whose month its weeks can no longer use up before it renews by its week; one resting after a failure goes last.",
     order: "In order: the first model until it can't answer, then the next — each over its own accounts or keys as its provider routes them.",
     drain: "Until used up: one account or key, across the members, takes every request until it is used up; then the next in the list, which keeps them even after an earlier one renews. One rate limited or failing is passed over only while it rests.",
-    rotate: "In turn: each conversation's next turn goes to the next member's account or key, spreading the load.",
+    rotate: "In turn: each message you send goes to the next member's account or key, round the list; the agent's tool calls for it stay on the same one. A move costs some prompt cache; with Stays on Session, a whole conversation stays on one instead.",
     usage: "Least used first: the account or key with the most of its allowance left goes first.",
     pace: "Use before expiry: the account with the most left per hour until it is lost goes first — its week at its reset, or credits in it that expire sooner — so less of each member's allowance is lost; an account with five hours and no week (Claude Enterprise) by what its five hours have left per hour until they renew, so almost always first; a key by the tokens magpie sent it lately.",
     weight: GROUP_WEIGHT,
@@ -7836,8 +7896,12 @@ function routingPage(part) {
 
     const gHint = (v) => GROUP_HINT[v] ? t(GROUP_HINT[v]) : MODES[v] || !v ? t(GROUP_HINT[""]) : modeOf(v)[1];
     const rHint = el("div", "hint", gHint(d.routing));
+    // In turn drawn under its words, as Stays has it (app.js drawRotFig)
+    const rFig = el("div", "rot-wrap");
+    const drawFig = () => drawRotFig(rFig, d.routing === "rotate", d.affinity || "");
+    drawFig();
     const rw = el("div");
-    rw.append(routingSegs(withJS(GROUP_ROUTE_OPTS, d.routing).map(([id, n, js]) => [id, t(n), , js]), d.routing, (v) => { d.routing = v; rHint.textContent = gHint(v); draw(); drawRules(); drawSink(); }), rHint);
+    rw.append(routingSegs(withJS(GROUP_ROUTE_OPTS, d.routing).map(([id, n, js]) => [id, t(n), , js]), d.routing, (v) => { d.routing = v; rHint.textContent = gHint(v); drawFig(); draw(); drawRules(); drawSink(); }), rHint, rFig);
     rw.append(el("div", "hint", t(GROUP_NEST)));
     advIn.append(el("label", "", t("Routing")), rw);
     // one rate limited with quota left: its place, or the back
@@ -7969,7 +8033,7 @@ function routingPage(part) {
     advIn.append(el("label", "", t("Compact at")), cmpIn);
     const aHint = el("div", "hint", t(AFF_HINT[d.affinity] || AFF_HINT[""]));
     const aw = el("div");
-    aw.append(segs(AFF_OPTS.map(([id, n]) => [id, t(n)]), d.affinity, (v) => { d.affinity = v; aHint.textContent = t(AFF_HINT[v] || AFF_HINT[""]); }), aHint);
+    aw.append(segs(AFF_OPTS.map(([id, n]) => [id, t(n)]), d.affinity, (v) => { d.affinity = v; aHint.textContent = t(AFF_HINT[v] || AFF_HINT[""]); drawFig(); }), aHint);
     advIn.append(el("label", "", t("Stays")), aw);
     // which gateway keys may use it, and masking: set by few, so under
     // Advanced with the rest (the owner, 11-12)
