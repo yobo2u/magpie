@@ -731,6 +731,7 @@ function mountUsageFolds() {
   if (toSet) toSet.onclick = (e) => openSettingsAt(e, "usage", "#quotaLeftRow");
   for (const b of $$("#usagePane .row-head .fold[data-fold]")) {
     b.prepend(svg(CHEV_R, 11, 1.6));
+    b.after(el("span", "grow us-sort-gap"), usageSortPick(b.dataset.fold));
     b.onclick = () => {
       const id = b.dataset.fold;
       if (usageFolded.has(id)) usageFolded.delete(id); else usageFolded.add(id);
@@ -748,8 +749,57 @@ function showUsageFolds() {
     const id = b.dataset.fold, folded = usageFolded.has(id);
     b.setAttribute("aria-expanded", String(!folded));
     b.title = t(USAGE_FOLD_TITLES[id][folded ? 0 : 1]);
+    // a folded list has nothing to order
+    const pick = b.parentElement.querySelector(".us-sort");
+    if (pick) pick.hidden = folded;
     for (const box of USAGE_FOLDS[id]) $("#" + box)?.classList.toggle("folded", folded);
   }
+}
+
+// The Overview's lists are a ranking (onducoder on X: 能为 agent、模型、
+// 网关密钥、账号的消耗量增加一个排序): most tokens first, as the server
+// sends them, or by cost, by calls or by name, a pick at the right of each
+// list's heading, kept across a reload (magpie.usageSort, a list's name to
+// its order). Tokens count as the tokens tile counts them, the cache in or
+// out; an unpriced row's cost is unknown and goes last by cost.
+const USAGE_SORTS = [["tokens", "Tokens"], ["cost", "Cost"], ["calls", "Calls"], ["name", "Name"]];
+let usageSort = {};
+try { usageSort = JSON.parse(localStorage.getItem("magpie.usageSort") || "{}") || {}; } catch {}
+const usageSortOf = (id) => USAGE_SORTS.some(([v]) => v === usageSort[id]) ? usageSort[id] : "tokens";
+function usageSorted(groups, id) {
+  const by = usageSortOf(id);
+  // the server sends each list most tokens first (cache left out)
+  if (by === "tokens" && !usageWithCache) return groups;
+  const name =(g) => g.name || g.id || "";
+  const cost = (g) => typeof g.cost === "number" && !(g.unpriced && !g.cost) ? g.cost : -1;
+  const key = { tokens: (g) => usageTokens(g), cost, calls: (g) => g.calls || 0 }[by];
+  return [...groups].sort((a, b) => {
+    if (by === "name") return !a.name - !b.name || name(a).localeCompare(name(b), intlLang(), { numeric: true, sensitivity: "base" });
+    return key(b) - key(a) || usageTokens(b) - usageTokens(a) || (b.calls || 0) - (a.calls || 0);
+  });
+}
+function usageSortPick(id) {
+  const b = el("button", "us-sort");
+  b.type = "button";
+  b.dataset.sort = id;
+  b.setAttribute("aria-haspopup", "menu");
+  const paint = () => {
+    const by = usageSortOf(id);
+    b.replaceChildren(el("span", "", t(USAGE_SORTS.find(([v]) => v === by)[1])), svg(CHEV, 10, 1.6));
+  };
+  paint();
+  b.title = t("Order this list");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(b, USAGE_SORTS.map(([v, name]) => ({ v, name, note: "" })), usageSortOf(id), (v) => {
+      if (v === "tokens") delete usageSort[id]; else usageSort[id] = v;
+      try { localStorage.setItem("magpie.usageSort", JSON.stringify(usageSort)); } catch {}
+      paint();
+      if (usage) renderUsage();
+    }, "Order by", "sess-menu", "right");
+  };
+  return b;
 }
 
 // usageParts: a line of counts, each kept whole in a span of its own and
@@ -1003,8 +1053,9 @@ function renderUsage() {
   // it, and only of it: the totals, the chart and every share above still
   // count its calls. One line under the list says how many, and opens them.
   const hid = new Set(state.settings?.usageAgentsHidden || []);
-  const hidden = u.agents.filter((g) => hid.has(g.id));
-  list("usageAgents", u.agents.filter((g) => !hid.has(g.id)), (r, g) => {
+  const agents = usageSorted(u.agents, "agents");
+  const hidden = agents.filter((g) => hid.has(g.id));
+  list("usageAgents", agents.filter((g) => !hid.has(g.id)), (r, g) => {
     r.classList.add("acts");
     const b = el("button", "icon us-more");
     b.type = "button";
@@ -1052,7 +1103,7 @@ function renderUsage() {
   });
   // a model's usage cleared (CrazyMouse_TT on X: a local model deployed
   // again, its requests, speed and cache wanted from nothing)
-  list("usageModels", u.models, (r, g) => {
+  list("usageModels", usageSorted(u.models, "models"), (r, g) => {
     if (!g.model) return;
     r.classList.add("acts");
     const b = el("button", "icon us-more");
@@ -1070,8 +1121,8 @@ function renderUsage() {
     r.oncontextmenu = (e) => { e.preventDefault(); menu(); };
     r.querySelector(".share").after(b);
   });
-  list("usageAccounts", u.accounts || []);
-  list("usageKeys", u.callerKeys || []);
+  list("usageAccounts", usageSorted(u.accounts || [], "accounts"));
+  list("usageKeys", usageSorted(u.callerKeys || [], "keys"));
   $("#usageNote").textContent = t("Counted from the providers' own usage reports on every call through the gateway · {path}", { path: u.path });
   const clear = $("#usageClear");
   clear.hidden = false;
@@ -2016,6 +2067,11 @@ function ledDetail(r) {
   // DeepSeek's image files kept out of it (#5407); a row from before has
   // none of them, and says nothing
   if (r.up_bytes > 0) add("Sent upstream", fmtBytes(r.up_bytes));
+  // and what it was made of, for a row whose body magpie read
+  if (r.up_bytes > 0 && r.up_parts) {
+    const p = ledUpParts({ up_bytes: r.up_bytes, up_measured: r.up_bytes, up_system: r.up_parts.system, up_tools: r.up_parts.tools, up_images: r.up_parts.images });
+    add("Made of", LED_UP_PARTS.filter(([k]) => p[k] > 0).map(([k, label]) => t(label) + " " + fmtBytes(p[k])).join(" · "));
+  }
   if (r.down_bytes > 0) add("Received", fmtBytes(r.down_bytes));
   // and how many images they were, for a row that kept it (matrix0487)
   if (r.image_files_saved > 0) add("Saved by image files", r.image_files > 0 ? t(r.image_files === 1 ? "{size} ({n} image)" : "{size} ({n} images)", { size: fmtBytes(r.image_files_saved), n: ledNum(r.image_files) }) : fmtBytes(r.image_files_saved));
@@ -2278,11 +2334,114 @@ function drawLedSpeed(l) {
   box.append(head, scroll);
 }
 
+// ---- what the bytes sent upstream were made of (theforeveriris on X:
+// "8.6 GB up from plain-text projects?"). Every request sends the whole
+// conversation again, so a request's bytes are about its context; the
+// card says so, splits the bytes of the requests whose body magpie read
+// into the system prompt, the tools' definitions, images and the
+// conversation, and lists them by agent and by model, each with its bytes
+// a request. Opened from the ↑ on the Requests card, kept open as left.
+let ledUpOpen = false;
+try { ledUpOpen = localStorage.getItem("magpie.ledUp") === "1"; } catch {}
+const LED_UP_PARTS = [
+  ["conv", "Conversation", "c1"],
+  ["tools", "Tool definitions", "c2"],
+  ["system", "System prompt", "c3"],
+  ["images", "Images", "c4"],
+  ["rest", "Not measured", ""],
+];
+function ledUpParts(x) {
+  const sys = x.up_system || 0, tools = x.up_tools || 0, images = x.up_images || 0;
+  const measured = Math.min(x.up_measured || 0, x.up_bytes || 0);
+  return { conv: Math.max(0, measured - sys - tools - images), tools, system: sys, images, rest: Math.max(0, (x.up_bytes || 0) - measured) };
+}
+const ledUpEach = (x) => (x.up_calls > 0 ? (x.up_bytes || 0) / x.up_calls : 0);
+function drawLedUp(l, entering) {
+  const box = $("#ledUp");
+  box.hidden = !ledUpOpen || !(l.up_bytes > 0);
+  box.replaceChildren();
+  if (box.hidden) return;
+  const head = el("div", "led-bar");
+  head.append(el("b", "led-spd-t", t("Sent upstream")), el("span", "grow"));
+  const each = ledUpEach(l);
+  if (each) head.append(el("span", "led-up-each", t("≈ {size} a request", { size: fmtBytes(each) })));
+  const close = el("button", "text led-up-x", "×");
+  close.type = "button";
+  close.setAttribute("aria-label", t("Close"));
+  close.onclick = () => ledUpToggle(false);
+  head.append(close);
+  const note = el("p", "led-up-note", t("Each request sends the whole conversation again, with the system prompt and the tools' definitions, so a request's bytes grow with its context."));
+  const parts = ledUpParts(l);
+  const bar = el("div", "led-up-bar");
+  bar.setAttribute("role", "img");
+  const legend = el("div", "led-up-legend");
+  const said = [];
+  for (const [key, label, c] of LED_UP_PARTS) {
+    const n = parts[key];
+    if (!(n > 0)) continue;
+    const share = n / l.up_bytes;
+    const seg = el("i", "led-up-seg " + key);
+    if (c) seg.style.background = "var(--" + c + ")";
+    seg.style.flexGrow = String(share);
+    seg.title = t(label) + ": " + fmtBytes(n) + " (" + (100 * share).toFixed(1) + "%)";
+    bar.append(seg);
+    const item = el("span", "led-up-key " + key);
+    const dot = el("i", "dot");
+    if (c) dot.style.background = "var(--" + c + ")";
+    item.append(dot, el("span", "", t(label)), el("b", "", fmtBytes(n)), el("span", "pc", (100 * share < 1 ? "<1" : Math.round(100 * share)) + "%"));
+    if (key === "rest") item.title = t("Requests whose body magpie didn't read: a Responses WebSocket's turns, and bodies it couldn't take apart");
+    legend.append(item);
+    said.push(t(label) + " " + fmtBytes(n));
+  }
+  bar.setAttribute("aria-label", said.join(", "));
+  const lists = el("div", "led-up-lists");
+  for (const [dim, title] of [["agent", "Agent"], ["model", "Model"]]) {
+    const rows = (l.by?.[dim] || []).filter((s) => s.up_bytes > 0).sort((a, b) => b.up_bytes - a.up_bytes);
+    if (!rows.length) continue;
+    const table = el("table", "led-spd led-up-by");
+    const hr = el("tr");
+    hr.append(el("th", "nm", t(title)), el("th", "n", t("Bytes sent")), el("th", "n", t("Per request")));
+    const thead = el("thead");
+    thead.append(hr);
+    const body = el("tbody");
+    const top = rows[0].up_bytes;
+    for (const s of rows.slice(0, 8)) {
+      const tr = el("tr");
+      const nm = el("td", "nm");
+      const name = s.name || s.id || "—";
+      nm.append(el("span", "", dim === "agent" ? t(name) : name));
+      nm.title = name;
+      const meter = el("i", "led-up-meter");
+      meter.style.width = (100 * s.up_bytes / top).toFixed(1) + "%";
+      nm.append(meter);
+      tr.append(nm, el("td", "", fmtBytes(s.up_bytes)), el("td", ledUpEach(s) ? "" : "faint", ledUpEach(s) ? fmtBytes(ledUpEach(s)) : "—"));
+      body.append(tr);
+    }
+    table.append(thead, body);
+    lists.append(table);
+  }
+  box.append(head, note, bar, legend, lists);
+  if (entering && box.animate) {
+    const still = calm();
+    box.animate([{ opacity: 0, transform: still ? "none" : "translateY(-4px)" }, { opacity: 1, transform: "none" }], { duration: 200, easing: "cubic-bezier(.23, 1, .32, 1)" });
+  }
+}
+let ledUpLast = null;
+function ledUpToggle(open) {
+  ledUpOpen = open;
+  try { localStorage.setItem("magpie.ledUp", open ? "1" : "0"); } catch {}
+  for (const b of document.querySelectorAll("#ledKpi .led-up-open")) b.setAttribute("aria-expanded", String(open));
+  if (ledUpLast) drawLedUp(ledUpLast, open);
+  if (!open) $("#ledKpi .led-up-open")?.focus({ preventScroll: true });
+}
+
 function renderLedgerDash(l) {
   const dash = $("#ledDash");
   dash.hidden = !l.total && !l.day;
   if (dash.hidden) return;
   drawLedSpeed(l);
+  ledUpLast = l;
+  drawLedUp(l);
   const total = allTokens(l);
   // of the calls whose vendor counted the cache: none when no call's was (#3464)
   const rate = cacheHitOf(l);
@@ -2340,6 +2499,17 @@ function renderLedgerDash(l) {
     const io = line(...usageParts(["↑ " + fmtBytes(l.up_bytes || 0), "↓ " + fmtBytes(l.down_bytes || 0), ...(l.image_files_saved > 0 ? [t("{n} saved by image files", { n: fmtBytes(l.image_files_saved) })] : [])]));
     io.classList.add("parts", "led-io");
     io.title = t("Sent upstream") + ": " + ledNum(l.up_bytes || 0) + " B\n" + t("Received") + ": " + ledNum(l.down_bytes || 0) + " B";
+    // the ↑ opens what those bytes were made of (drawLedUp)
+    if (l.up_bytes > 0) {
+      const up = io.firstElementChild;
+      const b = el("button", "led-jump led-up-open", up.textContent);
+      b.type = "button";
+      b.title = t("What the bytes sent upstream were made of");
+      b.setAttribute("aria-controls", "ledUp");
+      b.setAttribute("aria-expanded", String(ledUpOpen));
+      b.onclick = () => ledUpToggle(!ledUpOpen);
+      up.replaceChildren(b);
+    }
     strip.lastChild.append(io);
   }
   // and how fast it flows now, while requests are in flight (ledFlow)

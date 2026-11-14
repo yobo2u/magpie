@@ -16,7 +16,7 @@ import (
 func init() {
 	movers["antigravity"] = &mover{
 		pkg:    "@magpie-community/opencode-antigravity-auth",
-		min:    "0.1.0", // the built-in's sign-in, project, models, request shaping, errors and usage pools, ported
+		min:    "0.1.12", // every turned-away line goes reworded, not broken up: Google reads past zero-width since 11-14 (0.1.11 omp's "key words", 0.1.0 ported the built-in)
 		agents: []string{"antigravity"},
 		out: func() ([]Moving, error) {
 			var out []Moving

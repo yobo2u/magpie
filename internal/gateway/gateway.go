@@ -1763,11 +1763,20 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 					labels = append(labels, labels[b.Of])
 				}
 			}
+			// for Claude Code's Gateway Model Discovery: an id it keeps
+			// (claude_discovery.go)
+			discovers, who := !magpie && claudeCodeDiscovers(r), access.Caller(r.Context())
 			for i, e := range rows {
 				m := modelObject(e)
 				toolsTold(m, e)
-				if id, ok := ids[i]; ok {
+				id, bare := ids[i]
+				if bare {
 					m["id"] = id
+				}
+				if discovers {
+					if m["id"] = claudeCodeListed(who, e, m["id"].(string), bare); m["id"] == "" {
+						continue
+					}
 				}
 				if magpie {
 					if how := webSearchOf(e, searches); how != "" {
@@ -1807,6 +1816,15 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 				// writes for it names them as its list does (dshKindConfig)
 				if agent == "dsh" {
 					m["name"] = labels[i]
+				}
+				// for Cindy: the same name as its display_name, which its
+				// model discovery (parseModelsListResponse) names a row by
+				// before name, so magpie's GLM-5.3-Flash of three providers
+				// read three times the same in its picker (cdredfox on X);
+				// and for Claude Code's discovery, whose /model names a row
+				// by display_name alone
+				if agent == "cindy" || discovers {
+					m["display_name"] = labels[i]
 				}
 				if agent == "cursor-local" {
 					cursorLocalModel(m, e)
@@ -5619,6 +5637,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if up := upBytesOf(r.Context()); up != nil {
 			rec.UpBytes, rec.PlainBytes, rec.Socket = up.wire, up.plain, up.socket
 			rec.DownBytes, rec.ImageFilesSaved, rec.ImageFiles = up.downOf(), up.saved, up.images
+			rec.UpParts = upParts(prompt, up)
 		}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
 		withBodies(&rec, &call)
