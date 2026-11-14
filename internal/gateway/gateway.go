@@ -888,7 +888,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go filememo.Watch(freshCtx, pluginrt.Path(), settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
 	go pluginrt.KeepFresh(freshCtx, filememo.OthersEvery, settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
 	// and the MCP hub's servers that the Library no longer gives are ended
-	go keepHubPruned(freshCtx)
+	// It reads MCPHub, which a test swaps, so the gateway's end waits for
+	// it: once ListenAndServe has returned, nothing it started still looks.
+	pruned := make(chan struct{})
+	go func() { defer close(pruned); keepHubPruned(freshCtx) }()
+	defer func() { stopFresh(); <-pruned }()
 	srv := &http.Server{Handler: s.closesWhenHandedOff(s.Front()), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 5 * time.Minute, ConnState: s.unread.note}
 	// the magpie serving the gateway, and only it, keeps the saved accounts
 	// signed in, so two never refresh one sign-in at once
@@ -1083,6 +1087,16 @@ func (s *Server) routes() *routeMux {
 	// another magpie looking for it at a new address (remote_prove.go)
 	mux.HandleFunc("POST "+provider.RemoteProvePath, s.prove)
 	mux.HandleFunc("GET "+KeyPagePath, s.keyPage)
+	// DeepSeek's chat page (deepseek-ai/chat-demo), served with any of
+	// magpie's models, its search and link reading magpie's (chatpage.go)
+	mux.HandleFunc("GET "+ChatPagePath, s.chatPage)
+	mux.HandleFunc("GET "+ChatPagePath+"/{path...}", s.chatPage)
+	mux.HandleFunc("GET "+ChatPagePath+"/models", s.chatPageModels)
+	mux.HandleFunc("POST "+ChatPagePath+"/anthropic/v1/messages", s.chatMessages)
+	mux.HandleFunc("POST "+ChatPagePath+"/anthropic/v1/files", s.chatFileUpload)
+	mux.HandleFunc("DELETE "+ChatPagePath+"/anthropic/v1/files/{id}", s.chatFileDelete)
+	mux.HandleFunc("POST "+ChatPagePath+"/v1/tools/asr", s.chatASR)
+	mux.HandleFunc("POST "+ChatPagePath+"/v1/tools/tts", s.chatTTS)
 	mux.HandleFunc("GET "+CAPath, s.caFile)
 	mux.HandleFunc("GET "+keyPageData, s.keyInfo)
 	// the join page, where another computer that knows the join password
@@ -1775,13 +1789,32 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			// moved from another proxy asks for gpt-5.6-sol (love1sbug on X).
 			// Never for another magpie, whose provider would list each twice.
 			// Each row is the entry the bare id reaches, its label that one's.
-			rows, ids := slices.Clip(shown), map[int]string{}
+			//
+			// Or by its bare id alone, in place of the provider/model ids
+			// it stands for, when the user asked for that
+			// (settings.BareModelIDsOnly): a client of a Docker magpie
+			// listed every model twice, and a gateway has no Agents page
+			// to pick its models on (qQianye on X)
+			rows, ids, only := slices.Clip(shown), map[int]string{}, false
 			if !magpie && provider.BareModelIDs() {
-				labels = slices.Clip(labels)
-				for _, b := range provider.BareEntries(shown) {
-					ids[len(rows)] = b.ID
-					rows = append(rows, shown[b.Of])
-					labels = append(labels, labels[b.Of])
+				bares := provider.BareEntries(shown)
+				if only = provider.BareOnly(); only {
+					at, bare := provider.OnlyBare(shown, bares)
+					was := labels
+					rows, labels = make([]provider.Entry, len(at)), make([]string, len(at))
+					for i, j := range at {
+						rows[i], labels[i] = shown[j], was[j]
+						if bare[i] != "" {
+							ids[i] = bare[i]
+						}
+					}
+				} else {
+					labels = slices.Clip(labels)
+					for _, b := range bares {
+						ids[len(rows)] = b.ID
+						rows = append(rows, shown[b.Of])
+						labels = append(labels, labels[b.Of])
+					}
 				}
 			}
 			// for Claude Code's Gateway Model Discovery: an id it keeps
@@ -1795,7 +1828,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 					m["id"] = id
 				}
 				if discovers {
-					if m["id"] = claudeCodeListed(who, e, m["id"].(string), bare); m["id"] == "" {
+					// with bare ids alone, a bare row is the model's only one
+					if m["id"] = claudeCodeListed(who, e, m["id"].(string), bare && !only); m["id"] == "" {
 						continue
 					}
 				}
@@ -6911,7 +6945,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if err != nil {
 		return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 	}
-	if res.StatusCode == http.StatusBadRequest && (proto == provider.Chat || proto == provider.Gemini) && signaturesReach(p, proto, upstream) {
+	if res.StatusCode == http.StatusBadRequest && (proto == provider.Chat || proto == provider.Gemini) && (signaturesReach(p, proto, upstream) || proto == provider.Chat && bodyHasBytes(body, thoughtSignatureField)) {
 		// a signature Google won't take (signatureRefused), one given
 		// before magpie noted whose it was: asked again once without
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
@@ -6920,7 +6954,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		if signatureRefused.Match(b) {
 			bare := geminiBodySignatures(body, p.ID, false)
 			if proto == provider.Chat {
-				bare = chatCallSignatures(body, true, p.ID, false)
+				bare = chatCallSignatures(body, geminiCompat(p.VendorHost(), upstream), p.ID, false)
 			}
 			if !bytes.Equal(bare, body) {
 				body = bare
@@ -7400,7 +7434,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		whole = &chatWhole{names: chatToolNames(body)}
 	}
 	var sigs *sigTidy
-	if proto == provider.Chat && geminiCompat(p.VendorHost(), model) {
+	if proto == provider.Chat && (sse || whole != nil || geminiCompat(p.VendorHost(), model)) {
+		// a call a Chat upstream signed, Gemini's API or a relay serving
+		// Gemini under any host (Mamba_asr on X): its id carries the
+		// signature, which goes back to that upstream (chatCallSignatures).
+		// A reply that is neither a stream nor held whole already
+		// (chatWhole) isn't held for it, past Gemini's own
 		sigs = &sigTidy{sse: sse, by: p.ID}
 	} else if proto == provider.Gemini {
 		// a Gemini client keeps the signatures itself: noted as p's
@@ -8546,7 +8585,7 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				continue
 			}
 		}
-		if res.StatusCode == http.StatusBadRequest && signaturesReach(p, to, model) && signatureRefused.Match(b) {
+		if res.StatusCode == http.StatusBadRequest && (signaturesReach(p, to, model) || to == provider.Chat && signsOwn(req, p.ID)) && signatureRefused.Match(b) {
 			// a signature Google won't take (a client changed it, or
 			// another provider gave it before magpie noted whose it was):
 			// the calls waved through instead, for this request
@@ -9630,6 +9669,11 @@ func buildFor(p provider.Provider, proto provider.Protocol, r *Request, model st
 		// of in words (#6135)
 		c := *r
 		c.videoOff = true
+		r = &c
+	}
+	if proto == provider.Chat && r.signer != p.ID {
+		c := *r
+		c.signer = p.ID
 		r = &c
 	}
 	return build(proto, r, model, buildHost(p), p.RejectsTemperature(model))

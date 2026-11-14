@@ -826,6 +826,12 @@ type Settings struct {
 	// "codex/gpt-5.6-sol"), for clients moved from another proxy that ask
 	// for bare ids (love1sbug on X; provider.BareEntries). Off by default.
 	BareModelIDs bool `json:"bareModelIDs,omitempty"`
+	// BareModelIDsOnly, with BareModelIDs, has the list give a model its
+	// bare id in place of the provider/model ids it stands for, not beside
+	// them (qQianye on X: a client of a Docker magpie listed every model
+	// twice, and a gateway has no Agents page to pick models on). A
+	// provider/model id the bare one doesn't reach stays (provider.BareOnly).
+	BareModelIDsOnly bool `json:"bareModelIDsOnly,omitempty"`
 	// CodexAgentsV1 has the OpenAI models magpie hands Codex — the ChatGPT
 	// account's own, their codex/ ids, the groups one is in, and those a
 	// provider that seals as that backend does serves (catalog.Model.Seals:
@@ -1575,7 +1581,9 @@ var (
 	UpdateEveries = []int{30, 60, 360, 1440}
 	// TextSizes are TextSize's values, in percent. None is under 100: the
 	// webviews' zoom on Windows and Linux (Wails' SetZoom) goes no lower.
-	TextSizes = []int{100, 110, 125, 150}
+	// 115 and 120 are the steps between 110 and 125 (WeltAn_X on X: 110
+	// small, 125 crowded at 4K and 200%).
+	TextSizes = []int{100, 110, 115, 120, 125, 150}
 )
 
 // SearchFirst's values: a provider's search first, saved as "", or the

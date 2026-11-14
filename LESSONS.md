@@ -710,6 +710,13 @@ cause:
   test was being written. Checking `git log` isn't enough while both are
   working; say on an issue, or file one, that you are on it before you
   start.
+  - 11-14: again. TestInfoSaysMCPHub went red on ubuntu's -race CI at
+    3dbbb173e with no issue filed. The review's loop wrote a fix
+    (ListenAndServe waits for keepHubPruned) and spent a 30-minute
+    gateway -race run on it, while another session wrote the same fix
+    and pushed it as 49f49c41c. Neither said it was on it. The review's
+    copy was dropped. File the red (or comment on its issue) before the
+    first edit, and `git fetch` before a long run as well as after.
 - 10-12/10-13: #1794 got four "seen again" comments before anyone took
   it (fixed in 6ae6b3402), and #1543 was seen three times with no owner
   (097479dab). A comment that a red came back is not work on it: take it
@@ -1447,6 +1454,12 @@ each one.
     bodies name. A cancelled run tests nothing; when pushes come faster
     than a run takes, someone lets one run finish, or the workflow keeps
     the run of the newest tag instead of cancelling it.
+    It happened again the same day: after 1ab2c3984 (11:38 UTC) went
+    green, the only two runs to finish were red (TestInfoSaysMCPHub,
+    fixed in 49f49c41c). Every other run was cancelled up to 221c91fae
+    (16:16 UTC), and the 14 tags v0.1.4171 to v0.1.4184 had no green
+    run behind them. 6bdeedc6f (1,836 lines, a new keyless gateway
+    route) ran only its own tests and has no "Not run" line.
   - A library vendored for an allocation cut: 0caa09b3d copied
     yaml.v3 v3.0.1 into third_party (11,400 lines, go.mod replace) for
     a 7-line emitter change. The review diffed it against the gofmt'd
@@ -1464,6 +1477,39 @@ each one.
   - Done right: f1f34d624 met the budget with no raise, moving keysTag
     into keyrates.js, which is loaded exactly when a model can have a
     key tag.
+- **11-14, criteria still missed.**
+  - The suite: a new route meets every guard that lists routes.
+    TestEveryRouteHasACommandOrIsNamed went red for a new GUI route
+    five times in five days (e8fbee60e, 65f1fdd1d, 5d54a990d, the MCP
+    account route, 90efddaba). 6bdeedc6f's /deepseek-chat routes, run
+    with their own tests only, left TestKeySlotEveryRoute and
+    TestLazyCatManifestListsTheClientRoutes red. The first was a real gap:
+    a key capped at one slot could run a chat page turn beside an agent's
+    request (#6688, cd030691a). 0b8c4bfc3's new field left
+    TestEveryWordHasZh red (e9fcc6229). A change that adds a route or a
+    label runs internal/cli, internal/gateway and internal/tui whole.
+  - A red with an issue still needs an owner. #6677 was red on main for
+    about three hours. A session that met it commented "Not taking it"
+    and shipped past it, and the review fixed it in 4c86b0ab4. The four
+    earlier issues for the same test (#5946, #6359, #6516, #6202) stayed
+    open after their fixes. Close an issue in the commit that fixes it
+    (`Fixes #N`).
+  - A `-run` of the new tests is not a run of the package. d50ae6fcb
+    changed three files in internal/usage and ran only its two new
+    tests. 93762f968, the next commit, changed the same package, and
+    its record is from a run at 442964d70, before d50ae6fcb. Their
+    pushed pair first ran together in the review (go test
+    ./internal/usage ./internal/usageapi at 93762f968: ok). Run the
+    changed package whole, at the head being pushed.
+  - A new value in a list that tests loop over meets every one of
+    them. 6256d9956 added "account" to access.Periods and ran
+    internal/access, budget, provider, cli and gui, but not
+    internal/gateway, where TestKeyLimitReservationsStayInTheirWindow
+    runs every period and went red (#6706, 2f5e75515). Before
+    pushing, grep the tests for the list's name (`access.Periods`)
+    and run each package that has one. The review's own first run
+    of it was piped through tail and lost which package failed; the
+    rerun went to a log file.
 - **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
   diffed staticcheck's U1000 against its base for dead code, b98f906b1
   was red on the old code for an own-account gap, and 8 subscriptions
