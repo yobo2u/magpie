@@ -17,7 +17,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,6 +35,7 @@ import (
 	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/bark"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/desktopiso"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/fonts"
@@ -850,7 +850,7 @@ func codexWindowUnder(st settings.Settings, model string) *codexRunWindow {
 	if !ok && strings.HasPrefix(model, provider.GroupPrefix) {
 		e, ok = provider.EntryOf(model)
 	}
-	if !ok || e.Context <= 0 || provider.CompactFor(st, e, provider.GroupFinder()) > 0 || st.Working(e.Context) < e.Context {
+	if !ok || e.Context <= 0 || provider.CompactFor(st, e, provider.GroupFinder()) > 0 || codexcat.Working(st, e.ID, e.Context) < e.Context {
 		return nil
 	}
 	return &codexRunWindow{Model: model, Window: e.Context, Size: tokensSize(e.Context)}
@@ -1055,19 +1055,29 @@ var onDock func(settings.Settings)
 // assetTypes are the page's own files' types. The file server takes them
 // from Windows' registry, which another program may have changed — an SVG
 // served as something else draws no icon.
-var assetTypes = map[string]string{".svg": "image/svg+xml", ".png": "image/png", ".css": "text/css; charset=utf-8",
-	".js": "text/javascript; charset=utf-8", ".html": "text/html; charset=utf-8"}
+var assetTypes = map[string]string{
+	".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+	".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+	".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
+	".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+	".ico": "image/x-icon", ".webm": "video/webm", ".mp4": "video/mp4",
+	".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf",
+	".txt": "text/plain; charset=utf-8", ".map": "application/json", ".wasm": "application/wasm",
+}
 
-// addAssetTypes is called by Handler, not init: the mime package reads
-// and parses the system's whole type table (/etc/apache2/mime.types,
-// ~18,000 allocations) the first time a type is added, and a launch that
-// serves no page (`magpie statusline` on every Claude Code message) never
-// needs it.
-var addAssetTypes = sync.OnceFunc(registerAssetTypes)
+// assetType is the type a file of magpie's own (or a plugin page's) is
+// served as, from assetTypes: "" for one it doesn't name.
+func assetType(name string) string { return assetTypes[strings.ToLower(path.Ext(name))] }
 
-func registerAssetTypes() {
-	for ext, t := range assetTypes {
-		mime.AddExtensionType(ext, t)
+// servedAs sets name's type on rw before http.ServeContent looks at the name.
+// Asked for a type, the mime package reads and parses the system's whole
+// table (/etc/apache2/mime.types, ~18,000 allocations) and keeps it for
+// good: ~2 MB of an idle tray magpie's live heap, from its first page.
+// And the system's table (Windows' registry, which another program may
+// have changed) never decides how the page's own files are read.
+func servedAs(rw http.ResponseWriter, name string) {
+	if t := assetType(name); t != "" && rw.Header().Get("Content-Type") == "" {
+		rw.Header().Set("Content-Type", t)
 	}
 }
 
@@ -1092,6 +1102,7 @@ func revalidated(next http.Handler) http.Handler {
 		if name == "" {
 			name = "index.html"
 		}
+		servedAs(rw, name)
 		sum, page, ok := staticSum(name, r.URL.Path == "/")
 		if !ok {
 			next.ServeHTTP(rw, r)
@@ -1178,7 +1189,6 @@ func versionedPage(page []byte) []byte {
 // gw is the gateway this process serves, or nil when another magpie has it
 // (for now: see startBackend).
 func Handler(w Windows, gw *gateway.Server) http.Handler {
-	addAssetTypes()
 	if gw != nil {
 		served.Store(gw)
 	}
@@ -1199,6 +1209,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	pluginPageRoutes(mux, isWeb(w))
 	feedbackRoutes(mux)
 	appearanceRoutes(mux)
+	// the app's page closed or hidden: what its pages keep goes soon
+	// (awayPage); a write of nothing, so held's Changed passes it by
+	mux.HandleFunc("POST /api/page-away", func(rw http.ResponseWriter, r *http.Request) {
+		awayPage()
+		rw.WriteHeader(http.StatusNoContent)
+	})
 	// boot.js hands the page the saved language and theme before it paints:
 	// they came only with the settings, so the tabs showed English first
 	mux.HandleFunc("GET /boot.js", func(rw http.ResponseWriter, r *http.Request) {
@@ -1828,7 +1844,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			Refused string `json:"refused,omitempty"`
 		}
 		if err := agent.SetTelemetryAll(in.Off); err != nil {
-			if settings.Load().AgentTelemetryOff != in.Off {
+			if settings.Shared().AgentTelemetryOff != in.Off {
 				fail(rw, err)
 				return
 			}
@@ -2119,7 +2135,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		pct := settings.Load().CodexAsyncCompactPercent
+		pct := settings.Shared().CodexAsyncCompactPercent
 		if in.Percent != nil {
 			pct = *in.Percent
 		}
@@ -2715,6 +2731,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
+		// the menu bar leaves out what the Overview hides (trayShown): it
+		// follows a card hidden or shown again at once
+		if (in.CardsHidden != nil || in.WindowsHidden != nil) && onTrayUsage != nil {
+			onTrayUsage()
+		}
 		writeJSON(rw, settingsState())
 	})
 	mux.HandleFunc("POST /api/settings/login", func(rw http.ResponseWriter, r *http.Request) {
@@ -3251,7 +3272,7 @@ func held(h http.Handler) http.Handler {
 			// 5x the CPU.
 			defer tightenGC()()
 		}
-		if !(api && r.Method == http.MethodGet) && r.URL.Path != "/api/update/using" {
+		if !(api && r.Method == http.MethodGet) && r.URL.Path != "/api/update/using" && r.URL.Path != "/api/page-away" {
 			// anything that may have written drops what was held, once it
 			// has answered with it (a page's word of input writes nothing)
 			defer provider.Changed()
@@ -3404,7 +3425,7 @@ type signInOpened struct {
 // it went for signInOpened. linkOnly is this sign-in alone kept to its link
 // (the window's "Sign in on another computer"), whatever the setting.
 func openSignIn(w Windows, st provider.SignInState, linkOnly bool) signInOpened {
-	if linkOnly || settings.Load().SignInLinkOnly {
+	if linkOnly || settings.Shared().SignInLinkOnly {
 		return signInOpened{SignInState: st, LinkOnly: true}
 	}
 	var failed string
@@ -3426,7 +3447,7 @@ type mcpSignInOpened struct {
 // (settings.SignInLinkOnly), as an account's is. It opened the page in the
 // default browser whatever the setting (hkxhkxhkx on X).
 func openMCPSignIn(w Windows, st mcpauth.State) mcpSignInOpened {
-	if settings.Load().SignInLinkOnly {
+	if settings.Shared().SignInLinkOnly {
 		return mcpSignInOpened{State: st, LinkOnly: true}
 	}
 	if u, err := url.Parse(st.URL); st.URL != "" && (err != nil || !mcpauth.WebURL(u)) {

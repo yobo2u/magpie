@@ -85,7 +85,7 @@ const maxDrawings = 4
 // ImageGen while it resolves, else AutoDrawer's. None when it is off or no
 // provider draws.
 func drawer() (string, bool) {
-	switch v := settings.Load().ImageGen; v {
+	switch v := settings.Shared().ImageGen; v {
 	case "off":
 		return "", false
 	case "":
@@ -109,7 +109,7 @@ func Drawer() string {
 // when magpie can't find it any more, so that AutoDrawer's draws in its
 // place, as VisionMissing is Image recognition's. "" when none is named,
 // it is off, or it resolves.
-func DrawerMissing() string { return drawerMissing(settings.Load().ImageGen) }
+func DrawerMissing() string { return drawerMissing(settings.Shared().ImageGen) }
 
 // drawerMissing is v, an Image generation pick, when magpie can't draw
 // with it: pickedMissing's, and a routing group ("group/<id>", 7up6666 on
@@ -1347,7 +1347,7 @@ func restDrawer(c candidate, code int, msg string) {
 		// as the reply's headers told it, not quotaRest's guess
 		d, r.By = min(heard.Resets.Sub(now), longestQuota), "resets"
 	}
-	r.Until = now.Add(d)
+	r.Until = onWall(now.Add(d))
 	restingUntil.Lock()
 	restingUntil.m[r.Key] = r.Until
 	restingUntil.note[r.Key] = r

@@ -9862,7 +9862,7 @@ A relay sells many vendors' models on one key, often at its own prices and under
 
 ## Add a relay
 
-1. **A preset relay..** AiHubMix, PipeLLM, 302.AI, CherryIN and 鱼鱼连线 are presets: give an API key. 鱼鱼连线 also takes an Auto, Global or China Mainland line.
+1. **A preset relay..** AiHubMix, PipeLLM, 302.AI, CherryIN, 鱼鱼连线 and AIGoCode are presets: give an API key. 鱼鱼连线 also takes an Auto, Global or China Mainland line.
 2. **Any other relay..** Give its addresses: `url=` for an OpenAI-compatible base, `anthropic=` for an Anthropic-compatible one, both when it has both, and `responses=` when Responses has an address of its own.
 
 ```
@@ -9922,7 +9922,7 @@ magpie provider auto-include relay 'gpt-*' 're:claude-.*'
 
 ### Can magpie use an API relay?
 
-Yes. AiHubMix, PipeLLM, 302.AI, CherryIN and 鱼鱼连线 are presets that take a key; any other relay is added with magpie provider add and its OpenAI- and Anthropic-compatible addresses.
+Yes. AiHubMix, PipeLLM, 302.AI, CherryIN, 鱼鱼连线 and AIGoCode are presets that take a key; any other relay is added with magpie provider add and its OpenAI- and Anthropic-compatible addresses.
 
 ### Why does caching miss for Claude models through a relay?
 
@@ -11856,7 +11856,7 @@ magpie plugin add ./agent-aider   # or a single *.agent.js file
 
 ### connect
 
-`connect(input)` returns the other keys to write beside the model, by key path, each with its value; it may be `async`. It is given `gateway` (`url`, `v1` — the URL ending in `/v1` — and `key`, the agent’s own key, which counts its requests under its id), `model` (`id`, `name`, `context`, `output`, `images`, `efforts`, and as `/v1/models` names them `native_endpoints`, the gateway paths a request for it goes on untranslated such as `["/v1/chat/completions"]`, and `pricing`, USD a token as decimal strings: `prompt`, `completion`, `input_cache_read`, `input_cache_write`; each left out when not known, never empty or 0), `models` (every model magpie offers the agent, the same way) and `agent` (`id`, `config`). A plugin without `connect` writes only the model. It is called again when magpie’s models change, so a list it writes stays current.
+`connect(input)` returns the other keys to write beside the model, by key path, each with its value; it may be `async`. It is given `gateway` (`url`, `v1` — the URL ending in `/v1` — and `key`, the agent’s own key, which counts its requests under its id), `model` (`id`, `name`, `context`, `output`, `images`, `efforts`, and as `/v1/models` names them `native_endpoints`, the gateway paths a request for it goes on untranslated such as `["/v1/chat/completions"]`, and `pricing`, USD a token as decimal strings: `prompt`, `completion`, `input_cache_read`, `input_cache_write`; each left out when not known, never empty or 0), `models` (every model magpie offers the agent, the same way), `decisionModels` (magpie’s decision models — Jev, Clef, a model a plugin marks `decides` — and the routing groups of them, kept out of `models` and `/v1/models`, each `id`, `name`, `provider` or `group: true`, and `endpoints`, the paths it is asked on: `["/v1/systemone", "/v1/decisions"]`; `[]` for none) and `agent` (`id`, `config`). A plugin without `connect` writes only the model. It is called again when magpie’s models change, so a list it writes stays current.
 
 `own({ config, base, model })`, when exported, gives the agent’s own models for the row’s picker: it gets the config file parsed (`{}` for none), `base` too when the agent has one, and the model the agent is on, and returns a list of `{ value, model, direct }`, `value` what is written as the model, `model` its name at the vendor and `direct` the vendor it goes to (`Google`, `OpenAI`, `Anthropic`). Without it the picker lists the model the agent is on.
 
@@ -12147,7 +12147,7 @@ The app writes a log of what it did, `app.log`, in `~/Library/Logs/magpie` on ma
 
 magpie asks its own site for a few things, whatever the privacy settings say, as any app asks its update server. None of these requests carries the install id or an account.
 
-- `/api/latest`: the update feed, every 6 hours unless `noAutoUpdate` is on, with `?lang=` for the notes in your language, and `?channel=stable` when Settings → About → Update channel is Stable. Neither says who you are. `/api/notes` gives What’s new after an update.
+- `/api/latest`: the update feed, every 6 hours unless `noAutoUpdate` is on, with `?lang=` for the notes in your language, and `?channel=stable` when Settings → About → Update channel is Stable; a fresh install asks `?channel=stable` once too, to stay on Stable when it is Stable’s version. Neither says who you are. `/api/notes` gives What’s new after an update.
 - `/files/<version>/<file>`: the release files an update and the installer download, served from Cloudflare R2. A file the site doesn’t hold is sent on to github.com. Nothing is counted.
 - `/api/partners`: the add sheet’s partner list, every 6 hours. One fetch in ten is counted as a `magpie partners fetch` event, with the country Cloudflare gives, while a partner is listed.
 - `/go/<partner>/site` and `/go/<partner>/keys`: a partner’s website and key-page links, opened in your browser, are counted (the partner, which link, a region, a country) as `magpie partner go` before you are sent on.

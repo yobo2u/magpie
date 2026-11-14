@@ -1403,6 +1403,64 @@ each one.
     move it to", hours after f1f34d624 found room by moving keysTag
     out. The owner hasn't set a growth rate (#2710), so a raise still
     moves something out first.
+    dc85a7ca5 then added +12 for AIGoCode's logo in pngIcons, and
+    27c998aba +491 for costs in each provider's currency, nothing moved
+    out either: three raises by 13:00, +570 bytes.
+    11ddf076b (15:46) made it four, +326 for the Qwen platform sign-in,
+    though it put the field and its wait in qianwenplan.js first.
+    07a62b373 (16:34) a fifth, +72 for Copy all keys, the row itself in
+    keyrates.js. 80a315a70 (17:00) a sixth, +83 for the hidden page's
+    cache release: +1,051 bytes in a day, each raise "no page to move it
+    to".
+  - Chosen packages again: 11ddf076b (Qwen platform sign-in) ran
+    provider, gui and cli, not ./..., and its package-level regexp left
+    TestNoEagerPackageRegexps (root package) red on main from 15:46 to
+    16:55 (05d25d8dc). The same guard went red the same morning from the
+    yaml.v3 copy. A new file that adds a package-level value runs the
+    guards that walk the tree, which only ./... reaches.
+    80a315a70 (17:00, the hidden page's cache release) did it a third
+    time: it ran gui and usage, and its new POST /api/page-away left
+    internal/cli's TestEveryRouteHasACommandOrIsNamed red until
+    69946f43c (17:48). A new route runs internal/cli too.
+  - The updater shipped on chosen packages: 14807bcf2 and 943404477
+    (18:20, Restart to update and Windows downloads) say the full suite
+    wasn't run because mote was at load 126 to 142 and mica's disk was
+    full (114 MB free, 172 GB of stale ~/runs copies; the review cleared
+    them). Saying so is right, but an updater bug is one users can only
+    leave by downloading by hand. When both boxes are busy, a change to
+    the update path waits for a full run, or takes it on the Windows or
+    Linux box; a full disk on a run box is cleared, not worked around.
+  - Pushed before its own suite finished, "at the coordinator's ask":
+    32c830fc1 (TUI language, +1,293 lines) and 106a24b95 (skills update
+    by themselves). Both suites later came back with only the known
+    #6648 red, and 32c830fc1's result went on #6649, a CLI feature
+    issue nobody reading the commit would find. A coordinator's hurry
+    doesn't stand in for the run: wait for it, or push and then put the
+    result where the commit points (its own issue, named in the body).
+    106a24b95 did what the updater lesson above asks: with mote at
+    load 167 it ran the full suite in WSL instead of skipping it.
+  - No Test run finished green from 63c91cae5 (11-13 21:51 UTC) to
+    07a62b373 (11-14 08:34 UTC): 57 runs were cancelled by the next push
+    and two went red (TestEffortUpdateRefused, fixed in a4937f8ff;
+    TestStaleLatestIsNotUpToDate, #6575). 81 commits and 51 releases
+    in that time had no CI run of their own, only the mote runs their
+    bodies name. A cancelled run tests nothing; when pushes come faster
+    than a run takes, someone lets one run finish, or the workflow keeps
+    the run of the newest tag instead of cancelling it.
+  - A library vendored for an allocation cut: 0caa09b3d copied
+    yaml.v3 v3.0.1 into third_party (11,400 lines, go.mod replace) for
+    a 7-line emitter change. The review diffed it against the gofmt'd
+    upstream: only those 7 lines differ. Footprint moved 59 -> 58 MB,
+    within run-to-run spread; the gain is ~24 MB of short-lived
+    allocations on a catalog change. The cost stays: an upstream fix
+    reaches magpie only when someone copies it over by hand
+    (MAGPIE.md says how), and the full suite wasn't run. A vendored
+    fork names its measured gain against that cost, and runs the suite.
+    The suite would have caught it: TestNoEagerPackageRegexps walks the
+    whole tree, and was red on main from 0caa09b3d until fc75d90af
+    patched yaml.v3 a second time. ea6470cb7 had left third_party out of
+    i18n-keys instead. Decide once which guards a vendored tree answers
+    to, and put that in its MAGPIE.md.
   - Done right: f1f34d624 met the budget with no raise, moving keysTag
     into keyrates.js, which is loaded exactly when a model can have a
     key tag.

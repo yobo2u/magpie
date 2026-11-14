@@ -167,7 +167,7 @@ func OnNetwork() bool {
 
 // remoteKeyed: requests from another machine are answered, with an enabled
 // gateway key — while the gateway is shared, or listens on the network.
-func remoteKeyed() bool { return settings.Load().LAN || OnNetwork() }
+func remoteKeyed() bool { return settings.Shared().LAN || OnNetwork() }
 
 // PublicHost is PublicURL's host, "" when it isn't set.
 func PublicHost() string {
@@ -836,6 +836,7 @@ func identifyCaller(w http.ResponseWriter, r *http.Request) (*http.Request, bool
 		// the names the key gives models, before any route reads one
 		r = aliasRequest(r, who)
 	}
+	r = keepCodexListAuth(r, ok)
 	r.Header = r.Header.Clone()
 	r.Header.Set("Authorization", "Bearer "+Token)
 	for _, h := range []string{"x-api-key", "x-goog-api-key"} {

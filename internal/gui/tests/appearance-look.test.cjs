@@ -21,14 +21,17 @@ const { chromium, webkit } = require("playwright");
 const assets = path.resolve(__dirname, "../assets");
 // a 1×1 PNG
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
-// as appearance.go's lookCSS draws it: the light theme's, then the dark
-// one's, --mark the ink of what is chosen and --mark-fill the thumb under it
-const DARK = { "#0d9488": "#5cc9bd", "#db2777": "#f08cbd", "#7c3aed": "#c4a6f8" };
-const FILL = { "#0d9488": ["#e2efee", "#325354"], "#db2777": ["#f9e5ee", "#664155"], "#7c3aed": ["#efe7fd", "#55486e"] };
-const fill = (a, dark) => (FILL[a] || ["#eeeeee", "#444444"])[dark ? 1 : 0];
-const accentCSS = (a) => (a ? `html:not(.omarchy):root{--accent:${a};--accent-soft:#e6f4f2;--accent-fg:#ffffff;--sel:#e1f1ef;--mark:${a};--mark-fill:${fill(a)}}
-@media (prefers-color-scheme: dark){html:not(.omarchy):root:not([data-theme="light"]){--accent:${DARK[a] || a};--accent-soft:#1a2c2e;--accent-fg:#14141a;--sel:#1a3435;--mark:${DARK[a] || a};--mark-fill:${fill(a, 1)}}}
-html:not(.omarchy):root[data-theme="dark"]{--accent:${DARK[a] || a};--accent-soft:#1a2c2e;--accent-fg:#14141a;--sel:#1a3435;--mark:${DARK[a] || a};--mark-fill:${fill(a, 1)}}` : "");
+// appearance.go's lookCSS for the colours picked here, as it draws them
+// (TestLookFixture keeps the file its own): the light theme's block first,
+// then the dark one's, --mark the ink of what is chosen, --mark-fill the
+// thumb under it, and the grounds tinted with the colour
+const LOOK = require("./fixtures/look-accents.json");
+const varOf = (a, name, dark) => {
+  const blocks = LOOK[a].split("\n");
+  const m = blocks[dark ? 2 : 0].match(new RegExp(`${name}:([^;}]+)`));
+  return m && m[1];
+};
+const accentCSS = (a) => (a ? LOOK[a] : "");
 
 function serve(st, log) {
   const settings = () => ({ lang: "en", theme: "light", searchVendors: [], searchAPIs: [], ...st });
@@ -106,7 +109,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     assert.deepEqual(log.filter(([k]) => k === "css"), [], "magpie's own look needs no stylesheet");
 
     await page.locator('#accentPick .swatch[data-accent="#0d9488"]').click();
-    await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() === "#0d9488");
+    await page.waitForFunction((w) => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() === w, varOf("#0d9488", "--accent"));
     assert.equal(log.find(([k]) => k === "settings")[1].accent, "#0d9488");
     await page.waitForFunction(() => document.querySelector("#accentPick .swatch.on")?.dataset.accent === "#0d9488");
 
@@ -165,14 +168,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const card = await page.evaluate(() => { const p = document.createElement("i"); p.style.background = "var(--card)"; document.body.append(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c; });
       assert.deepEqual(await grounds(), thumbs.map(() => card), "magpie's own look: the thumb is the card's grey");
       const rgbOf = (h) => `rgb(${parseInt(h.slice(1, 3), 16)}, ${parseInt(h.slice(3, 5), 16)}, ${parseInt(h.slice(5, 7), 16)})`;
-      for (const [v, light] of [["#0d9488", "#0d9488"], ["#db2777", "#db2777"]]) {
+      for (const v of ["#0d9488", "#db2777"]) {
         await page.locator(`#accentPick .swatch[data-accent="${v}"]`).click();
-        const want = theme === "dark" ? DARK[v] : light;
+        const want = varOf(v, "--mark", theme === "dark");
         await page.waitForFunction((w) => getComputedStyle(document.documentElement).getPropertyValue("--mark").trim() === w, want);
         const r = await settled(page, sel);
         assert.notEqual(r.mark, r.fg);
         same(r, r.mark, `${v}: what is chosen is in the colour picked`);
-        assert.deepEqual(await grounds(), thumbs.map(() => rgbOf(fill(v, theme === "dark"))), `${v}: the chosen thumb is tinted`);
+        assert.deepEqual(await grounds(), thumbs.map(() => rgbOf(varOf(v, "--mark-fill", theme === "dark"))), `${v}: the chosen thumb is tinted`);
       }
       await page.locator('#accentPick .swatch[data-accent=""]').click();
       await page.waitForFunction(() => !document.getElementById("lookCSS")?.textContent);
@@ -196,13 +199,121 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         }
       }
     });
+    // CHENGJIAHEGOXIS on X: 「目前我个人感觉深色比较灰」, and on v0.1.4116,
+    // with the chosen thumbs tinted, 「依然没变」. The theme's own grounds
+    // (the page, the sidebar, Settings' list, the panel) take the colour's
+    // hue once one is picked, and are app.css's grey again on Default.
+    test(`${engine}: ${theme}, a colour picked tints the theme's grounds, in the window and the panel`, async (t) => {
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const rgbOf = (h) => `rgb(${parseInt(h.slice(1, 3), 16)}, ${parseInt(h.slice(3, 5), 16)}, ${parseInt(h.slice(5, 7), 16)})`;
+      const dark = theme === "dark";
+      // the window, as in the report: Settings › General at 1200 with the
+      // sidebar, with and without a picture behind the pages
+      for (const wallpaper of [0, 1700000000000]) {
+        const { page, errors } = await open(browser, { theme, wallpaper }, 1200);
+        await page.waitForFunction(() => document.body.classList.contains("side-nav"));
+        const grounds = () => page.evaluate(() => {
+          const bg = (e) => (e ? getComputedStyle(e).backgroundColor : "missing");
+          return { list: bg(document.querySelector("#setPage-general .list.prefs")), sidebar: bg(document.querySelector(".sidebar")), body: getComputedStyle(document.body).backgroundColor };
+        });
+        const grey = await grounds();
+        await page.locator('#accentPick .swatch[data-accent="#db2777"]').click();
+        await page.waitForFunction((w) => getComputedStyle(document.documentElement).getPropertyValue("--mark").trim() === w, varOf("#db2777", "--mark", dark));
+        const pink = await grounds();
+        const card = varOf("#db2777", dark ? "--card" : "--bg", dark);
+        if (dark) assert.equal(pink.list, rgbOf(card), "Settings' list is on the tinted card");
+        assert.notEqual(pink.list === grey.list && pink.sidebar === grey.sidebar && pink.body === grey.body, true, `wallpaper=${wallpaper}: something tinted`);
+        if (!wallpaper) {
+          assert.equal(pink.body, rgbOf(varOf("#db2777", "--bg", dark)), "the page's ground is tinted");
+          assert.equal(pink.sidebar, rgbOf(varOf("#db2777", "--bg", dark)), "the sidebar's ground is tinted");
+        }
+        await page.locator('#accentPick .swatch[data-accent=""]').click();
+        await page.waitForFunction(() => !document.getElementById("lookCSS")?.textContent);
+        assert.deepEqual(await grounds(), grey, "back to magpie's own grey");
+        assert.deepEqual(errors, []);
+        await page.context().close();
+      }
+      // the panel draws its own grounds on body.panel: tinted too
+      const panelBg = async (accent) => {
+        const { page, errors } = await open(browser, { theme, accent }, 380, "mode=panel", ".ptabs button.on");
+        const v = await page.evaluate(() => { const p = document.createElement("i"); p.style.background = "var(--bg)"; document.body.append(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c; });
+        assert.deepEqual(errors, []);
+        await page.context().close();
+        return v;
+      };
+      const plain = await panelBg(""), tinted = await panelBg("#db2777");
+      assert.notEqual(tinted, plain, "the panel's ground is tinted");
+      const want = LOOK["#db2777"].match(new RegExp(`root\\[data-theme="${theme}"\\] body\\.panel\\{--bg:(#[0-9a-f]{6})`))[1];
+      assert.equal(tinted, rgbOf(want));
+    });
+  }
+
+  // CHENGJIAHEGOXIS on X, on v0.1.4124: 「这三个颜色……都显示是一样的」,
+  // 「尤其是黑色始终一直是灰色」. Default, Graphite and a black of their own
+  // drew the same grey page, and black's ink was Graphite's grey. Black now
+  // draws a black page on the dark theme with a light ink of its own, and
+  // black ink on the light theme; Graphite keeps the grey page.
+  for (const theme of ["light", "dark"]) {
+    test(`${engine}: ${theme}, Default, Graphite and black are three looks`, async (t) => {
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const dark = theme === "dark";
+      const rgbOf = (h) => `rgb(${parseInt(h.slice(1, 3), 16)}, ${parseInt(h.slice(3, 5), 16)}, ${parseInt(h.slice(5, 7), 16)})`;
+      const { page, errors } = await open(browser, { theme }, 1200);
+      await page.waitForFunction(() => document.body.classList.contains("side-nav"));
+      const look = () => page.evaluate(() => {
+        const bg = (e) => (e ? getComputedStyle(e).backgroundColor : "missing");
+        return { body: getComputedStyle(document.body).backgroundColor, list: bg(document.querySelector("#setPage-general .list.prefs")), accent: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() };
+      });
+      const want = (v) => varOf(v, "--accent", dark);
+      const own = await look();
+      await page.locator('#accentPick .swatch[data-accent="#52525b"]').click();
+      await page.waitForFunction((w) => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() === w, want("#52525b"));
+      const graphite = await look();
+      await page.locator("#accentPick .swatch.own input").evaluate((i) => { i.value = "#000000"; i.dispatchEvent(new Event("change", { bubbles: true })); });
+      await page.waitForFunction((w) => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() === w, want("#000000"));
+      const blk = await look();
+      assert.deepEqual(new Set([own.accent, graphite.accent, blk.accent]).size, 3, `three inks: ${own.accent} ${graphite.accent} ${blk.accent}`);
+      assert.equal(graphite.body, own.body, "Graphite keeps the grey page");
+      if (dark) {
+        assert.equal(blk.body, rgbOf(varOf("#000000", "--bg", true)), "black's page");
+        // #000000, as Chrome's and the system's black, not a blue-black
+        // (「纯黑……感觉色对不上」)
+        assert.equal(blk.body, "rgb(0, 0, 0)", "black's page is black");
+        assert.equal(blk.list, rgbOf(varOf("#000000", "--card", true)), "Settings' list is on black's card");
+        assert.notEqual(blk.list, blk.body, "the card stands a step above the page");
+        // its ink is light, and the page's text reads on it
+        assert.ok(parseInt(blk.accent.slice(1, 3), 16) > 0xc0, `black's ink is light, not ${blk.accent}`);
+      } else {
+        assert.equal(blk.accent, "#000000", "black is black ink on the light theme");
+        assert.equal(blk.body, own.body, "the light page keeps its ground");
+      }
+      // the chosen swatch is black's own, drawn black
+      assert.deepEqual(await chosen(page), ["own:#000000"]);
+      // the darkest navy of the system's picker draws a near-black navy
+      // page, not Graphite's grey (「感觉是有浅灰存在，所以导致深变浅」)
+      await page.locator("#accentPick .swatch.own input").evaluate((i) => { i.value = "#191047"; i.dispatchEvent(new Event("change", { bubbles: true })); });
+      await page.waitForFunction((w) => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() === w, want("#191047"));
+      const navy = await look();
+      if (dark) {
+        assert.equal(navy.body, rgbOf(varOf("#191047", "--bg", true)), "navy's page");
+        const [r, g, b] = navy.body.match(/\d+/g).map(Number);
+        const [gr] = graphite.body.match(/\d+/g).map(Number);
+        assert.ok(r + g + b < gr * 3 * 0.75 && b - r >= 8, `navy's page is a dark navy, not ${navy.body}`);
+        assert.equal(navy.list, rgbOf(varOf("#191047", "--card", true)), "Settings' list is on navy's card");
+      } else {
+        assert.equal(navy.body, rgbOf(varOf("#191047", "--bg", false)), "the light page keeps its lightness");
+      }
+      assert.deepEqual(errors, []);
+    });
   }
 
   test(`${engine}: a look boot.js drew is not asked for again`, async (t) => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
     const { page, errors, log } = await open(browser, { accent: "#0d9488" }, 1000);
-    assert.equal(await accentNow(page), "#0d9488", "drawn before the first paint");
+    assert.equal(await accentNow(page), varOf("#0d9488", "--accent"), "drawn before the first paint");
     assert.deepEqual(await chosen(page), ["#0d9488"]);
     await page.waitForTimeout(300);
     assert.deepEqual(log.filter(([k]) => k === "css"), []);
