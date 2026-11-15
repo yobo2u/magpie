@@ -4797,7 +4797,17 @@ function openPicker(agent, field, anchor, ev, only) {
   // high); its group stays as `home` for the rail (#1229)
   const groups = [...new Set(options.map((o) => o.group).filter(Boolean))];
   const i = options.findIndex((o) => o.value === cur);
-  if (!effortPicker && !field.menu && i > 0) { const [c] = options.splice(i, 1); options.unshift({ ...c, group: "", home: c.group }); }
+  // Lifted out of its section, a model another provider lists by the same
+  // name, in any case, says whose it is (renderList): WorkBuddy AI's
+  // Deepseek-V4.1-Flash on top read as WorkBuddy's DeepSeek-V4.1-Flash,
+  // and WorkBuddy AI's section, Hy4 alone, as if magpie had dropped it
+  // (ADNANYURTSEVER3 on X).
+  if (!effortPicker && !field.menu && i > 0) {
+    const [c] = options.splice(i, 1);
+    const name = (c.label || "").toLowerCase();
+    const whose = !!name && !!c.group && c.group !== ROUTING_GROUPS && options.some((o) => o.group && o.group !== c.group && (o.label || "").toLowerCase() === name);
+    options.unshift({ ...c, group: "", home: c.group, whose });
+  }
   else if (i < 0 && cur && !only) options.unshift({ value: cur, note: t("current value") });
   // the agent's own default: magpie's wiring comes out and the key is removed
   if (FOLLOWS_MODEL.includes(field.label)) {
@@ -5438,6 +5448,7 @@ function renderList() {
     const path = pathTag(o);
     if (path) { words.append(path); note = note.replace(/(^| · )via magpie$/, ""); }
     if (q && o.group && !note) note = o.group;
+    if (o.whose && pick.groupFilter !== o.home && !note.split(" · ").includes(o.home)) note = note ? o.home + " · " + note : o.home;
     // a note cut off by its ellipsis reads whole on hover (#907)
     if (note) { const n = el("span", "n", note); n.title = note; words.append(n); }
     li.append(words);
@@ -6497,22 +6508,23 @@ function renderMovable() {
   let hid = "";
   try { hid = localStorage.getItem("magpie.deprecatedHidden") || ""; } catch {}
   const ids = ps.map((p) => p.id).join(",");
-  const unmoved = providers.unmoved || [];
+  const unmoved = providers.unmoved || [], wd = providers.withdrawn || [];
   const noSubs = !!(state?.settings?.noAccountDiscovery || prefs?.noAccountsEnv);
-  box.hidden = (!ps.length || hid === ids) && !unmoved.length && !noSubs;
+  box.hidden = (!ps.length || hid === ids) && !unmoved.length && !wd.length && !noSubs;
   if (noSubs) box.append(discoveryOffLine());
   for (const p of unmoved) box.append(unmovedLine(p));
+  // a plugin magpie gives nobody new (plugin.WithdrawnOf): it still
+  // works, and its user is told the risk and what to use instead
+  for (const w of wd) {
+    const go = el("button", "text action", t("Use {name}", { name: w.instead }));
+    go.onclick = () => openPlugins("agy");
+    box.append(depLine("withdrawn", t("{name}'s plugin can get your account suspended", { name: w.name }), t("Google suspends accounts it sees used outside its own app. {name} runs your own agy instead.", { name: w.instead }), go));
+  }
   if (!ps.length || hid === ids) return;
   const names = ps.map((p) => p.name).join(t(", "));
   // one quiet line over the list, as calm as its rows: an amber dot, what
   // happened and why, and the two answers on the right (the owner: 这个太丑了 —
   // it was a tinted box with a tile, a badge, three lines and a purple button)
-  const card = el("div", "deprecation");
-  card.setAttribute("role", "note");
-  const body = el("div", "dep-body");
-  body.append(el("div", "dep-head", ps.length > 1 ? t("These built-in subscriptions are deprecated: {names}", { names }) : t("{name}'s built-in subscription is deprecated", { name: names })),
-    el("p", "dep-why", [t(DEPRECATED_WHY), t("Moving keeps your accounts, models and agents as they are.")].join(locale === "zh" || locale === "zh-TW" || locale === "ja" ? "" : " ")));
-  const acts = el("div", "dep-acts");
   const hide = el("button", "text", t("Not now"));
   hide.title = t("Hide this until another deprecated subscription is signed in");
   hide.onclick = () => { try { localStorage.setItem("magpie.deprecatedHidden", ids); } catch {} renderMovable(); };
@@ -6522,24 +6534,25 @@ function renderMovable() {
     if (ps.length > 1) { openPlugins(); return; }
     editing = ps[0].id; draft = null; renderProviders();
   };
-  acts.append(hide, review);
-  card.append(el("span", "dep-dot"), body, acts);
-  box.append(card);
+  box.append(depLine("", ps.length > 1 ? t("These built-in subscriptions are deprecated: {names}", { names }) : t("{name}'s built-in subscription is deprecated", { name: names }), [t(DEPRECATED_WHY), t("Moving keeps your accounts, models and agents as they are.")].join(locale === "zh" || locale === "zh-TW" || locale === "ja" ? "" : " "), hide, review));
 }
 
 // discoveryOffLine: subscription accounts are off in Settings › Privacy,
 // so none of them works; said here, with the way to the switch
 function discoveryOffLine() {
-  const card = el("div", "deprecation discovery-off");
-  card.setAttribute("role", "note");
-  const body = el("div", "dep-body");
-  body.append(el("div", "dep-head", t("Subscription accounts are off")),
-    el("p", "dep-why", prefs?.noAccountsEnv ? t("Off for this run: MAGPIE_NO_ACCOUNTS is set") : t("magpie reads none of your agents' sign-ins, so no subscription works. API-key providers work as before.")));
-  const acts = el("div", "dep-acts");
   const go = el("button", "text action", t("Settings › Privacy"));
   go.onclick = (e) => openSettingsAt(e, "privacy", "#discoveryList .row");
-  acts.append(go);
-  card.append(el("span", "dep-dot"), body, acts);
+  return depLine("discovery-off", t("Subscription accounts are off"), prefs?.noAccountsEnv ? t("Off for this run: MAGPIE_NO_ACCOUNTS is set") : t("magpie reads none of your agents' sign-ins, so no subscription works. API-key providers work as before."), go);
+}
+
+// depLine: one quiet line over the Providers list: an amber dot, what
+// happened and why, and its buttons on the right
+function depLine(kind, head, why, ...acts) {
+  const card = el("div", "deprecation " + kind), body = el("div", "dep-body"), a = el("div", "dep-acts");
+  card.setAttribute("role", "note");
+  body.append(el("div", "dep-head", head), el("p", "dep-why", why));
+  a.append(...acts);
+  card.append(el("span", "dep-dot"), body, a);
   return card;
 }
 
@@ -6548,15 +6561,8 @@ function discoveryOffLine() {
 // An amber dot, what happened and why, and the move, tried again here.
 const unmovedSaid = {}; // provider id → { busy } or { why }
 function unmovedLine(p) {
-  const card = el("div", "deprecation unmoved");
-  card.setAttribute("role", "note");
-  card.dataset.id = p.id;
-  const body = el("div", "dep-body");
   const said = unmovedSaid[p.id];
   const why = said?.why || moveWhy(p, p);
-  body.append(el("div", "dep-head", t("{name}'s built-in subscription is retired, and its accounts haven't moved to its plugin yet", { name: p.name })),
-    el("p", "dep-why", why ? t("Nothing serves them until they move: {error}", { error: why }) : t("Nothing serves them until they move. Moving keeps your accounts, models and agents as they are.")));
-  const acts = el("div", "dep-acts");
   const b = el("button", "text action", said?.busy || (why ? t("Try again") : t("Move to the plugin")));
   b.title = p.package; // the npm package: for the curious, not the sentence
   b.disabled = b.classList.toggle("busy", !!said?.busy);
@@ -6573,8 +6579,8 @@ function unmovedLine(p) {
       renderMovable();
     }
   };
-  acts.append(b);
-  card.append(el("span", "dep-dot"), body, acts);
+  const card = depLine("unmoved", t("{name}'s built-in subscription is retired, and its accounts haven't moved to its plugin yet", { name: p.name }), why ? t("Nothing serves them until they move: {error}", { error: why }) : t("Nothing serves them until they move. Moving keeps your accounts, models and agents as they are."), b);
+  card.dataset.id = p.id;
   return card;
 }
 
@@ -10076,7 +10082,9 @@ function drawEditor(p, presetID) {
 
   // a Step Plan's windows are told only to a StepFun sign-in
   if (p?.stepPlan) ed.append(...field(t("Step Plan allowances"), renderStepPlan(p.stepPlan, p.id), t("A key tells only the balance. The Step Plan's 5-hour, weekly and credit windows are told only to a StepFun sign-in: bring yours here once and magpie keeps it (for 30 days), used for nothing else.")));
-  // and a Qwen AI platform plan's to a sign-in there, in qianwenplan.js
+  // a Baidu Qianfan Token Plan's to a console sign-in (qianfanplan.js), and
+  // a Qwen AI platform plan's to a sign-in there (qianwenplan.js)
+  if (p?.qianfanPlan) { const at = el("span"); ed.append(at); import("./qianfanplan.js").then(() => at.replaceWith(...qianfanPlanField(p)), () => {}); }
   if (p?.qianwenPlan) { const at = el("span"); ed.append(at); import("./qianwenplan.js").then(() => at.replaceWith(...qianwenPlanField(p)), () => {}); }
 
   // a team's GLM Coding Plan windows need its org and project (#236)
@@ -12923,29 +12931,32 @@ function renderPluginAsk(sub) {
   return box;
 }
 
-// renderStepPlan: StepFun's platform sign-in by bookmarklet, per provider id
-function renderStepPlan(sp, id) {
+// renderStepPlan: StepFun's platform sign-in by bookmarklet, per provider
+// id; n names another vendor's sign-in brought the same way (Baidu Qianfan's)
+function renderStepPlan(sp, id, n) {
+  n ||= { route: "stepfun", bm: "magpie · StepFun", state: t("Signed in · the Usage page shows the Step Plan"),
+    open: t("Sign in to StepFun in your browser ↗"), ok: t("Signed in to StepFun") };
   const box = el("div", "stepplan");
   if (sp.signedIn) {
     const row = el("div", "pair");
     const side = el("div", "side");
     const out = el("button", "text", t("Sign out"));
     out.onclick = async () => {
-      try { providers = await api("stepfun/" + encodeURIComponent(id) + "/signout", {}); renderProviders(); } catch (e) { statusErr(e); }
+      try { providers = await api(n.route + "/" + encodeURIComponent(id) + "/signout", {}); renderProviders(); } catch (e) { statusErr(e); }
     };
     side.append(out);
-    row.append(el("span", "state", t("Signed in · the Usage page shows the Step Plan")), side);
+    row.append(el("span", "state", n.state), side);
     box.append(row);
     return box;
   }
   const steps = el("ol", "steps");
   const s1 = el("li");
-  const open = el("button", "link", t("Sign in to StepFun in your browser ↗"));
+  const open = el("button", "link", n.open);
   open.onclick = () => api("open", { url: sp.url });
   s1.append(open);
   const s2 = el("li");
   // dragged to the bookmarks bar it is a bookmark; a click here does nothing
-  const bm = el("a", "bookmarklet", "magpie · StepFun");
+  const bm = el("a", "bookmarklet", n.bm);
   bm.href = sp.bookmarklet;
   bm.onclick = (e) => e.preventDefault();
   const cp = el("button", "link", t("copy it"));
@@ -12959,9 +12970,9 @@ function renderStepPlan(sp, id) {
     if (!paste.value.trim()) return;
     go.disabled = paste.disabled = true;
     try {
-      providers = await api("stepfun/" + encodeURIComponent(id) + "/session", { text: paste.value });
+      providers = await api(n.route + "/" + encodeURIComponent(id) + "/session", { text: paste.value });
       renderProviders();
-      status(t("Signed in to StepFun"), "ok");
+      status(n.ok, "ok");
     } catch (e) {
       go.disabled = paste.disabled = false;
       statusErr(e);
@@ -14049,6 +14060,9 @@ function quotaError(err, q) {
   if (/^this plan's usage is read with the account's access key/.test(err)) return t("This plan's usage needs the account's AccessKey ID and Secret — give them in the provider's settings");
   // a Qwen AI platform plan (qianwen_plan.go)
   if (/^(this plan's usage is told only to a sign-in on|signed out of) the Qwen AI platform/.test(err)) return t("This plan's usage needs a sign-in to the Qwen AI platform — sign in in the provider's settings");
+  // a Baidu Qianfan Token Plan Personal (qianfan_plan.go)
+  if (/^signed out of the Baidu Cloud console/.test(err)) return t("Signed out of the Baidu Cloud console — bring a new sign-in in the provider's settings");
+  if (/^this Baidu Cloud account has no Token Plan Personal$/.test(err)) return t("This Baidu Cloud account has no Token Plan Personal");
   // ZCode with no plan left, not a failed read (#1001)
   if (/^this account has no GLM Coding Plan, and ZCode's Start Plan has ended or was never started$/.test(err)) return t("ZCode: no GLM Coding Plan, and no free Start Plan — subscribe to a GLM Coding Plan to use this account");
   // an OpenCode Go key's windows (planquota.go)
@@ -16111,7 +16125,9 @@ function fmtCost(t, prov) {
   if (typeof t.cost !== "number" || (!t.cost && t.unpriced)) return "";
   let c = t.cost, sign = "$";
   if (costInYuan(prov)) { c = c * fx.rate; sign = "¥"; }
-  const s = c >= 100 ? c.toFixed(0) : c >= 1 ? c.toFixed(2) : c.toFixed(3);
+  // at least two decimals (shangyuan0818 on X), a sub-mill amount to its
+  // first two digits rather than $0.000
+  const s = c.toFixed(c >= 1 ? 2 : c > 0 && c < 1e-3 ? 1 - Math.floor(Math.log10(c)) : 3);
   return sign + s + (t.unpriced ? "+" : "");
 }
 const tokensOf = (t) => t.input + t.output;
@@ -16628,33 +16644,22 @@ function creditDays(daily, named) {
 }
 
 // windows left over time (#651), broken at each restart, dashed even burn;
-// "2 days", "Cycle" (or an earlier one per account), or "Off" (ARNO); one
-// pick turns every card, remembered, and the tray follows
+// "2 days", any last N days ("7d", shangyuan0818 on X), "Cycle" (or an
+// earlier one per account), or "Off" (ARNO); one pick turns every card,
+// remembered, and the tray follows. N goes as far back as the readings
+// are kept (quotaHistKept, 45 days).
+const QUOTA_DAYS_MAX = 45;
+const quotaDays = (r) => parseInt(r) || 0;
+const quotaRangeOk = (r) => /^(off|cycle|[1-9]\d?d)$/.test(r) && quotaDays(r) <= QUOTA_DAYS_MAX;
 let quotaRange = "cycle";
-try { const v = localStorage.getItem("magpie.quotaRange"); if (v === "2d" || v === "off") quotaRange = v; } catch {}
-const QUOTA_RANGES = [["off", "Off", "No curves on the cards"], ["2d", "2 days", "The last two days"], ["cycle", "Cycle", "The current cycle, from the window's start to its reset"]];
+try { const v = localStorage.getItem("magpie.quotaRange"); if (quotaRangeOk(v)) quotaRange = v; } catch {}
+// a range's name: "Cycle", "2 days", "12 days"
+const quotaRangeName = (r, n = quotaDays(r)) => n ? t(n === 1 ? "{n} day" : "{n} days", { n }) : t(r === "off" ? "Off" : "Cycle");
 addEventListener("storage", (e) => {
   if (e.key !== "magpie.quotaRange") return;
-  const v = QUOTA_RANGES.some(([id]) => id === e.newValue) ? e.newValue : "cycle";
+  const v = quotaRangeOk(e.newValue) ? e.newValue : "cycle";
   if (v !== quotaRange) { quotaRange = v; renderQuotas(); }
 });
-// renderQuotaTrend: the allowances' head's pick of the curves' range, there
-// once some account has readings to draw
-function renderQuotaTrend() {
-  const b = $("#quotaTrend");
-  if (!b) return;
-  b.hidden = !quotas?.some((q) => !q.error && (quotaLines(q).length || q.balanceTrend?.points?.length > 1));
-  if (b.hidden) return;
-  const cur = QUOTA_RANGES.find(([id]) => id === quotaRange);
-  b.classList.toggle("set", quotaRange !== "off");
-  b.replaceChildren(el("span", "", t("Trends: {range}", { range: t(cur[1]) })), svg(CHEV, 11, 1.6));
-  b.title = t("What was left over time, under each account's meters");
-  b.onclick = (e) => {
-    e.stopPropagation();
-    if (b.classList.contains("open")) return closeProtoMenu();
-    openProtoMenu(b, QUOTA_RANGES.map(([v, name, note]) => ({ v, name, note })), quotaRange, setQuotaRange, "Left over time", "sess-menu");
-  };
-}
 
 function quotaHistOf(sub) {
   const user = (sub.user || "").toLowerCase();
@@ -16846,7 +16851,7 @@ function quotaEtaText(l, now) {
     : t("Runs out {when} at this pace", { when: quotaTimeText(Math.max(p.out, now + 60e3), now) });
 }
 function quotaSpan(lines, range, now) {
-  if (range === "2d") return [now - 48 * 3600e3, now];
+  if (quotaDays(range)) return [now - quotaDays(range) * 864e5, now];
   let x0 = Infinity, x1 = now;
   for (const l of lines) {
     const c = quotaCycle(l, now);
@@ -16969,8 +16974,9 @@ function quotaCurve(sub) {
     // at its end belongs to the next cycle, not this cycle's last figure.
     const shown = history?.shown || lines;
     drawQuotaPlot(g, shown, x0, Math.max(x0 + 1, x1), W, H, now);
+    box.hover = { x0, x1: Math.max(x0 + 1, x1), lines: shown.map((l, i) => ({ label: l.label, color: `var(--c${(i % 7) + 1})`, points: l.points, text: (p) => quotaLeftText(p.left) })) };
     box.title = quotaCurveTitle();
-    const r = picked ? t("Past cycle") : t(quotaRange === "2d" ? "2 days" : "Cycle");
+    const r = picked ? t("Past cycle") : quotaRangeName(quotaRange);
     range.textContent = r;
     range.disabled = quotaRange !== "cycle" || !past.cycles.length;
     range.title = t("Choose a recorded cycle");
@@ -17004,8 +17010,11 @@ function quotaCurve(sub) {
   };
   box.append(head, g, axis, legend);
   box.draw();
+  curveHover(box, g, W, H);
   return box;
 }
+// what a reading left, as exact as it was read: 73.46%, 100%
+const quotaLeftText = (v) => +(+v).toFixed(2) + "%";
 // curveZoom: a curve made larger on a click, or Enter, and back on the
 // next (TJHHHH on Discord); the page stays where it is
 function curveZoom(box, g) {
@@ -17059,7 +17068,7 @@ function balanceCurve(sub) {
   if (tr.perDay > 0) legend.append(el("span", "qc-key bc-pace", t("about {amount} a day", { amount: balanceAmount(sub, tr.perDay) })));
   box.draw = () => {
     const now = Date.now();
-    let x0 = quotaRange === "2d" ? now - 48 * 3600e3 : pts[0].at, x1 = now;
+    let x0 = quotaDays(quotaRange) ? now - quotaDays(quotaRange) * 864e5 : pts[0].at, x1 = now;
     if (!(x0 < now)) x0 = now - 3600e3;
     // the dashes reach zero when it is no further off than what is shown
     if (out && out > now && out - now <= now - x0) x1 = out;
@@ -17084,9 +17093,11 @@ function balanceCurve(sub) {
     pace.title = out ? new Date(out).toLocaleString(intlLang()) : "";
     g.setAttribute("aria-label", t("Balance over time") + (out ? " · " + pace.textContent : ""));
     axis.replaceChildren(el("span", "", quotaTimeText(x0, now)), el("span", "", quotaTimeText(x1, now)));
+    box.hover = { x0, x1, lines: [{ label: t("Balance"), color: "var(--c1)", points: pts, text: (p) => balanceAmount(sub, p.v) }] };
   };
   box.append(head, g, axis, legend);
   box.draw();
+  curveHover(box, g, W, H);
   return box;
 }
 function setQuotaRange(id) {
@@ -17522,7 +17533,7 @@ function renderPanelUse() {
     blk("Requests", fmtN(l.calls), [l.errors ? t("{n} failed", { n: fmtN(l.errors) }) : t("none failed"), l.retried ? t("{n} answered on a retry", { n: fmtN(l.retried) }) : ""].filter(Boolean).join(" · "), "", l.errors ? "bad" : "", ledNum(l.calls));
     const c = fmtCost(l, l.provider);
     const u = l.unpriced, one = u === 1;
-    blk("Cost", c ? "≈" + c : "—", u ? t(one ? "{n} call unpriced" : "{n} calls unpriced", { n: u }) : t("effective prices"), c ? "cost" : "", "", u ? t(one ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n: u }) : "");
+    blk("Cost", c || "—", u ? t(one ? "{n} call unpriced" : "{n} calls unpriced", { n: u }) : t("effective prices"), c ? "cost" : "", "", u ? t(one ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n: u }) : "");
     blk("Cache hit rate", hitRate === null ? "—" : hitPct(hitRate), cacheLeftOut(l) || t("of the prompt"));
     const card = el("div", "pu-card");
     const head = el("div", "led-bar");
@@ -19148,7 +19159,7 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
     if (metric === "traffic") more.push("↑ " + fmtBytes(x.up_bytes || 0) + " · ↓ " + fmtBytes(x.down_bytes || 0));
     if (metric !== "calls") more.push(t(x.calls === 1 ? "{n} request" : "{n} requests", { n: fmtN(x.calls) }));
     if (metric !== "tokens") more.push(t("{n} tokens", { n: fmtN(allTokens(x)) }));
-    if (metric !== "cost" && x.cost) more.push("≈" + fmtCost(x, prov));
+    if (metric !== "cost" && x.cost) more.push(fmtCost(x, prov));
     if (x.credited) more.push(ledCredits(x));
     // how fast its replies came, beside what they cost (#860)
     if (metric !== "speed" && gs) more.push(Object.assign(el("span", "rk-speed", gs.text), { title: gs.title }));
@@ -23622,6 +23633,42 @@ $(".top").addEventListener("dblclick", (e) => {
 if (mode === "window") { $("#open").remove(); $("#openMain").remove(); $("#quit").remove(); }
 else { $("#nav").remove(); $("#side").remove(); }
 if (mode !== "window" || !document.body.classList.contains("linux")) $("#winclose").remove();
+// Windows' window (html.win, body.window, not the web): the header is its
+// title bar, with the caption buttons wincap.js runs
+if ($(".win .window:not(.web)")) import("./wincap.js");
+
+// The title bar's pin keeps the window above other apps' windows, for Usage
+// or Routing watched while working elsewhere (NovaStudiosss on X): in the
+// app's main window, where boot.js says it can be pinned (ontop.go). Pressed,
+// the pin is filled; each click is saved in turn, and one that fails puts
+// back what is saved.
+let onTop = !!window.bootPrefs?.onTop, onTopSaved = onTop, onTopQueue = Promise.resolve();
+function renderOnTop() {
+  const b = $("#pin");
+  if (!b) return;
+  b.classList.toggle("on", onTop);
+  b.setAttribute("aria-pressed", String(onTop));
+  b.dataset.enTitle = onTop ? "Stop keeping on top" : "Keep on top";
+  b.title = t(b.dataset.enTitle);
+}
+if (mode === "window" && window.bootPrefs?.pin && !web) {
+  $("#pin").hidden = false;
+  renderOnTop();
+  $("#pin").onclick = () => {
+    onTop = !onTop;
+    renderOnTop();
+    const want = onTop;
+    onTopQueue = onTopQueue.then(async () => {
+      try {
+        onTopSaved = (await api("window/ontop?on=" + (want ? 1 : 0), {})).onTop;
+      } catch (e) {
+        onTop = onTopSaved;
+        renderOnTop();
+        statusErr(e);
+      }
+    });
+  };
+} else $("#pin").remove();
 
 // reload the config files when the panel comes back into view
 // The magpie in the corner flaps and wags its tail as the window opens and

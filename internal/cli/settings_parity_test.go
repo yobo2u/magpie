@@ -255,6 +255,7 @@ var notYet = map[string]string{
 	"GET /api/appearance/wallpaper":              W,  // appearance.go
 	"POST /api/appearance/wallpaper":             W,  // appearance.go: the picture comes from the window's file picker
 	"GET /api/quit":                              W,  // api.go: the window's Quit question
+	"POST /api/quit/disconnect":                  W,  // api.go: the Quit question's Disconnect and quit, which quits the app
 	"POST /api/page-away":                        W,  // api.go: the page says it went from view, so its caches can go
 	"GET /api/remote":                            W,  // remote.go: another magpie opened in a window of the app
 	"POST /api/remote":                           W,  // remote.go
@@ -493,6 +494,8 @@ var notYet = map[string]string{
 	"POST /api/qianwen/{id}/signin":              P,  // providers.go
 	"POST /api/qianwen/{id}/signin/cancel":       P,  // providers.go
 	"POST /api/qianwen/{id}/signout":             P,  // providers.go
+	"POST /api/qianfan/{id}/session":             P,  // providers.go
+	"POST /api/qianfan/{id}/signout":             P,  // providers.go
 	"GET /api/speeds":                            U,  // sessions_manage.go: the Sessions row's speed curve
 	"GET /api/sessions/manage":                   U,  // sessions_manage.go
 	"GET /api/sessions/search":                   U,  // sessions_manage.go

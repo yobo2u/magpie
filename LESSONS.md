@@ -408,7 +408,28 @@ TestSettingsSaveKeepsWhatItDoesNotSend (internal/gui) every setting.
   Both bodies say what they ran; neither ran `go test ./internal/cli`
   (40s). The same day three commits that each fit the core's script
   budget at their own base left it 4 bytes over together (61a93b531).
-- Seen 1× (2026-11-11).
+- 11-15: 261f48226 (Disconnect and quit) added POST /api/quit/disconnect
+  and ran internal/gui and five GUI files, not internal/cli. The CLI
+  guard was red on ubuntu and macOS CI at 0ffb21f83 (#6786). After
+  this rule had been written and missed again, the check moved to the
+  package GUI changes do run: internal/gui's
+  TestEveryRouteIsNamedForTheCLI fails on a route that the CLI's list
+  doesn't name. When a rule keeps being missed, put its check where
+  the work already runs.
+- Seen 2× (2026-11-11, 2026-11-15).
+
+**A byte-for-byte check of a stream allows what the protocol allows,
+and its failure message counts against what it compared.**
+- TestPassthroughResponsesBigLastEvent compared a 2MB stream byte for
+  byte. On macOS CI at 2d106b5c1 it took 5.83s, past keepHeldEvery, and
+  the agent was kept alive with one `: keepalive` comment, which every SSE
+  client skips. The message said "17 bytes added", counted against the
+  raw reply, not the renamed one it compared, so the 12-byte keepalive
+  looked like a 17-byte `"model":"fake/m1"`. Fixed in fff0755b5,
+  reproduced by setting keepHeldEvery to 1ms (red 3 of 3 on the old test).
+- A stream test leaves out SSE comments at a line's start. A failure names
+  the byte where the bodies part and what each side has there.
+- Seen 1× (2026-11-15).
 
 **A full run gives the slow packages room.** `go test ./...` at the default
 10m timeout times out in internal/gateway (#2108), and under load in
@@ -522,18 +543,9 @@ push.**
   testdata.
 - Seen 1× (2026-10-10).
 
-**A check that a value is gone looks past text magpie generates.**
-- 6c099edd's redact test checked that "ops" was gone by substring. The
-  placeholder's random suffix spelled it ({{HOSTNAME_mlopsiy3}}) on macOS
-  CI. f0453192 strips placeholders before the check, in its sibling
-  TestMask too.
-- 11-10: TestSearchAPIFailureKeepsNoURL looked for its query's "4410"
-  in usage.jsonl by substring. A random port (127.0.0.1:44105, #5616)
-  and then a route_id (1794294410888, run 42771382484) held it, and
-  main went red. Gaoshou101's patch, posted on #5616 three days before,
-  made the query letters only (17b9b5b03). A word a test looks for
-  can't be spelled by a port, an id, a time or a hash.
-- Seen 2× (2026-10-10, 2026-11-10).
+**A check that a value is gone looks past text magpie generates** is
+in the code standards since 11-16. See
+[Moved to the code standards](#moved-to-the-code-standards).
 
 **A script Settings loads runs in every mode the GUI has: the window,
 the panel and gateway mode.**
@@ -646,6 +658,46 @@ Two habits from them:
   TestProviderListReadsSettingsOnce's 2s bar, now a count of parses
   (a36319d60), and TestCursorEditorCopiedOncePerChange's 100ms linger
   (2efb71ea0).
+
+**A helper that gives a test a new HOME also stops what an earlier test
+started under the old one.**
+- #6761 (11-15): TestRemoveListedAccountLeavesHiddenNamesake was red in
+  full runs and green alone. TestPluginEmptyKeyKeyAsked, 1779 tests
+  earlier, started a real plugin host and left it up; plugin.SignOut
+  asks a running host, whose files were the earlier test's HOME, so the
+  remove landed there. A bisect on mote found it. 248edad80 has
+  claudeHome stop a running host before and after each test.
+- The same class as the second half of #2449 (10-15) and #2702 (10-17):
+  "plugin hosts outliving their test's HOME". It was fixed per test
+  then, not in the helper every test goes through.
+- When a test is red only in a full run, bisect the tests that run
+  before it (`-run '^(first half|Target)$'`) instead of rerunning.
+- Seen 2× (2026-10-17, 2026-11-15).
+
+**A request the page sends on its own is looked for in every GUI test
+that counts the page's requests, before it lands.**
+- 4623f5419 (11-10) had every Settings draw send `GET
+  /api/settings/https`. GUI tests count anything under `/api/settings/`
+  as a write, so checkin-now-account and panel-shortcut went red in both
+  engines and every language (2 of 42). Its record ran chosen GUI files
+  and called the reds "the same at base". Fixed in 47ce008da, which also
+  stops the request on draws that show no HTTPS rows.
+- 80a315a70 (11-14) sent `POST /api/page-away` when the page is hidden.
+  WebKit fires that mid-test, and agent-bulk-visibility's count read 6
+  for 5 in WebKit until 38e60d744. e430e2750 had made the same fix for
+  `/api/update/using` on 11-11, file by file.
+- Both helped leave #6709 at 111 red files on main. With half the GUI
+  suite red, a commit's "the same reds on main" says nothing about its
+  own change.
+- Grep `internal/gui/tests` for files that count posts or writes
+  (`posts.push`, `'write'`, `startsWith("/api/settings/")`) and run them
+  all. A route the page calls on every draw also costs a request per
+  draw; ask it only while what it fills can show (#6781).
+- When a cause is suspected for many reds, measure its share (the same
+  files with and without it) before saying so on the issue. The
+  page-away beacon was first named on #6709 as the likely cause; with
+  and without it, 30 of the files gave 640 and 641 reds.
+- Seen 1× (2026-11-15).
 
 **A test that breaks a shared file puts its bytes back, and its cleanup
 checks the write.**
@@ -802,6 +854,15 @@ cause:
     for three days, and it went red on ubuntu CI again at 0a7633136. It
     was ported unchanged as 11c427eaa. Now in the code standards (a
     red's issue is read to its last comment, 77898391d).
+  - 11-15: a claim with no work behind it holds a red as long as no
+    comment at all. #2903 ("the plugin answered no response", ubuntu
+    race) was claimed on 10-19 ("I'm on it: finding the cause by
+    injecting the ordering"), with nothing after it for four weeks. It
+    came back at 139a6be2b in a second test, TestPluginServesSystemOne.
+    #6368 (macOS EBADF in internal/sessions) went from "Still mine" to
+    "I am not taking it" with no cause found. A claim that has had no
+    commit or finding for a day is no claim. Whoever next sees the red
+    takes it, or says on the issue that it is unowned.
 - 10-27: the #1794 pattern on a third day. internal/provider has died
   on main since 10-25 in TestUnreadLoginsWriteErrorsKeepCredentials
   (#3632, a synctest fatal, 2 of 2 on mote at 4b0a32e0f). The issue has
@@ -836,12 +897,25 @@ cause:
 - A cancelled run tests nothing. On 10-14 nine pushes in ten minutes
   cancelled each other's runs, and 3c4b4dc97 never had a run of its own;
   its red showed first at 84f14e555.
+  - 11-15: main's colour is the Test workflow's. The review loop read
+    the Docker workflow's green runs and called main green while Test
+    was red at 923cc8747 (macOS step cap at 75m, nothing printed after
+    internal/routes, #5451) and e99307fb8 (#6761). Use
+    `gh run list -w Test`. Of the 12 Test runs before 9bcdcfb7d, 7 were
+    cancelled by the next push, and #6764 was filed for the same test
+    as #6761 the same hour: search the test's name before filing.
   - 11-13: 459d668b3 (#6428) edited docs/sync.html and did not run
     `node llms-full.mjs`. site's "llms-full.txt is current" test went
     red at 21:05. Every Test run after it was cancelled by the next
     push until d5585933f's run finished at ~01:45 with the red. A docs
     page change runs site/worker.test.mjs, because llms-full.txt is
     built from those pages (fixed in 3d8860010).
+    Again 11-15: 256910f17 changed the Antigravity entry in the
+    subscriptions docs, ran Go and GUI tests but not site/, and its own
+    run was cancelled; cli (linux/amd64) went red at 2d106b5c1 (fixed
+    in 25ad34f42). Twice in three days: a change under site/public/docs
+    ends with `node llms-full.mjs` and `node --test site/*.test.mjs`
+    from the repo root, as test.yml runs it.
   - 10-28: of main's last 58 Test runs, 49 were cancelled by the next
     push. 0b99b8fbe's new allocation bound went red in macOS's Race job
     (sync.Pool lets go under -race) at 25df3187b, the first run after it
@@ -876,7 +950,12 @@ review listed.** (Merging only the reviewed head, and writing what was run
 before the merge, are in the code standards.)
 - #885 and #826 merged with their own new test failing. #846 merged with
   four known-wrong translations. Fix or file the problems first.
-- Seen 1× (2026-10-05).
+- plugins#1183 (11-15): the harm scan asked for a test of the tool-loop
+  case, where a dropped signed thought could be refused. The PR merged
+  38 minutes later. The merge comment argued the case away and added no
+  such test. A case a review asks to test gets a test, or an issue that
+  says it is untested.
+- Seen 2× (2026-10-05, 2026-11-15).
 
 **An issue that names two problems is closed when both are fixed.**
 - #2449's title named a lost tail and plugin hosts outliving their
@@ -1041,6 +1120,13 @@ standards since 10-18, widened to a worktree and its logs. See
 
 ## Moved to the code standards
 
+- **A check that a value is gone looks past text magpie or the test
+  made up** (10-10, 11-10, 11-15). On 11-15 TestMoreKinds checked that
+  the user name "ops" was gone, and the made-up name for it, eight
+  letters from a key new each run, was zpxopsat: ubuntu CI red at
+  500f39886. #4345 had the same red on mote on 11-12, filed as "passes
+  on rerun" with its output lost. A probe that searched for a key whose
+  made-up name spells "ops" (key 2207: dopsubnz) made it red every run.
 - **A commit's `--stat` names only the files its change touched; any
   other file is a stale tree** (11-11, 11-12, 11-13). On 11-13 8c7328f3a
   (remote quotas) wrote 21 files back to 35aaaa4b9^ and took out three
@@ -1367,6 +1453,14 @@ each one.
     f97415bc0. Its body lists the gui tests and vet it ran, and neither
     guard's package. A new package-level var runs `go test .`; a new
     route runs internal/cli's parity test.
+    11-15: 8f3f7a46a (Qianfan Token Plan) put two package-level regexps
+    in internal/provider and ran provider, gui and cli, so the root guard
+    was red on ubuntu CI until 022ffd09e. Done since, as 11-12 asked:
+    testenv's TestMain checks the package's own files after its tests
+    (testenv.eagerHere), so the 65 packages that run through testenv,
+    every one this guard caught before among them, fail their own run,
+    a `-run` of one test included. Broken by hand: a probe file in
+    internal/update failed `go test -run NoSuchTest ./internal/update`.
 - **11-13, criteria still missed.**
   - A budget's pass recorded at a tree it wasn't run at: 5a0e0378c's
     body says TestCoreScriptBudget passed "rebased on 7583ed65c", but
