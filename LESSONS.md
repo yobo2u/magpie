@@ -435,6 +435,21 @@ ok except gateway" stops being a normal run record.
   goes through would hold it.
 - Seen 2× (2026-10-16, 2026-10-17).
 
+**A quiet `go test ./...` log is not a hang until a package's own time
+says so.** go test prints packages in order, so one slow package holds
+back every line after it, and the log moves in bursts.
+- 705d67efc (11-15) called 0dbdc7481's macOS Test step hung: nothing
+  past internal/libc for 44 minutes. The next run was cancelled at 53
+  minutes for the same reason, and its log showed the step had just
+  finished. internal/library reported 264s but printed at 02:33, so it
+  had started 47 minutes into the step. The step was slow, not stuck
+  (#5267).
+- Before you cancel, compare the last burst's time with the reported
+  seconds of the packages that came before it. go 1.26 waits only 5s for
+  a test binary's pipes once the binary exits, so a lingering child
+  can't explain a silence.
+- Seen 1× (2026-11-15).
+
 **A suite's log is kept whole until its reds are named.**
 - 5b12407e8 (10-17) piped a full run through tail, lost which
   internal/gateway test failed at 2559s, and shipped with an unnamed red.
@@ -626,6 +641,21 @@ checks the write.**
 - A cleanup that goes through the code under test inherits its guards.
   Restore with the bytes read before, or give the test its own HOME.
 - Seen 1× (2026-11-13).
+
+**A change to which tests share a process runs a pairing check on the
+package-global state they leave.**
+- 0dbdc7481 (11-15) ran internal/gateway's plain Test step in chunks as
+  Race does, green on mote's 12 workers. On CI the chunks held other
+  tests, and TestEffortChangeKeepsTheCache started held by a Codex
+  usage-limit rest that six tests left in restingUntil (#6717): its
+  helper set a home without fresh(t), and fresh only cleared rests at a
+  test's start. 6e0b8113d clears them at the end too, and in every
+  helper that sets a home itself; the six pairs were red before it.
+- A green split proves only that split. Run each test that records
+  package state with the one that reads it, in one process
+  (`-run '^(A|B)$'`), and clear the state in a t.Cleanup where it is
+  made.
+- Seen 1× (2026-11-15).
 
 **A value put in a request's context lives as long as anything that
 holds the context, a stopped timer included.**
@@ -1510,6 +1540,19 @@ each one.
     and run each package that has one. The review's own first run
     of it was piped through tail and lost which package failed; the
     rerun went to a log file.
+- **11-15, criteria still missed.**
+  - A red filed as "red on main" is bisected before anyone ships past
+    it. 2bb201162 (11-12) dropped `&& key.isConnected` from the
+    editor's paste reader, so a curl pasted into a keyed provider's
+    Base URL saved its key unseen over the provider's own. It ran 92
+    provider-* GUI files; key-box-once, which says exactly that, isn't
+    named provider-*, and went red. #6424 then filed it as "red on
+    origin/main", and #6709 lists it among 111 red files, both with no
+    cause. The review bisected it in two runs (10/10 at the parent,
+    0/10 at 2bb201162) and fixed it in a2a49c204. Choose GUI files by
+    what the change touches (grep the tests for its selectors and
+    words), not by name; and a red on main has a first bad commit,
+    which `git bisect` finds faster than a list grows.
 - **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
   diffed staticcheck's U1000 against its base for dead code, b98f906b1
   was red on the old code for an own-account gap, and 8 subscriptions

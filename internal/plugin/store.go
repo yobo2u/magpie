@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/edit"
+	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/lazyre"
@@ -73,6 +74,17 @@ type List struct {
 }
 
 var listMu sync.Mutex
+
+// listFileMu is held through every read a change is made from and its
+// write of plugins.json (the mutators below): the gateway that runs all
+// day and a magpie run from a terminal (`magpie plugin options …`, the
+// plugin manager) are separate processes, and listMu never saw the other
+// one, so the later whole-list write went out with what the other had
+// saved since its read (#4666). Under it every change reads the file
+// afresh, so both changes stand. A lock another magpie holds is waited
+// for up to filelock.Wait, then gone on without, as before there was
+// one; the same shape as mcpauth's fileMu.
+var listFileMu = filelock.Mutex{Path: func() string { return listPath() + ".lock" }}
 
 // bunMu is held through each bun command that changes plugins/ (add,
 // update, remove). Two at once read package.json and bun.lock before
@@ -475,8 +487,10 @@ func add(ctx context.Context, spec, version string) (Entry, error) {
 		}
 		return Entry{}, err
 	}
+	listFileMu.Lock()
 	listMu.Lock()
 	defer listMu.Unlock()
+	defer listFileMu.Unlock()
 	l := Load()
 	e := Entry{Spec: spec}
 	name := Name(spec)
@@ -620,11 +634,13 @@ func indexOf(l List, name string) int {
 
 // Remove takes a plugin off the list (and out of plugins/).
 func Remove(ctx context.Context, name string) error {
+	listFileMu.Lock()
 	listMu.Lock()
 	l := Load()
 	i := indexOf(l, name)
 	if i < 0 {
 		listMu.Unlock()
+		listFileMu.Unlock()
 		return fmt.Errorf("no plugin %q", name)
 	}
 	e := l.Plugins[i]
@@ -632,6 +648,7 @@ func Remove(ctx context.Context, name string) error {
 	maps.DeleteFunc(l.Prefer, func(_, s string) bool { return s == e.Spec })
 	err := save(l)
 	listMu.Unlock()
+	listFileMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -648,8 +665,10 @@ func Remove(ctx context.Context, name string) error {
 
 // SetOff turns a plugin off or back on.
 func SetOff(name string, off bool) error {
+	listFileMu.Lock()
 	listMu.Lock()
 	defer listMu.Unlock()
+	defer listFileMu.Unlock()
 	l := Load()
 	i := indexOf(l, name)
 	if i < 0 {
@@ -669,8 +688,10 @@ func SetOff(name string, off bool) error {
 // with it; one switched off leaves the id to the others until it is on
 // again.
 func Prefer(name, id string) error {
+	listFileMu.Lock()
 	listMu.Lock()
 	defer listMu.Unlock()
+	defer listFileMu.Unlock()
 	l := Load()
 	i := indexOf(l, name)
 	if i < 0 {
@@ -693,8 +714,10 @@ func Prefer(name, id string) error {
 // SetOptions sets the options a plugin is handed (a middleware's
 // ctx.options); nil takes them away.
 func SetOptions(name string, opts map[string]any) error {
+	listFileMu.Lock()
 	listMu.Lock()
 	defer listMu.Unlock()
+	defer listFileMu.Unlock()
 	l := Load()
 	i := indexOf(l, name)
 	if i < 0 {
@@ -790,8 +813,18 @@ func install(ctx context.Context, spec string) error {
 	// back stays held, as the user's bunfig asks, and a bun this machine
 	// can't run at all can't add it from there either
 	var ue *BunUnstartableError
+	// the version the add is for, when it names one: the dist branch's
+	// newest when it is added from there at "latest"
+	want := strings.TrimPrefix(strings.TrimPrefix(spec, Name(spec)), "@")
+	if IsPath(spec) || IsGit(spec) || !exactVersion.MatchString(want) {
+		want = ""
+	}
 	if name, version, ok := distWanted(spec); ok && err != nil && !minAge.MatchString(err.Error()) && !errors.As(err, &ue) {
-		if derr := installDist(ctx, bun, name, version); derr != nil {
+		v, derr := installDist(ctx, bun, name, version)
+		if v != "" {
+			want = v
+		}
+		if derr != nil {
 			// both wrapped: what Bun said at either try is read (failedOf)
 			err = fmt.Errorf("%w (and from the community repo's dist branch: %w)", err, derr)
 		} else {
@@ -800,7 +833,7 @@ func install(ctx context.Context, spec string) error {
 	}
 	// another plugin's package Bun couldn't install, and this one in: the
 	// add is done, and that plugin's row says what is wrong with it
-	if err != nil && othersFailed(err, spec) {
+	if err != nil && othersFailed(err, spec, want) {
 		log.Printf("plugins: %s installed; Bun couldn't install %s: %v", spec, strings.Join(failedOf(err), ", "), err)
 		err = nil
 	}
@@ -842,7 +875,7 @@ func bunAddOnce(ctx context.Context, bun, spec string) error {
 		if ue := wontLoad(bun, err); ue != nil {
 			return fmt.Errorf("bun add %s: %w", spec, ue)
 		}
-		return &bunRunError{fmt.Errorf("bun add %s: %v: %s", spec, cantStart(bun, err), lastLines(string(out), 6)), string(out)}
+		return &bunRunError{fmt.Errorf("bun add %s: %v: %s", spec, cantStart(bun, err), bunSaid(string(out), 6)), string(out)}
 	}
 	return nil
 }
@@ -1023,7 +1056,7 @@ func reinstall(ctx context.Context, spec string) error {
 		if ue := wontLoad(bun, err); ue != nil {
 			return fmt.Errorf("bun update %s: %w", name, ue)
 		}
-		return fmt.Errorf("bun update %s: %v: %s", name, cantStart(bun, err), lastLines(string(out), 6))
+		return fmt.Errorf("bun update %s: %v: %s", name, cantStart(bun, err), bunSaid(string(out), 6))
 	}
 	// what the checks saw the repository at (the page's, before the
 	// reader pressed update) is what the update was to install: bun
@@ -1044,6 +1077,37 @@ func reinstall(ctx context.Context, spec string) error {
 	}
 	return nil
 }
+
+// bunSaid is what a failed bun command said, for its error: every line
+// that says what failed, and its last n lines. Its last lines alone hid
+// it: Bun names the package it couldn't install before "Saved lockfile",
+// the added package and its summary, so "Failed to install 1 package"
+// came with no word of which (CHENGJIAHEGOXIS on X, v0.1.4210). Blank
+// lines are left out.
+func bunSaid(s string, n int) string {
+	s = ansi.ReplaceAllString(strings.ReplaceAll(s, "\r\n", "\n"), "")
+	var ls []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimRight(l, " \t\r"); strings.TrimSpace(l) != "" {
+			ls = append(ls, l)
+		}
+	}
+	var out []string
+	said := 0
+	for i, l := range ls {
+		switch {
+		case i >= len(ls)-n:
+			out = append(out, l)
+		case said < 8 && bunFailLine.MatchString(l):
+			out = append(out, l)
+			said++
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// bunFailLine is a line of Bun's output that says something failed.
+var bunFailLine = lazyre.New(`(?i)\b(?:error|failed|unexpected|refusing|permission denied)\b|^E[A-Z]{2,}\b`)
 
 func lastLines(s string, n int) string {
 	ls := strings.Split(strings.TrimSpace(s), "\n")
