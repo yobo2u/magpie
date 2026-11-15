@@ -79,7 +79,21 @@ function routingPage(part) {
   const top = el("div", "rt-top");
   const what = el("div", "rt-what");
   const mode = el("p", "rt-mode");
-  top.append(what, mode);
+  // how far the stage opens (openTo), picked at the head's end
+  const depthPick = el("button", "text rt-depth"), depthWord = el("span", "", t("Expand"));
+  depthPick.type = "button";
+  depthPick.id = "rtDepth";
+  depthPick.setAttribute("aria-haspopup", "menu");
+  depthPick.setAttribute("aria-expanded", "false");
+  depthWord.dataset.t = "";
+  depthWord.dataset.en = "Expand";
+  depthPick.dataset.tt = "Expand routes to";
+  depthPick.title = t("Expand routes to");
+  depthPick.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg>';
+  depthPick.append(depthWord);
+  const topRow = el("div", "rt-toprow");
+  topRow.append(what, depthPick);
+  top.append(topRow, mode);
   const stage = el("div", "rt-stage");
   const wires = document.createElementNS(NS, "svg");
   wires.setAttribute("class", "rt-wires");
@@ -1812,10 +1826,49 @@ function routingPage(part) {
   const isOpen = (k, dflt) => keysShut.has(k) ? false : keysOpen.has(k) ? true : dflt;
   function keepOpen(k, open) {
     if (open) { keysOpen.add(k); keysShut.delete(k); } else { keysOpen.delete(k); keysShut.add(k); }
+    keepFolds();
+  }
+  function keepFolds() {
     try {
       localStorage.setItem("magpie.routingKeysOpen", JSON.stringify([...keysOpen]));
       localStorage.setItem("magpie.routingFolded", JSON.stringify([...keysShut]));
     } catch {}
+  }
+  // How far the stage opens (ipsikent on X: often only which model a
+  // route uses matters, not which provider's account): "" as above, long
+  // lists folded; "models" folds every provider's accounts and keys, two
+  // or more, into their one row; "accounts" opens each. Both open every
+  // group in the group. Picked from the
+  // stage head's Expand, kept in localStorage magpie.routingDepth. Picking
+  // one forgets what the reader opened or folded on the stage, so every
+  // row follows it at once; a row clicked after is kept as before.
+  const DEPTHS = [["", "Automatic", "Long lists start folded, short ones open"],
+    ["models", "Models", "A row for each provider's model, its accounts and keys folded into it"],
+    ["accounts", "Accounts", "A row for each account and key"]];
+  let openTo = "";
+  try { openTo = localStorage.getItem("magpie.routingDepth") || ""; } catch {}
+  if (!DEPTHS.some(([v]) => v === openTo)) openTo = "";
+  // a stage fold of n accounts (acct) or keys starts open?
+  const foldStartsOpen = (acct, n) => openTo === "accounts" || !openTo && acct && n < LONG;
+  // how many side by side fold: two already when only models are shown
+  const foldAt = () => openTo === "models" ? 2 : FOLD_AT;
+  {
+    depthPick.onclick = (e) => {
+      e.stopPropagation();
+      if (depthPick.classList.contains("open")) return closeProtoMenu();
+      openProtoMenu(depthPick, DEPTHS.map(([v, name, title]) => ({ v, name, note: "", title: t(title) })), openTo, (v) => {
+        openTo = v;
+        try { if (v) localStorage.setItem("magpie.routingDepth", v); else localStorage.removeItem("magpie.routingDepth"); } catch {}
+        // the stage's own: Accounts and keys' sums (provider/@, provider/*) stay
+        const own = (k) => !/\/[@*]$/.test(k);
+        keysOpen = new Set([...keysOpen].filter((k) => !own(k)));
+        keysShut = new Set([...keysShut].filter((k) => !own(k)));
+        keepFolds();
+        const rs = staged();
+        if (rs.length) steady(() => rebuild(rs, false));
+        render();
+      }, "Expand routes to", "rt-depth-menu", "right");
+    };
   }
   const agents = new Map(); // agent → { node, ic, name, sub, wire }
   let sets = [];            // the account sets on the stage, in the order they came
@@ -2822,10 +2875,10 @@ function routingPage(part) {
     const foldOf = new Map();
     let run = [];
     const flush = () => {
-      if (run.length >= FOLD_AT) {
+      if (run.length >= foldAt()) {
         const w = rows.get(run[0]).w, f = foldNode(foldKey(w, rows.get(run[0]).path), w), acct = w.kind === "account";
         f.ids = run;
-        shut(f, isOpen(f.pk, acct && run.length < LONG),
+        shut(f, isOpen(f.pk, foldStartsOpen(acct, run.length)),
           acct ? "Fold these accounts into one row" : "Fold these keys into one row", acct ? "Show each account" : "Show each key");
         for (const id of run) foldOf.set(id, f);
       }
@@ -2860,7 +2913,7 @@ function routingPage(part) {
           // a route's heading starts open, whatever its length: a second
           // agent coming shouldn't fold the first's rows away
           if (way) shut(s, isOpen(s.pk, true), "Fold this route into one row", "Show where this route goes");
-          else shut(s, isOpen(s.pk, under.get(key) < LONG), "Fold this group into one row", "Show what this group routes to");
+          else shut(s, isOpen(s.pk, openTo ? true : under.get(key) < LONG), "Fold this group into one row", "Show what this group routes to");
           els.push(s.li);
         }
         // folded: what it routes to is its heading's
@@ -4812,7 +4865,11 @@ function routingPage(part) {
   function cardFor(w) {
     if (w.kind !== "account" || !Array.isArray(quotas)) return null;
     const user = (w.who || "").trim().toLowerCase();
-    const mine = quotas.filter((q) => !q.from && q.kind === "subscription" && (q.provider === w.agent || q.provider === w.provider));
+    // this computer's own cards come with no kind (SubscriptionQuota.Kind
+    // is "" here, only a remote magpie's are told one), so asking for
+    // "subscription" matched none of them in the app (Sdsi134a on X: a
+    // fold of three accounts on one plan said nothing of what was left)
+    const mine = quotas.filter((q) => !q.from && (q.kind || "subscription") === "subscription" && (q.provider === w.agent || q.provider === w.provider));
     return mine.find((q) => (q.user || "").trim().toLowerCase() === user) || (mine.length === 1 && !mine[0].user ? mine[0] : null);
   }
   // cardError: why the Usage page could not read the account, when its
@@ -4823,6 +4880,11 @@ function routingPage(part) {
     const q = cardFor(w);
     return q && !cardOf(w) && q.error ? String(q.error) : "";
   }
+  // plansHidden: the groups page's Hide plans was clicked (kept in
+  // localStorage, so the Routing page's fold reads it too)
+  function plansHidden() {
+    try { return localStorage.getItem("magpie.routingGroupPlans") === "hidden"; } catch { return false; }
+  }
   // foldQuota: what a fold's accounts have left together, from the Usage
   // page's readings (mergeQuotas), as its strip of all of a provider's
   // accounts says it: only when every account in it was read, and all are
@@ -4830,8 +4892,10 @@ function routingPage(part) {
   // have is left out (mergeQuotas). The tightest window that says a share
   // is the figure and the bar; the rest, and when the first of them
   // starts again, are on hover. Null when nothing adds up.
+  // Hide plans on the groups page (magpie.routingGroupPlans) folds these
+  // away too: the user asked for no plans on this page
   function foldQuota(ms) {
-    if (ms.length < 2 || ms.some((m) => m.w.free)) return null;
+    if (ms.length < 2 || ms.some((m) => m.w.free) || plansHidden()) return null;
     const cards = ms.map((m) => cardOf(m.w));
     if (cards.some((q) => !q) || new Set(cards).size !== cards.length) return null;
     if (new Set(cards.map((q) => q.plan || "")).size > 1) return null;
@@ -4843,8 +4907,11 @@ function routingPage(part) {
     const top = bar || ws[0];
     const line = (w) => t(w.name) + " " + quotaText(w);
     const soon = ws.map((w) => w.firstReset).filter(Boolean).sort()[0];
+    // when the figure's window starts again, the soonest of the accounts',
+    // as an account's own row says it
+    const back = top.firstReset ? Date.parse(top.firstReset) - now() : 0;
     return {
-      text: line(top), bar,
+      text: line(top) + (back > 0 ? " · " + t("renews in {d}", { d: dur(back) }) : ""), bar,
       tip: tipLines(...ws.map(line),
         t(top.how === "p" ? "The mean of {n} accounts on one plan" : top.how === "u" ? "Unlimited on each of {n} accounts" : "Added up over {n} accounts", { n: top.accounts }),
         soon && t("The first of them starts again {when}", { when: resetClock(new Date(soon)) })),
@@ -6278,6 +6345,48 @@ function routingPage(part) {
   }
   const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   let groups = null, gEdit = null; // gEdit: { id: "" for a new one, draft }
+  // Built on first lookup, shared by the stage and the groups page. Maps
+  // point at the current response's objects; they never copy model data.
+  let groupIndex = null, groupIndexTimer = 0;
+  let groupRows = new Map(), groupRowsFor = null, groupRowsLocale = "", groupImportRow = null;
+  const GROUP_CACHE_KEEP = 5 * 60 * 1000;
+  const firstBy = (xs, key = (x) => x.id) => {
+    const map = new Map();
+    for (const x of xs || []) { const k = key(x); if (!map.has(k)) map.set(k, x); }
+    return map;
+  };
+  function dropGroupCaches() {
+    groupIndex = null;
+    tellsFor = tellsOf = null;
+    groupRows.clear();
+    groupRowsFor = groupImportRow = null;
+    groupIndexTimer = 0;
+  }
+  function keepGroupCaches() {
+    if (shown() || gShown()) {
+      clearTimeout(groupIndexTimer);
+      groupIndexTimer = 0;
+    } else if ((groupIndex || groupRows.size) && !groupIndexTimer) groupIndexTimer = setTimeout(dropGroupCaches, GROUP_CACHE_KEEP);
+  }
+  function groupIndexOf() {
+    if (!groupIndex || groupIndex.source !== groups) {
+      const off = new Map();
+      for (const g of groups?.groups || []) for (const i of g.memberInfo || []) {
+        if (i.providerOff && !off.has(i.id)) off.set(i.id, i);
+      }
+      groupIndex = { source: groups, models: firstBy(groups?.models), deciders: firstBy(groups?.deciders),
+        drawers: firstBy(groups?.drawers), groups: firstBy((groups?.groups || []).filter((g) => !g.hidden), (g) => "group/" + g.id),
+        accounts: new Map(Object.entries(groups?.accounts || {}).map(([pid, xs]) => [pid, firstBy(xs)])),
+        off, members: new Map(), info: new WeakMap(), search: new WeakMap(), searchLocale: locale };
+      keepGroupCaches();
+    }
+    return groupIndex;
+  }
+  function memberInfoOf(g, id) {
+    const ix = groupIndexOf();
+    if (!ix.info.has(g)) ix.info.set(g, firstBy(g.memberInfo));
+    return ix.info.get(g).get(id);
+  }
   // poolOf is the provider's own routing over several accounts or keys,
   // none while it has one on (or before the groups are in)
   function poolOf(id) {
@@ -6370,14 +6479,19 @@ function routingPage(part) {
   // splitMember's third is that account's id, "" for every account
   function splitMember(id) {
     id = id || "";
-    let acct = "";
+    const ix = groupIndexOf();
+    if (ix.members.has(id)) return ix.members.get(id);
+    const original = id;
+    let acct = "", level = "";
     const a = id.startsWith("group/") ? null : /^(.+)#([^#/]+)$/.exec(id);
     if (a && a[2].trim()) { id = a[1]; acct = a[2].trim(); }
-    if (id.startsWith("group/") || groups?.models.some((m) => m.id === id) || groups?.drawers?.some((m) => m.id === id)) return [id, "", acct];
-    const m = /^(.+):((?:none|minimal|low|medium|high|xhigh|max)(?:\+(?:none|minimal|low|medium|high|xhigh|max))*)$/i.exec(id);
-    if (!m) return [id, "", acct];
-    const parts = m[2].toLowerCase().split("+");
-    return [m[1], LEVELS.filter((v) => parts.includes(v)).join("+"), acct];
+    if (!id.startsWith("group/") && !ix.models.has(id) && !ix.drawers.has(id)) {
+      const m = /^(.+):((?:none|minimal|low|medium|high|xhigh|max)(?:\+(?:none|minimal|low|medium|high|xhigh|max))*)$/i.exec(id);
+      if (m) { id = m[1]; const parts = m[2].toLowerCase().split("+"); level = LEVELS.filter((v) => parts.includes(v)).join("+"); }
+    }
+    const parts = [id, level, acct];
+    ix.members.set(original, parts);
+    return parts;
   }
   // a member's id from its model, reasoning and account
   const memberId = (model, level, acct) => (level ? `${model}:${level}` : model) + (acct ? "#" + acct : "");
@@ -6388,17 +6502,22 @@ function routingPage(part) {
     if (!acct || subOf(id)) return null;
     const pid = modelOf(id)?.provider || model.split("/")[0];
     const full = pid + "/" + acct;
-    const a = (groups?.accounts?.[pid] || []).find((x) => x.id === full);
+    const a = groupIndexOf().accounts.get(pid)?.get(full);
     return { id: full, name: a?.name || acct, plan: a?.plan || "" };
   };
   // a decision model (Jev) is a member of a group of decision models only,
   // asked at /v1/systemone (provider/decide_group.go): it is in
   // groups.deciders, not groups.models
-  const deciderOf = (id) => groups?.deciders?.find((m) => m.id === splitMember(id)[0]);
+  const deciderOf = (id) => groupIndexOf().deciders.get(splitMember(id)[0]);
   // an image model (jzw690 on X) is in groups.drawers: a group holding it
   // draws on it at the images API, and it takes no reasoning
-  const drawerOf = (id) => groups?.drawers?.find((m) => m.id === id);
-  const modelOf = (id) => groups?.models.find((m) => m.id === id) || groups?.models.find((m) => m.id === splitMember(id)[0]) || deciderOf(id) || drawerOf(id);
+  const drawerOf = (id) => groupIndexOf().drawers.get(id);
+  const modelOf = (id) => {
+    const ix = groupIndexOf(), exact = ix.models.get(id);
+    if (exact) return exact;
+    const base = splitMember(id)[0];
+    return ix.models.get(base) || ix.deciders.get(base) || ix.drawers.get(id);
+  };
   // a group's patterns (#766, provider.IsPattern): a glob, * any run of
   // characters over the provider/model id, or re:<regexp> over the whole
   // id, both in any case (provider.compilePattern). The group keeps them,
@@ -6442,7 +6561,7 @@ function routingPage(part) {
   const fixedOf = (id) => subOf(id) ? "" : splitMember(id)[1];
   const fixedWords = (level) => t("{level} reasoning", { level: level.split("+").join(" / ") });
   // a routing group among a group's members: group/<id>
-  const subOf = (id) => id?.startsWith("group/") ? groups?.groups.find((x) => "group/" + x.id === id && !x.hidden) : null;
+  const subOf = (id) => id?.startsWith("group/") ? groupIndexOf().groups.get(id) : null;
   // a group's editor, its draft being the group as it is now. The group's own
   // card opens it, and so does a group that is a member of another: such a
   // member takes no reasoning of its own (provider.SaveGroup refuses
@@ -6466,7 +6585,7 @@ function routingPage(part) {
   // offOf: a member whose provider is switched off (groupsState's
   // providerOff), said by its provider's name and model rather than a bare
   // id: the group skips it until the provider is on again
-  const offOf = (id) => { for (const g of groups?.groups || []) { const i = g.memberInfo?.find((x) => x.id === id && x.providerOff); if (i) return i; } };
+  const offOf = (id) => groupIndexOf().off.get(id);
   const offWords = (i) => t("{name} is switched off: the group skips it until it is on again", { name: i.name });
   const memberIcon = (id) => { const s = subOf(id); return s ? stackIcon(groupIcons(s)) : icon(modelOf(id)?.icon || offOf(id)?.icon || "generic"); };
   // models of one provider that would read alike (several "DeepSeek-V4.1-Flash"
@@ -6487,9 +6606,9 @@ function routingPage(part) {
   // provider is Free for me, or its vendor serves it free (memberJSON.Free),
   // said whatever the group's routing, so it shows before Free first is
   // picked (jiabubu on Discord)
-  const freeIn = (g, id) => !!g?.memberInfo?.find((x) => x.id === id)?.free;
+  const freeIn = (g, id) => !!(g && memberInfoOf(g, id)?.free);
   function memberLabel(g, id) {
-    const i = g.memberInfo?.find((x) => x.id === id), m = modelOf(id), s = subOf(id), f = fixedOf(id);
+    const i = memberInfoOf(g, id), m = modelOf(id), s = subOf(id), f = fixedOf(id);
     if (s) return `${t("routing group")} · ${s.name}`;
     const acct = memberAccount(id);
     const at = (acct ? ` · ${acct.name}` : "") + (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${t("fast")}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
@@ -6497,11 +6616,11 @@ function routingPage(part) {
     if (i?.providerOff) return `${i.name} · ${i.model}${at} (${t("switched off")})`;
     return i?.name ? `${i.name} · ${i.model}${at}` : id;
   }
-  function renderGroups() {
+  function renderGroups(filterOnly = false) {
     if (!groups) return;
     // not under a row being dragged: it is drawn when let go
     if (groupArranging) { groupRenderPending = true; return; }
-    steady(drawGroups, gView());
+    steady(() => drawGroups(filterOnly), gView());
   }
   // gSel: the groups picked to be removed together, while picking (lc on
   // Discord: they could only be removed one at a time); null otherwise
@@ -6513,8 +6632,8 @@ function routingPage(part) {
   gQ.type = "search";
   gQ.spellcheck = false;
   gQ.autocomplete = "off";
-  gQ.oninput = () => renderGroups();
-  gQ.onkeydown = (e) => { if (e.key === "Escape" && gQ.value) { e.stopPropagation(); gQ.value = ""; renderGroups(); } };
+  gQ.oninput = () => renderGroups(true);
+  gQ.onkeydown = (e) => { if (e.key === "Escape" && gQ.value) { e.stopPropagation(); gQ.value = ""; renderGroups(true); } };
   // gImport: Import a group's box (laincatx on X): the text pasted, kept
   // in the page across redraws as gQ is, and what the import added and
   // left out once it has; null while closed
@@ -6529,7 +6648,13 @@ function routingPage(part) {
     try { return hayMatches(g, words); } catch { return true; } // a group that can't be read is shown, flagged
   }
   function hayMatches(g, words) {
-    const hay = [g.name, g.id, "group/" + g.id, g.ref || "", ...g.members.flatMap((id) => [id, memberLabel(g, id)]), ...(g.patterns || []).map((p) => p.pattern)].join("\n").toLowerCase();
+    const ix = groupIndexOf();
+    if (ix.searchLocale !== locale) { ix.searchLocale = locale; ix.search = new WeakMap(); }
+    let hay = ix.search.get(g);
+    if (hay === undefined) {
+      hay = [g.name, g.id, "group/" + g.id, g.ref || "", ...g.members.flatMap((id) => [id, memberLabel(g, id)]), ...(g.patterns || []).map((p) => p.pattern)].join("\n").toLowerCase();
+      ix.search.set(g, hay);
+    }
     return words.every((w) => hay.includes(w));
   }
   // rowOrFlag: a group's row, or when drawing it fails, a row that says so
@@ -6581,8 +6706,33 @@ function routingPage(part) {
     }
     return lines;
   }
-  function drawGroups() {
-    groupsQuotas = typeof quotas === "undefined" ? undefined : quotas;
+  // the quota lines folded away from every group, as kept in this window
+  // (Sdsi134a on X: with many plans the list grew long); shown, as before,
+  // until the toolbar's Hide plans is clicked
+  let gPlansHid = plansHidden();
+  function plansButton() {
+    const b = el("button", "text rt-gplans", t(gPlansHid ? "Show plans" : "Hide plans"));
+    b.type = "button";
+    b.title = t("What is left of each provider's accounts, under every group");
+    b.onclick = () => {
+      gPlansHid = !gPlansHid;
+      try { localStorage.setItem("magpie.routingGroupPlans", gPlansHid ? "hidden" : "shown"); } catch {}
+      b.textContent = t(gPlansHid ? "Show plans" : "Hide plans");
+      gList.classList.toggle("rt-noplans", gPlansHid);
+    };
+    return b;
+  }
+  function drawGroups(filterOnly = false) {
+    // Only input uses this path. Data, language, settings and quota redraws
+    // replace the row cache, so its event handlers always use current data.
+    filterOnly = filterOnly && groupRowsFor === groups && groupRowsLocale === locale;
+    if (!filterOnly) {
+      groupRows = new Map();
+      groupRowsFor = groups;
+      groupRowsLocale = locale;
+      groupImportRow = null;
+    }
+    if (!filterOnly) groupsQuotas = typeof quotas === "undefined" ? undefined : quotas;
     // the ones switched off are listed after the ones on, each part in the
     // order the user set (justacati on X); moving one still moves it in
     // that order, which is the one agents' pickers show
@@ -6593,60 +6743,67 @@ function routingPage(part) {
     const shown = words.length ? all.filter((g) => gEdit?.id === g.id || groupMatches(g, words)) : all;
     if (gSel) gSel = new Set([...gSel].filter((id) => shown.some((g) => g.id === id)));
     if (gSel && !all.length) gSel = null;
-    // the page's toolbar (11-06): the filter and how many there are on the
-    // left, what makes or picks groups on the right, New group the one
-    // filled button
-    const newBtn = el("button", "text primary rt-gnew");
-    newBtn.type = "button";
-    newBtn.dataset.feature = "groups"; // off with them, as the note says
-    newBtn.append(svg(PLUS, 11, 1.8), el("span", "", t("New group")));
-    newBtn.title = t("Make a routing group of any models you like — agents pick it as one model");
-    newBtn.onclick = () => newGroup();
-    gBack.lastChild.textContent = t("Routing"); // in the language now
-    const head = [gBack];
-    if (all.length > 1 || gQ.value) {
-      gQ.placeholder = t("Filter groups and models");
-      gQ.setAttribute("aria-label", gQ.placeholder);
-      head.push(gQ);
-    }
-    if (all.length) head.push(el("span", "note rt-gcount", t("{n} groups · {m} on", { n: all.length, m: all.filter((g) => !g.disabled).length })));
-    head.push(el("span", "grow"));
-    // templates: a group for a common need made of the user's own models
-    // in a click (provider.Templates). Cards while the user has no group of
-    // their own, a menu by New group after
     const own = all.some((g) => !g.auto), tpls = groups.templates || [];
-    if (!gSel) {
-      if (own && tpls.length) head.push(templateButton(tpls));
-      const imp = el("button", "text rt-gimportbtn", t("Import"));
-      imp.type = "button";
-      imp.title = t("Add a routing group someone shared from their magpie");
-      imp.setAttribute("aria-expanded", gImport ? "true" : "false");
-      imp.onclick = () => gImport ? closeImport() : openImport();
-      head.push(imp);
-      // several removed at once: pick them, then Remove
-      if (all.length > 1) {
-        const pick = el("button", "text rt-gselect", t("Select"));
-        pick.title = t("Pick several groups to remove together");
-        pick.onclick = async () => {
-          if (groupDirty() && !(await confirmDiscard())) return;
-          gEdit = null; gSel = new Set(); renderGroups();
-        };
-        head.push(pick);
+    if (!filterOnly) {
+      // the page's toolbar (11-06): the filter and how many there are on the
+      // left, what makes or picks groups on the right, New group the one
+      // filled button
+      const newBtn = el("button", "text primary rt-gnew");
+      newBtn.type = "button";
+      newBtn.dataset.feature = "groups"; // off with them, as the note says
+      newBtn.append(svg(PLUS, 11, 1.8), el("span", "", t("New group")));
+      newBtn.title = t("Make a routing group of any models you like — agents pick it as one model");
+      newBtn.onclick = () => newGroup();
+      gBack.lastChild.textContent = t("Routing"); // in the language now
+      const head = [gBack];
+      if (all.length > 1 || gQ.value) {
+        gQ.placeholder = t("Filter groups and models");
+        gQ.setAttribute("aria-label", gQ.placeholder);
+        head.push(gQ);
       }
-      head.push(newBtn);
+      if (all.length) head.push(el("span", "note rt-gcount", t("{n} groups · {m} on", { n: all.length, m: all.filter((g) => !g.disabled).length })));
+      head.push(el("span", "grow"));
+      if (!gSel) head.push(plansButton());
+      // templates: a group for a common need made of the user's own models
+      // in a click (provider.Templates). Cards while the user has no group of
+      // their own, a menu by New group after
+      if (!gSel) {
+        if (own && tpls.length) head.push(templateButton(tpls));
+        const imp = el("button", "text rt-gimportbtn", t("Import"));
+        imp.type = "button";
+        imp.title = t("Add a routing group someone shared from their magpie");
+        imp.setAttribute("aria-expanded", gImport ? "true" : "false");
+        imp.onclick = () => gImport ? closeImport() : openImport();
+        head.push(imp);
+        // several removed at once: pick them, then Remove
+        if (all.length > 1) {
+          const pick = el("button", "text rt-gselect", t("Select"));
+          pick.title = t("Pick several groups to remove together");
+          pick.onclick = async () => {
+            if (groupDirty() && !(await confirmDiscard())) return;
+            gEdit = null; gSel = new Set(); renderGroups();
+          };
+          head.push(pick);
+        }
+        head.push(newBtn);
+      }
+      // the filter stays in the page as the rest of the row is drawn again,
+      // so the key being typed into it lands once (#1055)
+      replaceKeeping(gHead, head);
+      drawFound();
+      drawNames();
+      drawDefaults();
     }
-    // the filter stays in the page as the rest of the row is drawn again,
-    // so the key being typed into it lands once (#1055)
-    replaceKeeping(gHead, head);
-    drawFound();
-    drawNames();
-    drawDefaults();
     const rows = [];
     if (!gSel && !own && !words.length && tpls.length) rows.push(templateCards(tpls));
     if (gSel) rows.push(selectBar(shown));
-    if (gImport && !gSel) rows.push(importBox());
-    if (gEdit && !gEdit.id) rows.push(groupEditor(null));
-    for (const g of shown) rows.push(rowOrFlag(g, () => gSel ? pickedRow(g) : gEdit?.id === g.id ? groupEditor(g) : groupRow(g)));
+    if (gImport && !gSel) { groupImportRow ||= importBox(); rows.push(groupImportRow); }
+    const rowFor = (id, draw) => {
+      if (!groupRows.has(id)) groupRows.set(id, draw());
+      return groupRows.get(id);
+    };
+    if (gEdit && !gEdit.id) rows.push(rowFor("", () => groupEditor(null)));
+    for (const g of shown) rows.push(rowFor(g.id, () => rowOrFlag(g, () => gSel ? pickedRow(g) : gEdit?.id === g.id ? groupEditor(g) : groupRow(g))));
     if (!rows.length && all.length) rows.push(el("div", "none rt-gnone", t("No group or model matches “{q}”", { q: gQ.value.trim() })));
     if (!rows.length) rows.push(el("div", "none rt-gnone", groups.found === false
       ? t("No group yet. New group makes one of any models you like.")
@@ -6673,10 +6830,12 @@ function routingPage(part) {
       rows.push(h);
     }
     // the import box's text stays in the page as the list is drawn again
-    const was = slotsOf();
+    const plans = gHead.querySelector(".rt-gplans");
+    if (plans) plans.hidden = !rows.some((r) => r.querySelector?.(".rt-gquota"));
+    gList.classList.toggle("rt-noplans", gPlansHid);
+    const was = filterOnly ? null : slotsOf();
     replaceKeeping(gList, rows);
-    morphSlots(was);
-    renderPools();
+    if (!filterOnly) { morphSlots(was); renderPools(); }
   }
   // A group's row opens into its editor and folds back into it, as a cell
   // does on iOS (the owner, 10-23): its slot goes from the height it had to
@@ -7744,7 +7903,7 @@ function routingPage(part) {
             fb.setAttribute("aria-pressed", String(on));
             // on a provider the user added (provider.OwnFast, #1615) it is
             // only asked for: magpie can't know the provider serves it
-            fb.title = ultra ? t("Sent Ultrafast where the account offers it, and fast where it doesn't, whatever the agent asks. Click to send it at the usual speed")
+            fb.title = ultra ? t(m.ownFast ? "Asked for service_tier \"ultrafast\" whatever the agent asks, where your provider serves it. One that turns it away is asked without it. Click to send it at the usual speed" : "Sent Ultrafast where the account offers it, and fast where it doesn't, whatever the agent asks. Click to send it at the usual speed")
               : m.ownFast
               ? (on ? t("Asked for OpenAI's fast mode (service_tier \"priority\") whatever the agent asks: quicker, at a higher price, where your provider serves it. One that turns it away is asked without it") : t("Sent as the agent asks; click to ask your provider for OpenAI's fast mode (service_tier \"priority\")"))
               : (on ? t(m.ultraOK ? "Sent in its vendor's fast mode whatever the agent asks: quicker, at a higher price. Click to send it Ultrafast, where the account offers it" : "Sent in its vendor's fast mode whatever the agent asks: quicker, at a higher price") : t("Sent at its vendor's usual speed; click to send it in fast mode"));
@@ -9116,6 +9275,8 @@ function routingPage(part) {
   // on either page: Routing names the groups too (its stage, the story)
   for (const v of [$("#view-routing"), gView()]) new MutationObserver(() => { if (!v.hidden) loadGroups(true); }).observe(v, { attributes: true, attributeFilter: ["hidden"] });
   window.addEventListener("focus", () => { if (shown() || gShown()) loadGroups(true); });
+  for (const v of [$("#view-routing"), gView()]) new MutationObserver(keepGroupCaches).observe(v, { attributes: true, attributeFilter: ["hidden"] });
+  document.addEventListener("visibilitychange", keepGroupCaches);
   // the groups' rows say what is left of their accounts, drawn again when
   // the Usage page's readings come while the page is open (Routing's own
   // second does it there); the page may be open already, from ?view=groups

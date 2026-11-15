@@ -489,6 +489,16 @@ body.side-nav #nav > button[data-plugin-page]:is(:hover, .dragging)::before { op
 #nav.sorting > button[data-plugin-page] { transition: transform .22s cubic-bezier(.22, 1, .36, 1); }
 #nav > button[data-plugin-page].dragging { position: relative; z-index: 2; background: var(--card); box-shadow: 0 6px 18px rgba(20, 22, 30, .12), 0 0 0 1px var(--line); transition: none; }
 body.side-nav #nav button.has-dot::after { top: 50%; right: 10px; margin-top: -3px; width: 6px; height: 6px; }
+/* the row whose tabs are listed folds them (navicons.js navFold): a disclosure
+   chevron, as a Mac sidebar's, turned down to its list, or up for
+   Settings', which opens above its row */
+.nav-fold { display: none; }
+body.side-nav :is(#nav button, #prefs).can-fold > .nav-fold { display: flex; flex: none; margin-left: auto; transition: transform .2s var(--ease-out); }
+body.side-nav :is(#nav button, #prefs).can-fold > .nav-fold > svg { width: 12px; height: 12px; margin: 0; color: var(--muted); }
+body.side-nav #nav button.can-fold[aria-expanded="true"] > .nav-fold { transform: rotate(90deg); }
+body.side-nav #prefs.can-fold[aria-expanded="true"] > .nav-fold { transform: rotate(-90deg); }
+body.side-nav #nav button.has-dot.can-fold::after { right: 28px; }
+@media (prefers-reduced-motion: reduce) { .nav-fold { transition: none !important; } }
 /* the open page's tabs, under it on a thin line */
 .nav-sub { position: relative; display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px 16px; padding-left: 8px; }
 .nav-sub.moving { overflow: hidden; }
@@ -820,6 +830,13 @@ body.window .row.agent .who .ag-cli { flex: 0 1 auto; overflow: hidden; }
    and gone where the pill keeps only its arrow */
 .ag-app { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @container (max-width: 250px) { body.window .row.agent .ag-app { display: none; } }
+/* beside the app's version the pill says "Update CLI to …", longer, so
+   there it keeps only its arrow, and the app's version goes, sooner */
+@container (max-width: 360px) {
+  body.window .row.agent .ag-cli.with-app .ag-up { padding: 0 6px; }
+  body.window .row.agent .ag-cli.with-app .ag-up > span,
+  body.window .row.agent .ag-cli.with-app .ag-app { display: none; }
+}
 .ag-offpath { flex: 0 1 auto; min-width: 0; }
 @container (max-width: 250px) { body.window .row.agent .ag-offpath { display: none; } }
 .ag-here { flex: 0 1 auto; min-width: 0; }
@@ -1052,6 +1069,16 @@ body.panel .row.pref.flash { border-radius: 10px; }
 .qt-name { font-weight: 400; color: var(--muted); }
 .qt-reset { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .qt .qt-msg { color: var(--muted); }
+/* a provider's accounts under its row, folded until it is clicked (#6740) */
+.qt-group { cursor: pointer; }
+.qt-fold { padding: 0; font: inherit; color: inherit; text-align: left; background: none; border: 0; cursor: pointer; }
+.qt-fold .chev { display: inline-flex; width: 10px; color: var(--muted); }
+.qt-fold[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.qt .qt-count { color: var(--muted); white-space: nowrap; text-transform: none; }
+/* beside a provider's chevron, every row's icon and plan line up */
+.qt.grouped tr:not(.qt-group) .qt-id::before { content: ""; width: 10px; flex: none; }
+.qt.grouped .plan { margin-left: 37px; }
+.qt .qt-kid .qt-sub > .plan:first-child { margin-top: 0; }
 .subscription-card { padding: 10px 12px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); min-width: 0; }
 /* a card's captions (resets, the period, a curve's dates) read at 4.5:1 or
    better on the card, below its figures (Jiabubu on Discord): light's
@@ -1087,8 +1114,11 @@ body.panel .row.pref.flash { border-radius: 10px; }
 .subscription-account.brief { margin-bottom: 4px; }
 .quota-acct-fold { align-self: center; display: inline-grid; place-items: center; flex: none; width: 18px; height: 18px; margin: -2px -5px -2px -3px; padding: 0; border-radius: 4px; color: var(--faint); transition: background .12s, color .12s; }
 .subscription-account :is(.user, .acct-eye) + .quota-acct-fold { margin-left: auto; }
+/* one account's card folds from its head's end, before its ⋯ (PILIHU2023 on X) */
+.subscription-head > .quota-acct-fold { margin-left: auto; }
+.subscription-head > :is(.plan, .quota-every, .quota-sum) ~ .quota-acct-fold { margin-left: 2px; }
 .quota-acct-fold:hover { background: var(--pill); color: var(--fg-2); }
-.quota-acct-fold svg { transform: rotate(180deg); transition: transform .15s ease-out; }
+.quota-acct-fold svg { transform: rotate(180deg); transition: transform .15s var(--ease-out); }
 .quota-acct-fold[aria-expanded="false"] svg { transform: none; }
 @media (prefers-reduced-motion: reduce) { .quota-acct-fold svg { transition: none; } }
 .quota-windows.brief { row-gap: 5px; }
@@ -2773,9 +2803,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 #connectNote.brief .copy { width: 20px; height: 20px; }
 
 /* the connect card: label column, then the value with a copy button */
-.connect { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: start; padding: 12px 14px 14px; }
+.connect { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px 14px; align-items: first baseline; padding: 12px 14px 14px; }
 .connect > div { min-width: 0; }
-.connect label { font-size: 12px; color: var(--fg-2); text-align: right; padding-top: 4px; }
+.connect label { font-size: 12px; color: var(--fg-2); text-align: right; }
 .connect .hint { font-size: 11px; color: var(--fg-2); margin-top: 4px; line-height: 1.4; }
 .connect .val { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 9px; border-radius: 7px; background: var(--pill); box-shadow: inset 0 0 0 1px var(--line-2); max-width: 100%; }
 .connect .val code { font-size: 12px; color: var(--fg); user-select: text; -webkit-user-select: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2784,6 +2814,10 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .connect .stack { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 @media (max-width: 520px) {
   .connect { grid-template-columns: 48px minmax(0, 1fr); column-gap: 8px; padding-left: 10px; padding-right: 10px; }
+  /* its options wrap rather than scroll: WebKit gives a baseline row
+     holding a scroller 6px more each time its bar comes and goes, and the
+     page moved under the reader's click (connect-snippet-shell.test.cjs) */
+  .connect .segs { flex-wrap: wrap; }
 }
 /* Change key (#1869) looks like the copy button beside it, but isn't one */
 .copy, .key-edit { width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); flex: none; transition: background .12s, color .12s; }
@@ -3613,12 +3647,32 @@ body:not(.side-nav) #addSheet > .row-head.stuck::before { box-shadow: 0 1px 0 va
 /* the label column is as wide as its longest label, so that label starts
    at the padding and the fields end the same way on the right (the
    owner, 10-29: a 72px column left the left edge twice the right) */
-.editor { padding: 16px 18px 14px; display: grid; grid-template-columns: fit-content(132px) minmax(0, 1fr); gap: 10px 14px; align-items: start; }
+.editor { padding: 16px 18px 14px; display: grid; grid-template-columns: fit-content(132px) minmax(0, 1fr); gap: 10px 14px; align-items: first baseline; }
+/* A field's name and its control share a line: each row of an editor's
+   grid sets them on their first baseline, so the name sits level with
+   whatever the control is, a box, a tick, a row of options or a list's
+   first line, with no padding guessed for one kind of control (the
+   owner, 11-12: Free for me and Redaction sat 4px under their ticks, the
+   second time). form-align.test.cjs measures every editor's rows. The
+   grids under it (a dialog's body, Advanced's rows) and Connect do the same.
+   A row that starts with a text field is the exception, set at its top, its name
+   on the field's first line: WebKit lays a baseline row's items out again on
+   every layout, and a focused field laid out again scrolls itself into
+   view, so the page jumped back to a new group's name as the reader
+   scrolled to Add (group-from-model-add.test.cjs). app.js's settleRows
+   marks such rows .at-top: a :has(+ …) rule here held WebKit ~9s on
+   Codex's editor (provider-pass-errors.test.cjs). */
+:where(:is(.editor, .modal .editor.framed > .ebody, .editor .more .inner, .connect) > .at-top) { align-self: start; }
+:where(:is(.editor, .modal .editor.framed > .ebody, .editor .more .inner, .connect) > label.at-top:not(.tick)) { padding-top: calc((var(--field-h, 29px) - 17px) / 2); }
+/* a JSON box's first line is 1px of border and 7px of padding down, 18px tall */
+:where(:is(.editor, .modal .editor.framed > .ebody, .editor .more .inner, .connect) > label.by-json:not(.tick)) { padding-top: 8.5px; }
 .editor .ehead { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-bottom: 8px; margin-bottom: 2px; border-bottom: 1px solid var(--line-2); }
 .editor .ehead .ic { width: 20px; height: 20px; }
 .editor .icon-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.editor .icon-pick .icon-now { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; display: grid; place-items: center; }
-.editor .icon-pick .icon-now .ic { width: 20px; height: 20px; }
+/* a line of text 30px tall, the icon in its middle: its baseline is a text
+   line's, so the field's name sits level with the box's middle */
+.editor .icon-pick .icon-now { width: 32px; height: 32px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; display: block; text-align: center; font-size: 12px; line-height: 30px; }
+.editor .icon-pick .icon-now .ic { width: 20px; height: 20px; vertical-align: middle; }
 .editor .icon-pick > input { flex-basis: 100%; }
 .editor .icon-pick .icon-grid { flex-basis: 100%; display: grid; grid-template-columns: repeat(auto-fill, 34px); gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; max-height: 196px; overflow-y: auto; }
 .editor .icon-pick .icon-grid button { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; }
@@ -3627,8 +3681,7 @@ body:not(.side-nav) #addSheet > .row-head.stuck::before { box-shadow: 0 1px 0 va
 .editor .icon-pick .icon-grid .ic { width: 18px; height: 18px; }
 .editor .ehead b { font-weight: 600; }
 .editor .ehead .note { font-size: 12px; color: var(--muted); }
-.editor label { font-size: 12px; color: var(--fg-2); text-align: right; padding-top: 5px; }
-.editor label.by-list { padding-top: 11px; }
+.editor label { font-size: 12px; color: var(--fg-2); text-align: right; }
 .editor .hint { font-size: 11px; color: var(--fg-2); margin-top: 4px; }
 /* a provider's own proxy (#237): the address beside the options, and no
    room at all while Custom isn't picked (an empty strip under the options
@@ -3827,7 +3880,7 @@ body:not(.side-nav) #addSheet > .row-head.stuck::before { box-shadow: 0 1px 0 va
 .editor .more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* its labels are longer (Anthropic 地址, Responses-URL): their column takes
    the longest, on one line, rather than wrap a last 址 under it (#875) */
-.editor .more .inner { display: grid; grid-template-columns: minmax(var(--ed-lab, 72px), max-content) minmax(0, 1fr); gap: 10px 14px; align-items: start; padding-top: 8px; }
+.editor .more .inner { display: grid; grid-template-columns: minmax(var(--ed-lab, 72px), max-content) minmax(0, 1fr); gap: 10px 14px; align-items: first baseline; padding-top: 8px; }
 .editor .more .inner label { white-space: nowrap; }
 .editor .warnbox { grid-column: 1 / -1; font-size: 12px; line-height: 1.5; color: var(--fg); background: color-mix(in srgb, var(--amber) 12%, transparent); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); border-radius: 8px; padding: 8px 10px; }
 .editor .warnbox.soft { background: none; color: var(--amber); border: 0; padding: 0 0 0 var(--ed-at, 86px); }
@@ -4265,6 +4318,10 @@ input.words.window-in { width: 96px; font-variant-numeric: tabular-nums; }
 /* the masking rules' add row: its words in full, then on a line of their
    own a name, prefix or regex, the match taking the room left, Add */
 .row.pref.rule-row { flex-wrap: wrap; row-gap: 8px; }
+/* three channels: the switch goes under its name when the row is narrow */
+.row.pref.update-channel-row { flex-wrap: wrap; row-gap: 8px; }
+.row.pref.update-channel-row .who { flex: 1 1 14em; min-width: 0; }
+.prefs .row.pref.update-channel-row .val { max-width: 100%; }
 .row.pref.rule-row .who { flex: 1 1 100%; }
 .row.pref.rule-row .sub { white-space: normal; }
 /* Busy models last: six choices don't fit beside their words in a phone-wide
@@ -4588,7 +4645,7 @@ body.window.mac .modal-grip { top: calc(-1 * var(--grip-h)); }
 .modal .editor.framed { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 0; min-height: 0; overflow: hidden; }
 .modal .editor.framed > .ebody {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-  display: grid; grid-template-columns: inherit; gap: 10px 14px; align-items: start; padding: 14px 18px;
+  display: grid; grid-template-columns: inherit; gap: 10px 14px; align-items: first baseline; padding: 14px 18px;
 }
 .modal .editor.framed > .ehead, .modal .editor.framed > .bar { flex: none; min-height: 48px; margin: 0; padding: 0 18px; }
 .modal .editor.framed > .ehead { border-bottom: 1px solid var(--line-2); }
@@ -4740,15 +4797,17 @@ body.panel .modal { padding: 16px 12px; }
   body.web .row.stat.acts { grid-template-columns: 20px minmax(0, 1fr) auto auto; }
   body.web .row.stat.acts .num, body.web .row.stat.acts .share { grid-column: 2 / 5; }
   body.web .row.stat .us-more, body.web .row.stat .us-unhide { grid-column: 4; grid-row: 1; margin: 0; }
-  body.web .connect { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  body.web .connect { grid-template-columns: minmax(0, 1fr); gap: 6px; align-items: start; }
   body.web .connect label { text-align: left; margin-top: 6px; }
   body.web .connect .segs { flex-wrap: wrap; }
   body.web .connect .val { height: auto; min-height: 44px; }
   body.web input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
   body.web textarea, body.web select { font-size: 16px; min-height: 44px; }
+  body.web { --field-h: 44px; } /* the height above, for the names beside such a field */
   body.web .modal { padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
-  body.web .modal .editor.framed > .ebody, body.web .editor { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px; }
-  body.web .editor label { text-align: left; padding-top: 8px; }
+  body.web .modal .editor.framed > .ebody, body.web .editor { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px; align-items: start; }
+  body.web .editor label { text-align: left; }
+  body.web :is(.editor, .modal .editor.framed > .ebody) > label:where(:not(.tick)) { padding-top: 8px; }
   body.web .editor .segs { max-width: 100%; flex-wrap: wrap; }
   body.web .editor .proxy-row { flex-wrap: wrap; }
   body.web .editor .proxy-row input.proxy-url { flex-basis: 100%; }
@@ -5463,7 +5522,7 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 
 /* a provider's rate windows (#2463): the editor's rows, a day chip each,
    a span and a rate beside them */
-.rate-windows > .rate-win:last-child + button { align-self: start; }
+.rate-windows > button { align-self: start; }
 .rate-win { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .rate-win .day-chips { display: flex; gap: 2px; }
 .rate-win .day-chip { min-width: 24px; height: 24px; padding: 0 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--muted); font: inherit; font-size: 11px; }
