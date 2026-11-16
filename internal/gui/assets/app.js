@@ -6510,12 +6510,18 @@ function renderMovable() {
   const ids = ps.map((p) => p.id).join(",");
   const unmoved = providers.unmoved || [], wd = providers.withdrawn || [];
   const noSubs = !!(state?.settings?.noAccountDiscovery || prefs?.noAccountsEnv);
-  box.hidden = (!ps.length || hid === ids) && !unmoved.length && !wd.length && !noSubs;
+  // the line moving Antigravity's accounts to agy is in agymove.js,
+  // imported when there are any (@tongzhenbao on X); while it is drawn it
+  // says what the withdrawn plugin's line would, with the Move itself
+  const agy = providers.agyMove?.length && (window.agyMoveLine ? agyMoveLine() : void import("./agymove.js").then(renderMovable, () => {}));
+  box.hidden = (!ps.length || hid === ids) && !unmoved.length && !wd.length && !noSubs && !agy;
   if (noSubs) box.append(discoveryOffLine());
   for (const p of unmoved) box.append(unmovedLine(p));
+  if (agy) box.append(agy);
   // a plugin magpie gives nobody new (plugin.WithdrawnOf): it still
   // works, and its user is told the risk and what to use instead
   for (const w of wd) {
+    if (agy && w.id === "antigravity") continue;
     const go = el("button", "text action", t("Use {name}", { name: w.instead }));
     go.onclick = () => openPlugins("agy");
     box.append(depLine("withdrawn", t("{name}'s plugin can get your account suspended", { name: w.name }), t("Google suspends accounts it sees used outside its own app. {name} runs your own agy instead.", { name: w.instead }), go));
@@ -7103,11 +7109,12 @@ function renderArchive() {
   }
   b.classList.toggle("on", !!a.on);
   b.querySelector(".lib-switch").classList.toggle("on", !!a.on);
-  b.setAttribute("aria-checked", a.on ? "true" : "false");
+  b.setAttribute("aria-checked", !!a.on);
   b.disabled = archiveSaving;
   b.querySelector(".led-arch-name").textContent = t("Request archive");
-  b.title = a.bucket ? t("Keeps each call’s headers and bodies, secrets taken out, in {where}", { where: a.bucket })
-    : t("Keeps each call’s headers and bodies, secrets taken out, on this computer in {where}, the oldest removed past {size}", { where: a.folder || "", size: fmtBytes(a.cap || 0) });
+  const o = { where: a.bucket || a.folder, size: fmtBytes(a.cap) };
+  b.title = a.bucket ? t("Keeps each call’s headers and bodies, secrets taken out, in {where}, up to {size}", o)
+    : t("Keeps each call’s headers and bodies, secrets taken out, on this computer in {where}, the oldest removed past {size}", o);
   let err = box.querySelector(".led-arch-err");
   if (a.on && a.error) {
     if (!err) { err = el("span", "led-arch-err"); box.prepend(err); }

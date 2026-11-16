@@ -439,23 +439,6 @@ ok except gateway" stops being a normal run record.
   package.
 - Seen 1× (2026-10-14).
 
-**One full suite runs on a machine at a time.**
-- On 10-16 one session ran three suites at once (a 150m agent and
-  gateway run, a full ./... run and an agent-only run) beside others, at
-  load 300 to 400. Every full suite timed out, so no record said the
-  suite passed, and the Cursor mover's one-line min waited ~3h behind
-  them (#2557).
-- Done right from the evening on: a751f5282 and later commits ran
-  "through suite-lock", one suite per machine, and their records say ok.
-- 10-17: at 10:07 the box had three `go test ./...` runs, ~35 GUI
-  runners and over 100 browsers from several sessions, at load 313.
-  d4a1b9baa's GUI run was killed at its 30s bar, ebf3f48f7's shared Go
-  cache had files trimmed mid-run by another run, internal/agent took
-  50 to 58 minutes (#2544), and dccfefdf7's eight AppKit tests were
-  killed (#2645). The rule lives in this file only; a lock every suite
-  goes through would hold it.
-- Seen 2× (2026-10-16, 2026-10-17).
-
 **A quiet `go test ./...` log is not a hang until a package's own time
 says so.** go test prints packages in order, so one slow package holds
 back every line after it, and the log moves in bursts.
@@ -482,6 +465,20 @@ back every line after it, and the log moves in bursts.
   the run has ended. A change that adds a box that scrolls on its own
   runs every GUI file that wheels the page (`reach`, `wheelTo`).
 - Seen 2× (2026-10-17, 2026-10-28).
+
+**A red only CI's OS shows is probed on CI's runners, with the
+suspect switched on and off, not rerun.** Start from what changed in
+that system's code the day before the red first came.
+- EBADF on plain file reads, writes and closes in internal/sessions was
+  red on macOS CI from 11-13 to 11-16 and filed twice (#6368, #6785).
+  mote and mica run macOS 27 and never showed it. The day before the
+  first red, 6f3e76626 had made the FSEvents stream with
+  kFSEventStreamCreateFlagWatchRoot. One probe run on macos-14, -15 and
+  -latest (#6795), with the flag on, off, on, off, gave 916 EBADF on and
+  0 off. 0522bf84f dropped the flag.
+- A system flag that watches more than it needs is a cost: WatchRoot's
+  one job (word of a root renamed) is an os.SameFile on the next Watch.
+- Seen 1× (2026-11-16).
 
 **Windows CI only compiles the tests, so a Windows-only red shows
 nowhere.** Run the package on the Windows box before calling a Windows
@@ -1120,6 +1117,10 @@ standards since 10-18, widened to a worktree and its logs. See
 
 ## Moved to the code standards
 
+- **One full suite runs on a machine at a time** (10-16, 10-17, 11-16).
+  On 11-16 64c426158 ran the GUI suite on mica beside another session's
+  full suite, was pushed with it still running, and named its 90 reds by
+  page, not by issue.
 - **A check that a value is gone looks past text magpie or the test
   made up** (10-10, 11-10, 11-15). On 11-15 TestMoreKinds checked that
   the user name "ops" was gone, and the made-up name for it, eight
