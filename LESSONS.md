@@ -431,6 +431,16 @@ and its failure message counts against what it compared.**
   the byte where the bodies part and what each side has there.
 - Seen 1× (2026-11-15).
 
+**A test that bounds a count of work is run at -cpu 1 too.**
+- 9dcec6751 (11-16) bounded the request archive's LISTs at about 45 for
+  200 calls and measured 39 on a many-core box. On one CPU every upload
+  landed during a prune pass and ran another that listed the bucket
+  again for nothing: 44 to 68 LISTs, red on macOS CI at 50f7a8e01. The
+  test was right; the code did the extra work (fixed in 39e4b9934).
+- Run such a test with `-count=10 -cpu 1,4` before calling its bound
+  measured.
+- Seen 1× (2026-11-16).
+
 **A full run gives the slow packages room.** `go test ./...` at the default
 10m timeout times out in internal/gateway (#2108), and under load in
 internal/provider and internal/agent. Use -timeout 45m, so "every package
@@ -486,7 +496,13 @@ failure "the same on main".
 - TestCursor was red on Windows for 3 days, from 585f7f7d until #1248.
 - 5d0c1dca's 16 and 76 Windows failures were called the same as main.
   Neither was filed. #923 is the open work to run more of the suite there.
-- Seen 1× (2026-10-08).
+- 11-16: filed is not owned. 023a56373 and c6a67dd41 each ran
+  internal/gui on the Windows box and shipped past 10 or 11 reds,
+  "red the same at origin/main" and open. #5928 had sat six days with
+  no comment; it was a one-line test fix (5bd13b802). Before naming a
+  Windows red as filed, read its issue: if nobody has it and the fix is
+  small, it is yours.
+- Seen 2× (2026-10-08, 2026-11-16).
 
 **What telemetry sends is an allow-list, and a change to what is sent
 re-derives every place that discloses it.**
@@ -913,6 +929,11 @@ cause:
     in 25ad34f42). Twice in three days: a change under site/public/docs
     ends with `node llms-full.mjs` and `node --test site/*.test.mjs`
     from the repo root, as test.yml runs it.
+    A third time 11-16: 9dcec6751 added the S3 archive cap to the docs
+    and ran neither generator. cli (linux/amd64) went red at 023a56373
+    on llms-full.txt and on public/search/*.json, the index b70c45048
+    added on 11-15 (fixed in f5f27070a). Docs pages now feed two
+    generated files: run `node search-index.mjs` too.
   - 10-28: of main's last 58 Test runs, 49 were cancelled by the next
     push. 0b99b8fbe's new allocation bound went red in macOS's Race job
     (sync.Pool lets go under -race) at 25df3187b, the first run after it
@@ -1004,6 +1025,20 @@ failure behind it.**
 - Check each package with `npm view --prefer-online`, not the run's
   colour, until the known red is fixed.
 - Seen 1× (2026-10-17).
+
+**A GUI suite with hundreds of known reds is not a baseline.** "The same
+files fail at base" passes any change while main carries that many.
+- 8608ce024 (11-16) recorded 1041 GUI fails at its head and 971 at
+  origin/main, and shipped on "same files". Run alone on mica at
+  8608ce024 (load 9), four of those files were 8 of 60 red
+  (key-replace, plugin-card-update, usage-fold), each already filed:
+  #4126, #3079, #4790, #6003. On 11-16, 465 issues titled "gui tests"
+  were open, none assigned, and 2 had been closed since 11-13.
+- Filing a red is not owning it. A change that names GUI reds takes one
+  of the open ones, or fixes the file it touched. Measure a change by
+  the reds it adds, test by test. A matching file count at base is not
+  that measure.
+- Seen 1× (2026-11-16).
 
 **Keep the issue open until the reporter's case works. Reopen when they say
 it doesn't.**

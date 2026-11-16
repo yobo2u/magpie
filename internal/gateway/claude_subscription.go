@@ -61,6 +61,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/bridgesid"
 	"github.com/yetone/magpie/internal/catalog"
@@ -343,6 +344,21 @@ type subscriptionRun struct {
 	// client never sees
 	search     func(ctx context.Context, query string) (string, []Hit, error)
 	searchName string
+	// advice answers Claude Code's advisor (advisor_serve.go), which the
+	// client is told of as Anthropic's server tells it: for the request
+	// the run now answers, adviceReq, its nth call made after said. The
+	// run's agent is offered magpie's tools only, never the server tool.
+	// adviceSaid is the reply's words so far, and advised the calls of
+	// it, both counted from the request. asker is the caller of the
+	// request the run answers now: its advisor and web search are asked
+	// as it, held to its key's models, accounts and limits, never as the
+	// run's own MCP call from this computer, which carries no key.
+	// Under mu.
+	advice     func(ctx context.Context, q *Request, said []Part, c Part, n int) (Part, Event)
+	adviceReq  *Request
+	asker      access.Identity
+	adviceSaid []string
+	advised    int
 	// answerName is the interactive mode's answer tool for a request with
 	// a JSON schema (claude_tui_schema.go), its calls checked against
 	// answerSchema, and answerArgs the input of the one that fit, until the
@@ -1042,9 +1058,6 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		// tokens a check on the subscription (0xAncientTwo)
 		args = append(args, "--thinking", "disabled")
 	}
-	if len(req.Format.schema()) > 0 {
-		args = append(args, "--json-schema", string(cliSchema(req.Format.schema())))
-	}
 	// in the caller's own folder when it says which it is and it is one
 	// here (clientWorkDir): Claude Code tells the model the folder it runs
 	// in as its working directory, and a model told magpie's folder wrote
@@ -1244,6 +1257,28 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		turn = release
 	}
 	defer turn()
+	// a schema is the request's, of any size: -p is given one that fits
+	// a command line there (startValueMax), and a larger one with its
+	// initialize (initSchema), as the Agent SDK hands it over; Linux
+	// refuses to start a program with an argument over 128KiB, "argument
+	// list too long" (#6848). The interactive mode is given none: its
+	// answer tool has the schema, in the run's tools file
+	var initSchema json.RawMessage
+	if schema := cliSchema(req.Format.schema()); len(schema) > 0 && !tui {
+		if len(schema) <= startValueMax {
+			args = append(args, "--json-schema", string(schema))
+		} else {
+			// an initialize's schema Claude Code can't use is passed
+			// over, structured output off with no word of it (a real
+			// 2.1.316), where the flag's exits; it is checked here, a
+			// 400 as the flag's is (#3036)
+			if _, err := compileAnswerSchema(schema); err != nil {
+				cleanup()
+				return nil, nil, &cliSchemaRefused{"Claude Code can't use the request's JSON schema: " + err.Error()}
+			}
+			initSchema = schema
+		}
+	}
 	noteClaudeRun(code)
 	noteEntry(ctx, tui, code)
 	var cmd *exec.Cmd
@@ -1281,7 +1316,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	guard := ""
 	if tui {
 		if len(req.Safeguards) > 0 {
-			env = append(env, "CLAUDE_CODE_EXTRA_BODY="+claudeExtraBody(req.Safeguards, ""))
+			env = append(env, "CLAUDE_CODE_EXTRA_BODY="+claudeExtraBody(startSafeguards(req.Safeguards), ""))
 		}
 		guard = filepath.Join(tmp, "guard.json")
 		if writeGuard(guard, guardBody(req.Safeguards, "")) == nil {
@@ -1378,7 +1413,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		run.readOutput(stdout)
 	}()
 
-	if len(req.Safeguards) > 0 || from != nil || run.clientMarks || tui {
+	if len(req.Safeguards) > 0 || from != nil || run.clientMarks || tui || initSchema != nil {
 		// Initialize the SDK before applying settings. Send the potentially
 		// large context over stdin rather than an environment entry. A
 		// Claude Code resumed from a saved session answers it only once
@@ -1394,7 +1429,11 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		if tui {
 			wait = tuiInitWait
 		}
-		if err := run.cliControlWithin(ctx, map[string]any{"subtype": "initialize"}, wait); err != nil {
+		hello := map[string]any{"subtype": "initialize"}
+		if initSchema != nil {
+			hello["jsonSchema"] = initSchema
+		}
+		if err := run.cliControlWithin(ctx, hello, wait); err != nil {
 			run.abort()
 			if tui && client && configDir == "" && run.saidOnEnd(claudetui.Untrusted) {
 				kept = true
@@ -1639,6 +1678,29 @@ func claudeExtraBody(raw json.RawMessage, tail string) string {
 	}
 	b, _ := json.Marshal(body)
 	return string(b)
+}
+
+// startValueMax bounds a value of a request's on a run's command line
+// or in its environment (claudetui.StartValueMax, #6848).
+const startValueMax = claudetui.StartValueMax
+
+// startSafeguards are the safeguards an interactive run is started with
+// in CLAUDE_CODE_EXTRA_BODY: all of them when they fit startValueMax.
+// Larger ones are in the run's guard file whole, which its tap puts in
+// each request in place of these; without the parts Claude Code itself
+// sheds over its own budget (safeguardsKept) when that fits, so a
+// Claude Code that didn't load the tap still says what the user
+// allows, else an empty list, which Claude Code still sends (a real
+// 2.1.316), marking the requests the tap puts them in. A Claude Code
+// the helper gives no tap sends the stand-in.
+func startSafeguards(raw json.RawMessage) json.RawMessage {
+	if len(claudeExtraBody(raw, "")) <= startValueMax {
+		return raw
+	}
+	if kept := safeguardsKept(raw); len(claudeExtraBody(kept, "")) <= startValueMax {
+		return kept
+	}
+	return json.RawMessage("[]")
 }
 
 // safeguardVaries is what Claude Code's classifier context carries that
@@ -2136,9 +2198,13 @@ func nextTurn(req *Request, owner string) (string, []Message) {
 type looseTurn struct {
 	key  string
 	turn []turnWords
-	// runs is the turn as lostMedia compares it (#1382): sealed as a run
-	// keeps it, with its words as a request has it
-	runs []heardRun
+	// settings is key without the conversation, and all the conversation
+	// as mediaMoved compares it (#1382): sealed as a run keeps it, with its
+	// words as a request has it. A client may take the images out of any
+	// turn, or send them back, which changes the conversation before the
+	// last turn as key has it.
+	settings string
+	all      []heardRun
 }
 
 // turnWords is a message of a turn as hashMessages reads it: its role,
@@ -2164,10 +2230,12 @@ func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *loos
 		}
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema(), start)
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema())
 	cacheIdentity(h, req)
+	settings := hex.EncodeToString(h.Sum(nil))
+	fmt.Fprintf(h, "\x00%d", start)
 	hashMessages(h, msgs[:start], nil)
-	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), runs: heardRuns(msgs[start:], sealed)}
+	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), settings: settings, all: heardRuns(msgs, sealed)}
 	words := messageWords(msgs)
 	for i := start; i < len(msgs); i++ {
 		tools := false
@@ -2182,13 +2250,14 @@ func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *loos
 // rewrote says now's turn is the one l kept as a client sends it back:
 // the same messages, calls and results, a user's message no more than cut
 // (a part of it taken out, but not all), and the reply's start (its end
-// taken out, but not all of it); or the same turn with images taken out
-// of it, and only those (lostMedia, #1382).
+// taken out, but not all of it); or the same conversation, with the same
+// settings, whose images were taken out of any turn or put back, and only
+// those (mediaMoved, #1382).
 func (l *looseTurn) rewrote(now *looseTurn) bool {
-	if l.cut(now.turn) {
+	if l.key == now.key && l.cut(now.turn) {
 		return true
 	}
-	return len(now.runs) == len(l.runs) && lostMedia(l.runs, now.runs)
+	return l.settings == now.settings && len(now.all) == len(l.all) && mediaMoved(l.all, now.all)
 }
 
 // cut is rewrote for a client that cut a user's message or the reply.
@@ -2246,12 +2315,12 @@ func (b *subscriptionBridge) rewritten(req *Request, owner string) (*subscriptio
 	var saved *savedSession
 	found := 0
 	for _, r := range b.idle {
-		if r.owned() == owner && r.loose != nil && r.loose.key == l.key && r.loose.rewrote(l) {
+		if r.owned() == owner && r.loose != nil && r.loose.rewrote(l) {
 			run, found = r, found+1
 		}
 	}
 	for _, s := range b.shelf {
-		if s.owner == owner && s.loose != nil && s.loose.key == l.key && s.loose.rewrote(l) {
+		if s.owner == owner && s.loose != nil && s.loose.rewrote(l) {
 			saved, found = s, found+1
 		}
 	}
@@ -3673,8 +3742,9 @@ func (r *subscriptionRun) heard(msgs []Message) {
 // one whole, then the reply and what came since. A client that rewrote it
 // meanwhile — Pi compacting between a tool call and its result, a rewind —
 // sends another, while the run's agent still holds the one it was told.
-// One whose client only took the images out of it (lostMedia, #1382) goes
-// on: the run's agent holds them, and nothing else changed.
+// One whose client only took the images out of it (lostMedia, #1382), or
+// put back those it took out before (mediaMoved), goes on: the run's
+// agent holds them, and nothing else changed.
 func (r *subscriptionRun) follows(msgs []Message) bool {
 	r.mu.Lock()
 	told, runs := r.told, r.toldRuns
@@ -3687,8 +3757,8 @@ func (r *subscriptionRun) follows(msgs []Message) bool {
 	hashMessages(h, msgs, func(int) {
 		found = found || hex.EncodeToString(h.Sum(nil)) == told
 	})
-	if !found && runs != nil && lostMedia(runs, heardRuns(msgs, false)) {
-		log.Printf("claude: tool results go on in their run, the images before them taken out by the client")
+	if !found && runs != nil && mediaMoved(runs, heardRuns(msgs, false)) {
+		log.Printf("claude: tool results go on in their run, the images before them taken out or sent again by the client")
 		return true
 	}
 	return found
@@ -4066,6 +4136,10 @@ func (r *subscriptionRun) emit(ev Event) {
 		switch ev.Kind {
 		case KStart: // a reply begins
 			r.shown, r.unended = nil, true
+		case KText:
+			if r.adviceReq != nil {
+				r.adviceSaid = append(r.adviceSaid, ev.Text)
+			}
 		case KStop, KError:
 			r.unended = false
 		case KToolStart:
@@ -4093,6 +4167,20 @@ func (r *subscriptionRun) emit(ev Event) {
 	r.mu.Unlock()
 	if ch != nil {
 		ch <- ev
+	}
+}
+
+// adviseOn has the run answer the advisor calls of the reply to req, the
+// advisor seeing req's conversation, with advice when req asks for the
+// advisor; a request that doesn't takes it away. ctx is req's own: the
+// advisor and web search are asked as its caller.
+func (r *subscriptionRun) adviseOn(ctx context.Context, req *Request, advice func(ctx context.Context, q *Request, said []Part, c Part, n int) (Part, Event)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.advice, r.adviceReq, r.advised, r.adviceSaid = nil, nil, 0, nil
+	r.asker = access.Caller(ctx)
+	if req.Advisor != "" {
+		r.advice, r.adviceReq = advice, req
 	}
 }
 
@@ -4253,7 +4341,8 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		r.mu.Lock()
 		called := name
 		name = declaredName(r.names, rest)
-		search := r.search != nil && name == r.searchName || r.answerName != "" && name == r.answerName
+		search := r.search != nil && name == r.searchName || r.answerName != "" && name == r.answerName ||
+			r.advice != nil && name == advisorTool
 		refused := r.allowed != nil && !r.allowed[name]
 		// a tool the client announced but hasn't loaded yet (Claude
 		// Code's deferred tools, told by name in the conversation and
@@ -6319,9 +6408,26 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 	run.mu.Lock()
 	call.Name = declaredName(run.names, call.Name)
 	search, searchName, answerName := run.search, run.searchName, run.answerName
+	advice, asker := run.advice, run.asker
 	run.mu.Unlock()
 	if answerName != "" && call.Name == answerName {
 		run.answer(w, call.Arguments)
+		return
+	}
+	if advice != nil && call.Name == advisorTool {
+		run.mu.Lock()
+		run.advised++
+		q, n, who := run.adviceReq, run.advised, run.asker
+		said := []Part{{Kind: Text, Text: strings.Join(run.adviceSaid, "")}}
+		run.mu.Unlock()
+		// within the minute its MCP client waits for a call; asked as the
+		// client's request, held to its key, not as this call from the
+		// run's own Claude Code, which carries none
+		ctx, cancel := context.WithTimeout(access.WithIdentity(r.Context(), who), 55*time.Second)
+		defer cancel()
+		res, ev := advice(ctx, q, said, Part{Kind: ToolCall, ID: call.ToolCallID, Name: advisorTool}, n)
+		run.emit(ev)
+		writeJSON(w, 200, mcpToolResult{Content: []map[string]any{{"type": "text", "text": res.Text}}, IsError: res.IsError})
 		return
 	}
 	if search != nil && call.Name == searchName {
@@ -6329,8 +6435,9 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(call.Arguments, &a)
-		// within the minute its MCP client waits for a call
-		ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
+		// within the minute its MCP client waits for a call; asked as the
+		// client's request, its key's limits holding the searcher's spend
+		ctx, cancel := context.WithTimeout(access.WithIdentity(r.Context(), asker), 55*time.Second)
 		defer cancel()
 		found, hits, err := search(ctx, a.Query)
 		if err != nil {
@@ -7097,14 +7204,27 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	return s.serveSubscriptionAs(w, r, from, name, model, owner, body, usage, start, "")
 }
 
-// serveSubscriptionAs is serveSubscription, redo the code of a turn asked
-// again as claude -p after the interactive mode's run failed with nothing
-// of the reply said (redoAsPrint): thirdPartyCode, refused as a
-// third-party app's, or unpastedCode, its message not taken there.
-func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, from provider.Protocol, name, model, owner string, body []byte, usage *Usage,
-	start func(ctx context.Context, req *Request) (*subscriptionRun, <-chan Event, error), redo string) (int, string) {
-	var req *Request
-	var err error
+// bridgeRequest is the request a Claude subscription's run is told, as
+// serveSubscriptionAs reads it: with the client's cache marks when Claude
+// Code places its own, and with Claude Code's advisor, which magpie runs
+// (advisor_serve.go), when magpie serves the advisor's model.
+func bridgeRequest(r *http.Request, from provider.Protocol, name string, body []byte) (req *Request, err error) {
+	// Claude Code's advisor, run by magpie: the run's agent has no server
+	// tools (advisor_serve.go)
+	advised := name == "Claude Code" && advisedInBridge(from, body)
+	parse := parse
+	if advised {
+		parse = func(from provider.Protocol, body []byte) (*Request, error) {
+			req, err := readAdvised(body, false, false, true)
+			if err != nil {
+				return nil, err
+			}
+			return afterParse(from, body, req)
+		}
+	}
+	parseAnthropicRequest := func(body []byte, clientMarks bool) (*Request, error) {
+		return readAdvised(body, clientMarks, false, advised)
+	}
 	if name == "Claude Code" && wantsClientCache(r, from) {
 		req, err = parseAnthropicRequest(body, true)
 	} else if name == "Claude Code" && classifierClientCache(from, body) {
@@ -7120,6 +7240,16 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 	} else {
 		req, err = parse(from, body)
 	}
+	return req, err
+}
+
+// serveSubscriptionAs is serveSubscription, redo the code of a turn asked
+// again as claude -p after the interactive mode's run failed with nothing
+// of the reply said (redoAsPrint): thirdPartyCode, refused as a
+// third-party app's, or unpastedCode, its message not taken there.
+func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, from provider.Protocol, name, model, owner string, body []byte, usage *Usage,
+	start func(ctx context.Context, req *Request) (*subscriptionRun, <-chan Event, error), redo string) (int, string) {
+	req, err := bridgeRequest(r, from, name, body)
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
@@ -7213,6 +7343,10 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 			req.Tools = append(slices.Clone(req.Tools), search)
 		}
 	}
+	// and asks the advisor with magpie's tool, which magpie answers
+	if req.Advisor != "" {
+		req.Tools = append(slices.Clone(req.Tools), advisorToolDef())
+	}
 
 	run, results, how := s.subscription.match(req)
 	// Another request has the run's calls answered, or is answering them,
@@ -7298,6 +7432,7 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 			run.mu.Lock()
 			run.allowed = allowedTools(req)
 			run.mu.Unlock()
+			run.adviseOn(r.Context(), req, s.adviceRound)
 			events, err = run.continueWith(withTaskNotices(withSkillBodies(results, req.Messages), req.Messages), saidWithResults(req.Messages), more)
 		}
 		if err != nil {
@@ -7341,6 +7476,7 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 				run.answerName, run.answerSchema = answer.Name, answerSchema
 			}
 			run.mu.Unlock()
+			run.adviseOn(r.Context(), req, s.adviceRound)
 		}
 	}
 	if err != nil {

@@ -1366,6 +1366,16 @@ Daily bars select that day's totals and ranking while keeping the whole chart;
 refresh and metric changes keep the selection, a period change clears it, and
 clicking the selected day clears it too, including days with no calls.
 
+`panel-heatmap.test.cjs` checks that the tray panel's Usage tab ends in the
+recent weeks' heatmap (eiyuuzaki2333 on X): as many weeks as fit the card (at
+least 20 at 440, 8 to 53), the last cell today and the first a Monday, square
+cells inside the card with no sideways scroll, a legend of five shades whose
+quiet one shows on the light panel's white card, levels that follow the tab's
+Tokens/Cost/Requests switch with no new read, a tooltip with the day and its
+value inside the window, and a provider picked in the ranking narrowing it
+(`usage/heatmap?provider=`). Weeks with no call show no card. 440 light and
+320 dark, in every language, Chromium and WebKit.
+
 `usage-refresh.test.cjs` sets the Usage page's refresh period, with a clock in
 place of time: every 5 s to begin with and no read before that, the picker's
 five (off, 5 s, 10 s, 30 s, a minute), off reading no more, a minute reading at
@@ -2674,6 +2684,22 @@ and de. English and Chinese, Chromium and WebKit.
 ```sh
 node --test internal/gui/tests/tencent-access-key.test.cjs
 go test -tags nogui ./internal/gui -run TestProviderListTellsTencentAccessKey
+```
+
+## Alibaba Cloud Token Plan AccessKey grants
+
+`alibaba-ram-grants.test.cjs` covers MetalHqa's report on X: what an
+Alibaba Cloud Token Plan's AccessKey needs to read the plan's usage is said
+under the editor's AccessKey ID (`ALI_RAM`), in the reader's language, and
+the Secret's hint no longer says any Model Studio RAM user will do. A card
+refused with `aliRAMHint`, read from `alibaba_usage.go` itself, says the
+same grants in the reader's language with the raw refusal in its tooltip.
+Volcengine's editor has no such note. 420px with no sideways scroll; all
+five languages, Chromium and WebKit.
+
+```sh
+node --test internal/gui/tests/alibaba-ram-grants.test.cjs
+go test ./internal/provider -run TestAliGatewayRAMNotAuthorised
 ```
 
 `plugin-kernel.test.cjs` holds the window's plugin kernel (`kernel.js`) to
