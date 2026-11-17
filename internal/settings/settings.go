@@ -639,7 +639,7 @@ type Settings struct {
 	ImageTimeout int `json:"imageTimeout,omitempty"`
 	// ClassifyTimeout is how long, in seconds, a routing group's classifier
 	// is given to say which intent a turn is (#2934: a Kiro subscription's
-	// haiku needed more than 8): from 1 to ClassifyTimeoutMost, 0 for
+	// haiku needed more than 8, the default then): from 1 to ClassifyTimeoutMost, 0 for
 	// ClassifyTimeoutDefault. ClassifyWait reads it.
 	ClassifyTimeout int `json:"classifyTimeout,omitempty"`
 	// GroupSink, GroupFirstToken and GroupPatience are what every routing
@@ -712,6 +712,10 @@ type Settings struct {
 	// cards are there, the cards alone (KevinXC on Discord); a click on one
 	// still opens the panel, and with no cards the bird is shown.
 	TrayNoBird bool `json:"trayNoBird,omitempty"`
+	// TrayAnthropicMark draws Claude's cards in the Mac menu bar with
+	// Anthropic's "A\" mark in place of Claude's logo (qingnianxiaozhe on
+	// X); off by default, Claude's logo as the Usage page has it.
+	TrayAnthropicMark bool `json:"trayAnthropicMark,omitempty"`
 	// TrayNoNumber keeps magpie's icon in Windows' tray while cards are
 	// picked; off by default, the icon is the first card's figure
 	// (Benjaminliang_1 on X), as Windows' tray shows no text beside it.
@@ -1532,9 +1536,13 @@ const BusyLoadMost = 10000
 // ClassifyTimeoutDefault is the seconds a classifier is given when
 // ClassifyTimeout is 0, and ClassifyTimeoutMost the most it can be set to:
 // the turn waits on it before it goes anywhere, with nothing sent to its
-// agent meanwhile.
+// agent meanwhile. 15, not 8: a classifier that reasons before it answers
+// (MiniMax thinks even asked for none; Grok 4.6 and GPT-6 Luna go no lower
+// than low) took 4 to 10 seconds over a real routing prompt, so 8 cut it
+// off on most turns and the group lost its intent routing (ESern29751 on
+// X). One that doesn't reason answers in a second or two either way.
 const (
-	ClassifyTimeoutDefault = 8
+	ClassifyTimeoutDefault = 15
 	ClassifyTimeoutMost    = 60
 )
 
@@ -1757,7 +1765,8 @@ type AgentCompact struct {
 // window into, by the key each reads: Codex's model catalog
 // (auto_compact_token_limit), Claude Code's settings.json
 // (CLAUDE_CODE_AUTO_COMPACT_WINDOW, autoCompactWindow) and Grok Build's
-// model tables (context_window). Only these take an AgentCompact.
+// model tables (auto_compact_threshold_percent of the model's window).
+// Only these take an AgentCompact.
 var CompactAgents = []string{"codex", "claude", "grok"}
 
 // ForAgent is s as the agent of that kind reads Long conversations: its
@@ -1808,7 +1817,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.WindowMaximised, s.KeepAwake, s.KeepAwakeDisplay = cur.WindowMaximised, cur.KeepAwake, cur.KeepAwakeDisplay
 	s.WindowAt, s.OnTop = cur.WindowAt, cur.OnTop
 	s.TrayUsages, s.TrayUsage, s.TrayUsageEvery, s.TrayNoLogos, s.TrayNoBird, s.TrayPace, s.TrayNoCost = cur.TrayUsages, cur.TrayUsage, cur.TrayUsageEvery, cur.TrayNoLogos, cur.TrayNoBird, cur.TrayPace, cur.TrayNoCost
-	s.TrayWindows, s.TrayNoNumber, s.TrayCurrency = cur.TrayWindows, cur.TrayNoNumber, cur.TrayCurrency
+	s.TrayWindows, s.TrayNoNumber, s.TrayCurrency, s.TrayAnthropicMark = cur.TrayWindows, cur.TrayNoNumber, cur.TrayCurrency, cur.TrayAnthropicMark
 	s.GatewayMode = cur.GatewayMode
 	s.NoWSLAgents = cur.NoWSLAgents
 	s.QuotaReads = cur.QuotaReads
