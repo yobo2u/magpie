@@ -285,6 +285,33 @@ magpie.plugin("library", (ctx) => {
     return url;
   }
 
+  // How far a row's chips close up (#936) follows the row's width: each goes
+  // further under the one before so the hand stays in about half the row.
+  // It is measured here, rounded to a whole pixel and set only when that
+  // changes, not worked out in CSS from 48cqw: a value in container units
+  // is worked out again for every chip on every change of the window's
+  // width, and with 196 skills of 24 chips each a resize spent ~0.5s a step
+  // on it (lexrus on X).
+  const handSizes = new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const row = e.target, box = row._hand;
+      if (!row.isConnected || !box || box.parentElement !== row) { handSizes.unobserve(row); continue; }
+      const w = e.contentBoxSize?.[0]?.inlineSize ?? e.contentRect.width;
+      if (w > 0) handGap(box, w);
+    }
+  });
+  function handGap(box, w) {
+    const n = box._n || 1;
+    // outside -19px to 3px the CSS clamps it the same, so nothing is set
+    const gap = Math.min(3, Math.max(-19, Math.round((0.48 * w - 60 - n * 24) / Math.max(1, n - 1)))) + "px";
+    if (box.style.getPropertyValue("--lib-gap") !== gap) box.style.setProperty("--lib-gap", gap);
+  }
+  function handRoom(row, box, n) {
+    box._n = n;
+    row._hand = box;
+    handSizes.observe(row);
+  }
+
   // Agent chips for a server or a skill: each agent that could have it, lit
   // when it does. A chip whose agent couldn't be given it says why. One that
   // has it whatever is ticked (opts.always: a skill kept in ~/.agents/skills,
@@ -306,7 +333,12 @@ magpie.plugin("library", (ctx) => {
     box.style.setProperty("--lib-agent-count", shown.length);
     // the row it is put in says so (.with-agents), for its name's room:
     // Safari before 15.4 has no :has(). Every caller appends it at once.
-    queueMicrotask(() => box.parentElement?.classList.contains("lib-row") && box.parentElement.classList.add("with-agents"));
+    queueMicrotask(() => {
+      const row = box.parentElement;
+      if (!row?.classList.contains("lib-row")) return;
+      row.classList.add("with-agents");
+      handRoom(row, box, shown.length);
+    });
     for (const [i, g] of shown.entries()) {
       if (g.family) { box.append(profileChip(g, i, shown.length, all, on, onChange, opts)); continue; }
       const a = g.a;
@@ -1304,7 +1336,7 @@ magpie.plugin("library", (ctx) => {
       const r = el("div", "row lib-row");
       r.dataset.sugg = s.key;
       const w = el("div", "who");
-      w.append(el("div", "name", s.text));
+      w.append(el("div", "name", firstLine(s.text)));
       const acts = el("div", "lib-acts");
       if (s.to === "global") {
         w.append(el("div", "sub", t("Learned in {projects}", { projects: s.projects.map((k) => mem.projects?.[k]?.name || k).join(", ") })));
@@ -1616,12 +1648,18 @@ magpie.plugin("library", (ctx) => {
     if (old) old.replaceWith(make());
     else render();
   }
+  // a memory folded: its first line, and an ellipsis when more follow
+  // (_meouwu on X: a memory of several lines was run into one)
+  function firstLine(text) {
+    const lines = String(text || "").trim().split(/\r?\n/);
+    return lines[0].trimEnd() + (lines.length > 1 ? " …" : "");
+  }
   function memRow(m) {
     const isOpen = !memPicking && memOpen === m.id;
     const row = el("div", "row lib-row click lib-mem" + (isOpen ? " open" : ""));
     row.dataset.id = m.id;
     const who = el("div", "who");
-    who.append(el("div", "name", m.text));
+    who.append(el("div", "name", isOpen ? m.text : firstLine(m.text)));
     const sub = [scopeName(m.scope), ...(m.tags || []).map((x) => "#" + x)];
     const from = m.origin === "agent" || m.origin === "inferred" ? (m.sources || []).find((s) => s.agent)?.agent : "";
     if (from) sub.push(t("from {agent}", { agent: nameOf(from) }));
@@ -6638,7 +6676,16 @@ magpie.plugin("library", (ctx) => {
       clearTimeout(still);
       still = setTimeout(settled, 150);
     }, { passive: true });
-    window.addEventListener("resize", queueLists);
+    // and while the window is resized, the page says so (.lib-resizing): a
+    // chip's slide is not run as the hand closes up, which in WebKit was
+    // most of each step's time with thousands of chips (lexrus on X)
+    let sizing = 0;
+    window.addEventListener("resize", () => {
+      queueLists();
+      if (!sizing) page.classList.add("lib-resizing");
+      clearTimeout(sizing);
+      sizing = setTimeout(() => { sizing = 0; page.classList.remove("lib-resizing"); }, 600);
+    });
   }
 
   // The filling: one list's next few rows per idle moment, the lists in turn.
@@ -7352,6 +7399,21 @@ magpie.plugin("library", (ctx) => {
     return out;
   }
 
+  // An agent's way in the sheet, with why it gets copies when it didn't
+  // ask for them (copyWhy, 4kT1FohCTP97031 on X: Claude Desktop's
+  // copies-only row said no more than that)
+  const COPY_WHY = {
+    desktop: "Only ever takes copies: Cowork skips a linked skill",
+    liveagent: "Only ever takes copies: LiveAgent refuses a linked skill",
+    wsl: "Only ever takes copies: its skills folder is on a Windows drive, where WSL can't link",
+    junction: "Only ever takes copies: on Windows it skips a linked skill",
+  };
+  function howLine(a) {
+    if (a.copyWhy === "shared") return t("Gets copies: it reads the same folder as {agents}, which gets copies", { agents: (a.copyWith || []).join(", ") });
+    if (a.mustCopy) return t(COPY_WHY[a.copyWhy] || "Only ever takes copies");
+    return a.how === "copy" ? t("Gets copies") : t("Gets links");
+  }
+
   function openSkillHow() {
     const ed = el("div", "editor lib-editor lib-byagent-sheet lib-howsheet");
     const head = el("div", "ehead");
@@ -7366,7 +7428,7 @@ magpie.plugin("library", (ctx) => {
       const row = el("div", "row lib-row lib-byagent-row lib-how-row");
       row.dataset.agent = a.id;
       const who = el("div", "who");
-      who.append(el("div", "name", a.name), el("div", "sub", a.mustCopy ? t("Only ever takes copies") : a.how === "copy" ? t("Gets copies") : t("Gets links")));
+      who.append(el("div", "name", a.name), el("div", "sub", howLine(a)));
       row.append(agentIcon(a.icon), who);
       if (!a.mustCopy) {
         row.append(segs([["", t("Library's way")], ["link", t("Links")], ["copy", t("Copies")]], a.howOwn ? a.how : "", async (h) => {
