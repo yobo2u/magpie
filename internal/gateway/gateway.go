@@ -499,7 +499,7 @@ type Call struct {
 	// it was streamed (#196)
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
-	// FirstReasoning is the start of paced visible reasoning, absent for hidden reasoning.
+	// FirstReasoning: ms to the reply's first sign of reasoning, streamed or sealed (a reasoning delta, a reasoning item's or thinking block's start); 0 for none.
 	FirstReasoning  int64 `json:"firstReasoning,omitempty"`
 	ReasoningHidden bool  `json:"reasoningHidden,omitempty"`
 	// Flow: the ms its content took to come, from where its speed is
@@ -1779,6 +1779,11 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 	// Antigravity's app's catalog, each model with its window (antigravity_models.go)
 	if r.URL.Query().Get("format") == AntigravityFormat {
 		antigravityModels(w, r)
+		return
+	}
+	// OpenCode's magpie plugin's (opencode_models.go)
+	if f := r.URL.Query().Get("format"); f == OpenCodeFormat || f == OpenCode2Format {
+		openCodeModels(w, r, f == OpenCode2Format)
 		return
 	}
 	if waitsForList(r) {
@@ -4289,8 +4294,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// account whose own list doesn't is asked for priority (Fast)
 		// instead, which every plan with Fast takes (yxinyu715 on X): asked
 		// by the client in either of OpenAI's APIs, or by a pick (#1954)
+		// OpenAI's own Chat Completions turns Ultrafast away, which its
+		// Responses take (OoopsHh on X), so there it goes as Fast too
 		openAI := from == provider.Chat || from == provider.Responses
-		if (openAI && askedTier(attemptBody) == "ultrafast" || ultra && from == provider.Anthropic) && !takesTier(c, "ultrafast") {
+		if (openAI && askedTier(attemptBody) == "ultrafast" || ultra && from == provider.Anthropic) && (!takesTier(c, "ultrafast") || from == provider.Chat && chatNoUltra(c.p)) {
 			if j := tierMate(cands[i+1:], c, "ultrafast"); j >= 0 {
 				j += i + 1
 				cs := slices.Clone(cands)
@@ -4408,7 +4415,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				// at once instead of waiting in the queue (FallbackHeader)
 				ctx = withFallback(ctx)
 			}
-			hw.stop = stop
+			hw.stop, hw.name = stop, c.p.Name
 			if magpieAsks(r) {
 				// another magpie asked: its log is told the tier this
 				// one sent (stampTier)
@@ -4654,7 +4661,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		try.Entry, try.EntryWhy = entryOf()
 		try.Swapped, try.Routed = swapped(asName, call.Usage.Served) && !usage.ListedAs(c.p.ID, c.model, call.Usage.Served), usage.GroupRouted(asName, call.Usage.Served)
 		try.TTFT, try.FirstText = hw.first.ms()
-		try.FirstReasoning = hw.first.reasoningMs(call.To)
+		try.FirstReasoning = hw.first.reasoningMs()
 		try.ReasoningHidden = hw.first.hidesReasoning(call.To, call.Usage.billed().Reasoning)
 		call.ReasoningHidden = try.ReasoningHidden
 		try.Flow = hw.first.flowFor(call.Usage.Reasoning)
@@ -4664,7 +4671,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		call.TTFT, call.FirstText = sinceStart(began.Sub(start), hw.first.first), sinceStart(began.Sub(start), hw.first.text)
 		call.FirstReasoning = 0
 		if try.FirstReasoning > 0 {
-			call.FirstReasoning = sinceStart(began.Sub(start), hw.first.reasoning)
+			call.FirstReasoning = sinceStart(began.Sub(start), hw.first.think)
 		}
 		// A try that fails from here and hands the request on, to another
 		// account or member or the same one again, is in the ledger with
@@ -4709,6 +4716,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Status, try.Error, try.Fail = call.Status, call.Error, failCanceled
 			watched.attempt(call, try, c.p.ID, sent, hw, capture)
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			break
+		}
+		if hw.stuck != "" {
+			// the vendor said nothing for translatedQuietLongest while the
+			// agent was kept alive (keepQuiet): it is told so, and nobody
+			// else is asked after it has waited that long
+			call.Status, call.Error = http.StatusGatewayTimeout, hw.stuck
+			try.Status, try.Error = call.Status, call.Error
+			watched.attempt(call, try, c.p.ID, sent, hw, capture)
+			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+			if !hw.ended {
+				failTo(w, kept, from, call.Status, hw.stuck)
+			}
 			break
 		}
 		if hw.slow {
@@ -6944,6 +6964,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// shape wants (#292).
 		if refusesLoneToolChoice(p) {
 			body = withoutLoneToolChoice(body)
+		}
+		// Open Design's amr-link answers Codex's compaction summary, its
+		// one request with no tools, 400 upstream_error: it is sent no
+		// empty tools and no choice beside them (opendesign_tools.go)
+		if openDesign(p) {
+			body = withoutEmptyTools(body)
 		}
 	case provider.Chat:
 		if p.RejectsTemperature(model) {
@@ -10064,7 +10090,8 @@ var keepaliveEvery, keepaliveLongest = 15 * time.Second, 5 * time.Minute
 
 // translatedQuietLongest is how long a translated reply's upstream may
 // say nothing at all, its stream open, while magpie keeps the client
-// alive every keepaliveEvery (keepThroughSilence). A reply that comes in
+// alive every keepaliveEvery (keepThroughSilence), and a reply passed
+// through or held is kept so too (keepQuiet). A reply that comes in
 // one burst at its end (claude-opus-5-5 at effort max, a relay that
 // buffers) is silent for its whole generation, which runs past 10
 // minutes, longer than the 10 minutes magpie gives a vendor for its

@@ -135,6 +135,7 @@
     <a href="#run">运行</a>
     <a href="#web">Web 界面</a>
     <a href="#signin">登录订阅</a>
+    <a href="#mcp">MCP 服务器</a>
     <a href="#browser">你自己的浏览器</a>
     <a href="#volume">保存了什么</a>
     <a href="#env">环境变量</a>
@@ -185,7 +186,7 @@ docker logs magpie</pre>
 
     <h2 id="web"><a class="anchor" href="#web">Web 界面</a></h2>
     <p>打开日志里的链接。链接里的 key 会换成一个 cookie，并从地址栏里去掉；不带 key 打开会被拒绝（401）。设置了 <code>MAGPIE_WEB_KEY</code>（16 个以上的字母、数字或 <code>- . _ ~</code>；<code>openssl rand -hex 16</code> 可以生成一个）时，重启后 key 不变，浏览器保持登录 400 天。不设置时每次启动都会生成新 key，cookie 只在本次浏览器会话里有效。</p>
-    <p>这个页面处于<b>网关模式</b>：只有 <span class="ui">供应商</span>、<span class="ui">网关</span>、<span class="ui">路由</span>、<span class="ui">用量</span>、<span class="ui">会话</span>、<span class="ui">插件</span>和 <span class="ui">设置</span>，没有 Agent 和资源库，因为容器里没有 Agent。<span class="ui">会话</span>只列出其他电脑上通过这个网关的 Agent 会话，从不读这台机器上 Agent 的会话文件。<span class="ui">设置</span> → <span class="ui">常规</span> → <span class="ui">网关模式</span> 可以关掉它。</p>
+    <p>这个页面处于<b>网关模式</b>：只有 <span class="ui">供应商</span>、<span class="ui">网关</span>、<span class="ui">路由</span>、<span class="ui">用量</span>、<span class="ui">会话</span>、<span class="ui">插件</span>、<span class="ui">资源库</span>和 <span class="ui">设置</span>，没有 Agent，因为容器里没有 Agent。<span class="ui">资源库</span>里有 MCP 服务器和 MCP 路由：其他电脑上的应用用网关密钥连接路由地址。旁边是<span class="ui">技能</span>和<span class="ui">指令</span>：其他电脑上的 magpie 把这个 magpie 添加为<span class="ui">另一台电脑上的 magpie</span> 供应商并打开<span class="ui">使用它的技能和提示词</span>后，会拿到它们，交给自己的 Agent，因为技能是 Agent 所在电脑上的文件夹。<span class="ui">会话</span>只列出其他电脑上通过这个网关的 Agent 会话，从不读这台机器上 Agent 的会话文件。<span class="ui">设置</span> → <span class="ui">常规</span> → <span class="ui">网关模式</span> 可以关掉它。</p>
     <p>NAS 或通过 SSH 访问的服务器上，用隧道打开页面，不要发布 3430：<code>ssh -L 3430:127.0.0.1:3430 you@nas</code>，然后在自己电脑上打开日志里的链接。</p>
     <div class="callout"><b>拿到链接的人都能修改 magpie、看到它的密钥。</b>让 3430 只在回环地址或 VPN 上。要跨网络访问，就用 HTTPS：用 <code>MAGPIE_TLS_CERT</code> 和 <code>MAGPIE_TLS_KEY</code> 给 magpie 一张证书，或者放在带 TLS 的反向代理（如 Caddy）后面。</div>
 
@@ -205,6 +206,10 @@ docker logs magpie</pre>
       <pre id="ex-claude-code">docker exec -it magpie magpie claude-code install</pre>
     </div>
     <p>Grok（SuperGrok）订阅通过 xAI 的 Grok Build CLI 登录，镜像里同样没有它。在浏览器界面里登录，或者用 <code>magpie plugin login grok</code> 登录时，magpie 会先按 xAI 安装脚本的方式安装它：从 <code>x.ai/cli</code> 下载 stable 版本，放在 <code>/config/home/.grok</code>。要用你自己放进数据卷的 Grok Build，把 <code>GROK_BIN_DIR</code> 设为它所在的文件夹。</p>
+
+    <h2 id="mcp"><a class="anchor" href="#mcp">MCP 服务器</a></h2>
+    <p>资源库里的 MCP 服务器在容器里运行，镜像里带着它们启动要用的命令：<code>npx</code>、<code>node</code> 和 <code>npm</code>（Node 24），以及 <code>uvx</code>、<code>uv</code>、<code>python</code> 和 <code>python3</code>。用 <code>uvx</code> 或 <code>python</code> 启动的服务器第一次会把 Python 下载到数据卷里，要几秒钟。用 <code>docker</code> 启动的服务器跑不起来：容器里没有它自己的 Docker。</p>
+    <p>镜像里没有浏览器。Chrome DevTools 和 Playwright 的 MCP 服务器要启动自己的 Chrome，所以在容器里，它们在资源库里的那一行会显示 <span class="ui">这里没有 Chrome</span>。请改用 <a href="#browser">Magpie Browser</a>，它在你自己的浏览器里操作；或者让服务器连接一个它能访问到的 Chrome：Chrome DevTools 用 <code>--browserUrl http://host:9222</code>，Playwright 用 <code>--cdp-endpoint</code>。</p>
 
     <h2 id="browser"><a class="anchor" href="#browser">你自己的浏览器</a></h2>
     <p>Magpie Browser 通过它的扩展，让 Agent 在你自己的浏览器里操作。容器里的文件夹没法直接加载成扩展，所以在浏览器界面打开 <span class="ui">资源库</span> → <span class="ui">Magpie Browser</span>，点 <span class="ui">下载扩展</span>。下载的 zip 指向这个页面自己的地址，并带一个名为 <b>Magpie Browser</b> 的专用网关密钥。解压后打开 <code>chrome://extensions</code>，打开开发者模式，点 <span class="ui">加载已解压的扩展程序</span>，选择解压出的文件夹。已经加载过的扩展，也可以在它的弹窗里填地址（<code>http://localhost:3430</code>，或网关发布到主机的端口）和网关密钥。</p>

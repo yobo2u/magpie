@@ -120,7 +120,7 @@ line; agents connected to magpie lose it when it quits.
 | Air (JetBrains IDEs) | `~/.jetbrains/acp.json` (`%USERPROFILE%\.jetbrains\acp.json` on Windows; the Air plugin in 2026.2+ IDEs, shared with AI Assistant's custom agents) + `magpie-opencode.json` beside it | model (the same `Magpie` ACP agent as the Air app's, in Air's agent menu in the IDE; needs OpenCode installed; a `Magpie (WSL <distro>)` agent too for each running WSL distro that has OpenCode, for WSL projects) |
 | Copilot CLI  | `~/.copilot/settings.json`        | model           |
 | Crush        | `~/.config/crush/crush.json`      | large, small    |
-| DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie, its key `MAGPIE_GATEWAY_KEY` in `~/.dsh/.env` and dsh's own key store `~/.dsh/.credentials.yaml`, which the desktop app reads; on one of magpie's models its `web-search-deepseek` row also goes to the gateway, which searches with the model or Settings › Web search, unless dsh has a `DEEPSEEK_API_KEY` or a row of your own), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
+| DeepSeek Harness (dsh) | `~/.dsh/profiles/*/cordis.patch.yml` (`$DSH_HOME`; a custom provider, Magpie, its key `MAGPIE_GATEWAY_KEY` in `~/.dsh/.env` and dsh's own key store `~/.dsh/.credentials.yaml`, which the desktop app reads; on one of magpie's models its `web-search-deepseek` row also goes to the gateway, which searches with the model or Settings › Models › Web search, unless dsh has a `DEEPSEEK_API_KEY` or a row of your own), or `~/.dsh/config.yaml` before dsh 0.1.5 | model, effort |
 | Reasonix Studio (2.x, or a native Go `reasonix` 2.x / 1.39.x CLI) | `~/.reasonix/config.toml` + `.env` (`%APPDATA%/reasonix` on Windows; `$REASONIX_HOME`) | model (Executor), planner (Plan), effort (a dedicated `magpie` provider, shared by Studio and the native CLI) |
 | Command Code | `~/.commandcode/settings.json` (+ `providers.json`) | model |
 | fx           | `~/.fx/settings.json`             | model (a keyless `magpie` provider) |
@@ -477,12 +477,16 @@ words (`stop`, `tool_calls`, `end_turn`, a Responses reply's
 page shows it as Upstream stop reason.
 
 **Output speed** (tok/s on the Usage and Routing pages, `magpie usage`) is
-output tokens over the time after the first token, summed per request: the
+all output tokens the vendor counted, reasoning and tool calls included, over
+the time from the first output to the last, summed per request: the
 tokens of every timed request over the sum of their windows, so concurrent
-subagents never add up. A reply that reasoned counts only its answer, from its
-first text (`usage.DecodeOf`): hidden reasoning is written before the stream
-shows anything, so counting it in a window that starts after it read
-gpt-6.1-sol at hundreds of tok/s. A reply that reasoned and then wrote only
+subagents never add up. The first output is the earlier of the first content
+and the first sign the stream gave of reasoning (a reasoning item's or a
+thinking block's start, or reasoning deltas over 100 ms or more; a summary is
+no sign). A reply that reasoned with no sign of when counts only its answer,
+from its first text (`usage.DecodeOf`): its reasoning was written before the
+stream showed anything, so counting it in a window that starts after it read
+gpt-6.1-sol at hundreds of tok/s. Such a reply that then wrote only
 tool calls, one not streamed, and a burst (under 100 ms, or over 10,000 tok/s)
 tell no speed. So does a reply its vendor held back and let go in a burst at
 its end, however long the burst took to come: one whose content came in under
@@ -3586,10 +3590,12 @@ version channel first. A release marked urgent goes to Stable at once.
 When Stable moves past several versions, What's new lists the notes of
 every version since yours as one list.
 
-A version installed from the site can be newer than Stable's; the app
-keeps it and waits until Stable passes it. While it waits, the Version
-row says *Up to date on Stable*, names the newest version out on Every
-version, and offers to switch to Every version.
+A version installed from the site, or kept from Every version when the
+channel changed, can be newer than Stable's or Daily's; the app keeps it
+and waits until the channel passes it. While it waits, the Version row
+says so (*Newer than Daily's 0.1.4395; it updates once Daily passes it*),
+names the newest version out on Every version, and offers to switch to
+Every version; `magpie update` says the same.
 
 The site's downloads offer Stable's version beside the newest
 (`usemagpie.ai/download/stable/<platform>`). A fresh install of it (no
@@ -3828,8 +3834,11 @@ expose it publicly without gateway-key authentication.
 
 Such a page is in **gateway mode**: it shows Sessions, Library, Providers,
 Routing, Gateway, Usage, Masking, Plugins and Settings, with no Agents tab.
-The Library has its MCP servers alone, with the MCP router: other
-computers' apps connect at the router's address with a gateway key.
+The Library has its MCP servers, with the MCP router: other
+computers' apps connect at the router's address with a gateway key. Its
+Skills and Instructions are there too, for a magpie on another computer
+that adds this one as an "Another computer's magpie" provider with Use its skills and
+prompts on: that magpie takes them and gives them to its own agents.
 Sessions lists only the sessions of other computers' agents that came
 through this gateway, never this machine's agents' session files
 ([gateway sessions](subsystems/gateway-sessions.md)). Settings leaves out what is written into this machine's agents (provider in
@@ -4625,7 +4634,13 @@ and models to look after first, by magpie's own ids only:
   installed and on (npm names, or `github:owner/repo` for a repository
   tagged `magpie-plugin`; never a folder, a private repository or an
   unlisted package), with the same id, so Discover can say how many use
-  each (the ids that reported it in 7 days). A like on a plugin's page
+  each (the ids that reported it in 7 days). The same report names the
+  Library's MCP servers that an agent is given and that the market lists
+  from what ships with magpie (featured, or the registry snapshot), by
+  their market ids only (`context7`, `io.github.owner/name`; at most 50),
+  so the market can put the most used first; a server of the user's own,
+  one found only by a search, and its address, command or keys never go
+  (`library.PublicServers`). A like on a plugin's page
   goes there too, only for a plugin installed here, and is kept in
   `~/.config/magpie/plugin-likes.json`. The code is
   [internal/stats/plugins.go](../internal/stats/plugins.go) and
