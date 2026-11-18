@@ -410,6 +410,9 @@ type AgentView struct {
 	ProjectMCP string `json:"projectMCP,omitempty"`
 	// ProjectSubagents is the folder in a project it reads subagents from
 	ProjectSubagents string `json:"projectSubagents,omitempty"`
+	// ProjectInstructions is the file in a project it reads the
+	// project's instructions from, when there is none yet
+	ProjectInstructions string `json:"projectInstructions,omitempty"`
 	// ProjectNoSSE: its project file can't take a server over SSE
 	ProjectNoSSE bool `json:"projectNoSSE,omitempty"`
 	// ProjectOff and ProjectSkillOff: a server, or a skill, it has from
@@ -500,6 +503,9 @@ type SkillView struct {
 	// in the library or in an agent's copy: an update replaces that, so
 	// the page asks first (#1449)
 	Edited bool `json:"edited,omitempty"`
+	// Pending is one a sync brought by its source and not yet fetched
+	// from there on this computer (Skill.Pending): Update tries again
+	Pending bool `json:"pending,omitempty"`
 	// Gone is when its source was found without it: removed there, the
 	// page offers to take it out (skill_gone.go)
 	Gone string `json:"gone,omitempty"`
@@ -664,7 +670,8 @@ func readView(problems []Problem, glance bool) (*View, error) {
 	for _, t := range targets {
 		av := AgentView{ID: t.Agent.ID, Name: t.Agent.Name, Icon: t.Agent.Icon, Instructions: t.Instructions, Skills: t.Skills,
 			SkillsAlso: t.SkillsAlso, Note: t.Note, MCPVia: t.MCPVia, ProjectSkills: ProjectSkillsDir(t.Agent.ID), ProjectMCP: ProjectMCPFile(t.Agent.ID), ProjectSubagents: ProjectSubagentsDir(t.Agent.ID),
-			ProjectOff: slices.Contains(projectOffAgents, t.Agent.ID), ProjectSkillOff: slices.Contains(projectSkillOffAgents, t.Agent.ID),
+			ProjectInstructions: ProjectInstrFile(t.Agent.ID),
+			ProjectOff:          slices.Contains(projectOffAgents, t.Agent.ID), ProjectSkillOff: slices.Contains(projectSkillOffAgents, t.Agent.ID),
 			ProjectNoSSE: ProjectNoSSE(t.Agent.ID)}
 		if t.Skills != "" {
 			_, av.HowOwn = l.SkillHow[t.Agent.ID]
@@ -765,7 +772,7 @@ func readView(problems []Problem, glance bool) (*View, error) {
 	v.Plugins = l.pluginsView()
 	tr := &tracer{}
 	for _, s := range l.Skills {
-		sv := SkillView{Name: s.Name, Bundle: s.Bundle, Agents: append([]string{}, s.Agents...), Icon: skillIcon(s), Problems: of("skill:" + s.Name), Repo: tr.repoOf(s), OffHere: s.OffHere, Note: s.Note, Router: s.Router}
+		sv := SkillView{Name: s.Name, Bundle: s.Bundle, Agents: append([]string{}, s.Agents...), Icon: skillIcon(s), Problems: of("skill:" + s.Name), Repo: tr.repoOf(s), OffHere: s.OffHere, Note: s.Note, Router: s.Router, Pending: s.Pending}
 		if s.Source != nil {
 			sv.Source, sv.Kind = s.Source.String(), s.Source.Kind
 		}
