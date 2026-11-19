@@ -166,6 +166,7 @@ line; agents connected to magpie lose it when it quits.
 | OpenMausBot  | `~/.openmausbot/config.json` (`$OMB_DATA_DIR`) | provider (a `magpie` engine in `instances`: OpenMausBot's own Claude endpoint shape, Claude Code with `ANTHROPIC_BASE_URL` at the gateway and magpie's models as its `endpointModels`, in its own `CLAUDE_CONFIG_DIR` under `providers/magpie`. With no `instances` saved, OpenMausBot's default engines are written beside it. OpenMausBot reads it when it starts) |
 | Avibe        | `~/.avibe/config/config.json` (`$AVIBE_HOME`; `~/.vibe_remote` from before 3.0), changed through its control socket `state/dispatch.sock` (Windows: `runtime/control-ipc/endpoint.json`) while it runs | provider (a `magpie` model source on its Models page: custom vendor, OpenAI chat completions at the gateway's `/v1`, with Avibe's own key; Avibe lists magpie's models from the gateway and adds the source to Vibey's, Claude Code's, Codex's and OpenCode's routes. Avibe has to be running to connect or disconnect it) |
 | Kun          | `~/.kun/data/model-connections.v2.json` (`$KUN_DATA_DIR`), changed through its runtime's admin API (`baseUrl` and `runtimeToken` of `runtime.json` in the same folder) while it runs | model (a `magpie` connection in Settings > Providers: HTTP, OpenAI chat completions at the gateway's `/v1`, with Kun's own key and the models picked for Kun; the model picked is Kun's default. Kun has to be running to connect or disconnect it) |
+| Nowledge Mem | `remote_llm.json` in its config folder (`~/Library/Application Support/co.nowledge.mem.desktop`, `%APPDATA%`, `$XDG_CONFIG_HOME`; `$NMEM_APP_CONFIG_DIR`), read only: changed through its backend's API on `127.0.0.1:14242` (`$NMEM_API_URL`) while it runs | model (Mem's own `magpie` provider at the gateway's `/v1` with Mem's own key, made its active AI and turned on; the provider and on/off Mem had come back on disconnect. Mem has to be running to connect or disconnect it) |
 | OpenHanako   | `~/.hanako/provider-catalog.json` + `agents/<id>/config.yaml` (`$HANA_HOME`; its local API while it runs) | model (the primary agent's; magpie's models as a provider) |
 | AtomCode     | `~/.atomcode/config.toml` (`$ATOMCODE_HOME`) | model, effort (a `magpie` provider account, one model table per catalog model as its own sign-in writes) |
 | Open Code Review | `~/.opencodereview/config.json` | model (a `magpie` custom provider made the one in use; its Claude Code, Codex, Cursor, Kimi Code and OpenCode plugins run the same `ocr`) |
@@ -470,11 +471,16 @@ whether Fast ran or not, so from it those are left empty too. The JSON
 log keeps them as `tier_asked`, `tier_sent` and `tier_served`, and each
 try in `/v1/magpie/route` has `tier` and `tier_served`. A request's row
 on the Requests page shows them as Service tier (asked, sent when it
-differs, answered). The last column,
-`upstream_stop`, is why the upstream said its reply ended, in its own
+differs, answered). Then
+`upstream_stop`, why the upstream said its reply ended, in its own
 words (`stop`, `tool_calls`, `end_turn`, a Responses reply's
-`completed`), empty when it said none. A request's row on the Requests
-page shows it as Upstream stop reason.
+`completed`), empty when it said none; a request's row on the Requests
+page shows it as Upstream stop reason. After `credits`, the last column,
+`sent_model`, is the model id the request went out to the vendor under,
+when it is another than `model`: a name set for the model upstream, or the
+variant a plugin picked for the effort (Antigravity's
+`gemini-3.1-pro-high` for `gemini-3.1-pro` at high). A request's row shows it
+as Sent, and each try in `/v1/magpie/route` has it as `wire`.
 
 **Output speed** (tok/s on the Usage and Routing pages, `magpie usage`) is
 all output tokens the vendor counted, reasoning and tool calls included, over
@@ -2370,6 +2376,17 @@ each of these groups ordered by the share used.
   time window sends a member first at its hours, and a Pause rule leaves
   one out at its hours. The Routing page says why the first went first:
   "costs least on Ollama now — $0.150 in, $0.600 out a million tokens".
+- **Small context first** (routing groups only): each request goes to the
+  member with the smallest context window that holds it, so the big ones
+  are kept for the long requests only they can take. A member whose window
+  the request is longer than is left out before it is asked, as under every
+  routing, and asked only once every one with room is out of its
+  allowance. Members of one size go as Smart orders them, a member all but
+  used up still goes after those with room, and one whose window isn't
+  known goes after every known one. The window is the one you set for the
+  model, else the model list's. The Routing page says why the first went
+  first: "Composer 2.5's 200K context window is the smallest that holds
+  this request".
 
 The routings besides Smart are the built-in plugin `rotation` (Routing
 strategies in Plugins › Built-in). It stays on while a provider or group is
@@ -2394,6 +2411,7 @@ depends on the routing:
 | Use before expiry | Only between accounts in the same pace band that magpie sent the same tokens lately, in practice none since magpie started. |
 | Speed first | Only between those within a tenth of each other's speed, and among those not measured lately. |
 | Cheapest first | Only between those that cost the same now, and among those with no known price. |
+| Small context first | Only between those whose context windows are the same size, after Smart's order, and among those whose window isn't known. |
 
 For Claude Code and Codex, *Make first* also signs the agent in to that
 account, because the account the agent is signed in to is first. With
@@ -3864,9 +3882,22 @@ magpie to save its state after, and 7s elsewhere, inside `docker stop`'s
 -t`, Compose's `stop_grace_period`) for longer turns. Ctrl+C and SIGHUP still
 end it at once. In Kubernetes, probe readiness with
 `exec: {command: [/magpie, healthcheck]}`: an `httpGet` probe comes from
-outside the container and would need a gateway key. Run one magpie per
-`/config` volume, with `strategy: Recreate`: the magpie serving keeps the
-saved sign-ins renewed, and two pods on one volume would both renew them.
+outside the container and would need a gateway key.
+
+A rolling update (`maxSurge: 1`, `maxUnavailable: 0`) overlaps the new pod
+with the old one on one `/config` volume and drops nothing: both answer
+requests, and each sign-in renewal and saved file is locked across them
+(flock, and host.js's renewal locks, which name the pod beside the pid since
+pods share pid numbers). The work only one magpie may do, what
+`ListenAndServe` starts after binding (renewing saved sign-ins, check-ins,
+retiring moves, plugin and Bun updates, `WhileServing`), runs only in the
+magpie holding `gateway.serving.lock` in the config folder: the old pod
+until its gateway ends, then the new one, which asks each second. A
+ReadWriteOnce volume needs the new pod on the old one's node, so the
+example Deployment in the Docker page has a required `podAffinity` on its
+own label with `topologyKey: kubernetes.io/hostname`. A pod on a version
+before v0.1.4526 doesn't take the lock: update from it once with
+`strategy: Recreate`.
 
 #### NAS with agents on other machines
 

@@ -129,6 +129,7 @@ A group is several models, from one provider or many, that an agent picks as one
 | By weight `weight` | Each model takes its share of the requests by the weight set beside it in the group editor (1 to 1000, 1 if unset): one weighing 3 takes three for every one a model weighing 1 takes, spread out rather than in bursts. Each model is tried whole over its own accounts or keys, as its provider routes them, and a group in the group counts as one. One resting after a failure leaves the round; the next model is the fallback when one fails. |
 | Speed first `fast` | The member, account or key that answered this model fastest lately: the time to its first token and how fast it writes, newer answers counting more. Those within a tenth of each other keep their order. One not measured in the last hour gets one request in five, so a channel that was slow once is tried again; one resting after a failure goes last. Only streamed replies are measured, and a restart measures again from scratch. |
 | Cheapest first `cheap` | Groups only. The member whose model costs least now, by its price a million tokens in and out at this hour as Usage counts it: your own price for it, else its list price, at the provider’s price rate and rate windows. DeepSeek’s own API, Command Code’s and OpenCode Go’s DeepSeek models cost double in their peak hours (weekdays 01:00–04:00 and 06:00–10:00 UTC), and Ollama Cloud’s DeepSeek V4.1 Flash and V4 Pro in its own (weekdays 12:00–18:00 UTC, half price the rest of the time), so a DeepSeek model listed on two providers goes to the one cheaper at that hour. Members that cost the same keep their order; one with no known price goes last. |
+| Small context first `fit` | Groups only. Each request goes to the member with the smallest context window that holds it, so the big ones are kept for long requests. A member whose window the request is longer than is left out, as under every routing. Members of one size go as Smart orders them, and one whose window isn’t known goes last. |
 
 | Stays | How long a conversation stays with the account or key that answered it |
 | --- | --- |
@@ -10936,7 +10937,10 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate   # one magpie on /config at a time
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1         # the new pod starts beside the old one
+      maxUnavailable: 0   # the old one ends once the new one is ready
   selector:
     matchLabels: {app: magpie}
   template:
@@ -10946,6 +10950,12 @@ spec:
       terminationGracePeriodSeconds: 30   # MAGPIE_DRAIN (20s) plus 10s to save
       securityContext:
         fsGroup: 65532
+      affinity:
+        podAffinity:   # the new pod on the old one's node, where the ReadWriteOnce volume is
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: magpie}
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: magpie
           image: ghcr.io/yetone/magpie:stable
@@ -10968,7 +10978,9 @@ spec:
 
 **Longer turns.** An agent’s turn can stream for minutes. Raise `MAGPIE_DRAIN` and `terminationGracePeriodSeconds` together, the second 10 seconds above the first: `MAGPIE_DRAIN: "300"` with `terminationGracePeriodSeconds: 310`.
 
-**One pod per volume.** The magpie serving the gateway keeps the saved sign-ins renewed, and two pods on one `/config` would both renew them, which can sign an account out. Keep `strategy: Recreate` (or `maxSurge: 0`): the old pod finishes its requests and ends before the new one starts, and requests sent in between wait for the new one. A default RollingUpdate with a ReadWriteOnce volume doesn’t overlap safely either: on another node the new pod can’t mount the volume, and the rollout stalls.
+**Rolling updates.** The new pod serves beside the old one on the same `/config`, and the Service sends it requests once it is ready; the old pod then drains as above, so no request is dropped. Each sign-in renewal and each saved file is locked across the pods. What only one magpie may do (renewing the saved sign-ins in the background, check-ins, plugin updates) the old pod keeps doing until it ends, and the new pod takes it over within a second. A ReadWriteOnce volume mounts on one node only, so the `podAffinity` above starts the new pod on the old one's node; with a ReadWriteMany volume, leave it out.
+
+**Updating from a version before v0.1.4526.** The old pod doesn't take part in that handover, so the two would both renew sign-ins for the length of the update. Make that one update with `strategy: Recreate`, then switch to the rolling update above.
 
 Questions or a setup worth sharing? Ask on [Discord](https://discord.gg/vGSnD3ZKQF). The [reference](https://github.com/yetone/magpie/blob/main/docs/reference.md#docker) has the details.
 

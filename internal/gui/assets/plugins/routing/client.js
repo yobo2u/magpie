@@ -766,7 +766,7 @@ function routingPage(part) {
   const quota = (w, used, left, vars) => w.balance != null ? t(left, { n: balText(w), ...vars }) + lapses(w)
     : (w.usedWindow ? shortWindow(w.usedWindow) + " " : "") + (w.limit > 0 ? quotaCount(w) + " · " : "") + t(quotaLeft ? left : used, { n: pct(share(w)), ...vars });
   const fill = (w) => Math.max(0, Math.min(100, share(w))) + "%";
-  const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood", sight: "images not taken", proxy: "proxy not reachable", offline: "network down", overloaded: "servers overloaded", effort: "reasoning effort not in its plan", overflow: "too long for its model", room: "reply asked past the window left", slow: "slow to start", prompt: "agent's prompt turned away", restricted: "account restricted by the vendor" };
+  const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood", sight: "images not taken", proxy: "proxy not reachable", offline: "network down", overloaded: "servers overloaded", effort: "reasoning effort not in its plan", overflow: "too long for its model", room: "reply asked past the window left", slow: "slow to start", prompt: "agent's prompt turned away", restricted: "account restricted by the vendor", suspended: "suspended by the vendor" };
   // a refusal the vendor called a rate limit, resting as out of quota
   // until the time it named (Rest.Rate), says rate limited: WorkBuddy's
   // per-model "频率限制" read as the account's quota used up, its credits
@@ -797,6 +797,7 @@ function routingPage(part) {
     free: ["Free first", "Requests go to what costs nothing first: the models their vendor serves at no cost to this subscription's allowance or credits, in their listed order, and only when those can't answer to one that spends them. Nothing that cost nothing is left unused."],
     cheap: ["Cheapest first", "Requests go to the member whose model costs least now, by its price a million tokens in and out at this hour — a vendor's peak hours count double where it bills them so, as DeepSeek and Ollama Cloud do — and the cheaper cache read when two cost the same; those that cost the same keep their listed order, and one with no known price goes last."],
     expiring: ["Free quota by expiry", "Free quota by expiry: the accounts on a free plan, or whose model costs nothing there, go first, the one whose free quota is lost soonest first — at its next reset, or when its credits expire if sooner; once it is used up, the next. A paid one takes requests only when no free one has quota left, the paid as Smart orders them."],
+    fit: ["Small context first", "Small context first: each request goes to the member with the smallest context window that holds it, so the big ones are kept for long requests; one whose window it is longer than is left out."],
     fast: ["Speed first", "Requests go to the one that has answered this model fastest lately, by its time to the first token and how fast it writes; those within a tenth of each other keep their listed order. One not measured lately gets one request in five, so it is measured again, and one that fails is passed over while it rests."],
   };
   // modeOf: a routing's name and what it does, a JS gateway plugin's
@@ -950,6 +951,9 @@ function routingPage(part) {
       // the vendor restricted the account itself (#1849): only its lifting,
       // which the vendor's appeal asks for, brings it back
       case "restricted": return t("The vendor restricted the account: it rests {d}, as only the vendor lifting the restriction brings it back. Appeal with the vendor; once it's lifted, try it again here", { d });
+      // an Azure key that answered before, refused 401: its subscription
+      // disabled till its credit renews, asked in the background
+      case "suspended": return t("Its key answered before, so the vendor has most likely suspended it (an Azure subscription out of credit): checked in the background, back as soon as it answers");
       case "backoff": return rest.why === "rate"
         ? t("It was rate limited again as soon as it was back ({n} times in a row): it rests {d}, longer each time until it answers", { n: rest.failures, d })
         : (rest.failures > 1
@@ -1065,6 +1069,12 @@ function routingPage(part) {
           || t("Free quota by expiry: {who} has free quota left, so it's spent before any paid one.", { who: w });
         return t("Free quota by expiry: no free one has quota left, so {who}, which is paid for, is next.", { who: w });
       }
+      case "fit":
+        // Small context first (routes.SmallFirst): its model's window, as
+        // the gateway read it for this request (Weighed.context)
+        if (f.context) return restedTo(t("its {n} context window is the smallest that holds this request.", { n: ctxShort(f.context) }))
+          || t("Small context first: {who}'s {n} context window is the smallest that holds this request.", { who: w, n: ctxShort(f.context) });
+        return t("Small context first: no member with a known context window can take this request, so {who} is next.", { who: w });
       case "cheap": {
         // Cheapest first (routes.Cheapest): its price now, as the gateway
         // read it for this request (Weighed.price)
@@ -2846,8 +2856,8 @@ function routingPage(part) {
     if (w.fixed) b.title = t("{level} reasoning, fixed on this model in the group", { level: w.fixed });
     if (w.fast) {
       // the group sends this member in its vendor's fast mode
-      const f = el("small", "fb", t("fast"));
-      f.title = t("Sent in its vendor's fast mode, as the group says");
+      const f = el("small", "fb", t(w.ultra ? "Ultrafast" : "fast"));
+      f.title = t(w.ultra ? "Sent Ultrafast where the account offers it, as the group says" : "Sent in its vendor's fast mode, as the group says");
       b.append(f);
     }
     if (w.fallback) b.append(el("small", "fb", t("fallback")));
@@ -3800,6 +3810,10 @@ function routingPage(part) {
     as.forEach((a, i) => items.push([a, "aside", undefined, as.about[i]]));
     r.tries.forEach((tr, i) => {
       items.push([tryWhy(r, i), tr.done ? (tryOk(tr) ? "ok" : "bad") : "wait", undefined, tried(r, tr)]);
+      // the id it went out under, when another than its model's: the
+      // variant a plugin picked for the effort (Antigravity's …-high), a
+      // name set for the model upstream
+      if (tr.wire) items.push([t("Sent to the vendor as {model}", { model: tr.wire }), "aside wire-said"]);
       // where its time went, once it is done: the first try's has the
       // request's masking before it
       const timed = i === 0 && r.masking > 0 ? { ...tr, masking: r.masking } : tr;
@@ -6357,7 +6371,7 @@ function routingPage(part) {
   // a group may also be routed by hand: every request to the member the
   // user picks on its card (provider.Manual, #317) — a provider's keys can't
   // and by its members' weights, as a provider's keys are (#1910)
-  const GROUP_ROUTE_OPTS = [...ROUTE_OPTS, ["cheap", "Cheapest first"], ["expiring", "Free quota by expiry"], ["weight", "By weight"], ["manual", "Manual"]];
+  const GROUP_ROUTE_OPTS = [...ROUTE_OPTS, ["cheap", "Cheapest first"], ["expiring", "Free quota by expiry"], ["fit", "Small context first"], ["weight", "By weight"], ["manual", "Manual"]];
   const AFF_OPTS = [["", "Auto"], ["session", "Session"], ["turn", "Within a turn"], ["off", "Off"], ["strict", "Strict"]];
   // what one rate limited with quota left does then (provider.Sink), as in
   // a provider's editor (app.js SINKS)
@@ -6422,6 +6436,7 @@ function routingPage(part) {
     fast: "Speed first: the member that answered fastest lately goes first, by its time to the first token and how fast it writes, each of its accounts or keys weighed on its own; those within a tenth keep their listed order, and one not measured lately gets one request in five, so it is measured again.",
     cheap: "Cheapest first: the member whose model costs least now goes first, by its price a million tokens in and out at this hour — so a model billed double in its vendor's peak hours, as DeepSeek's own API and Ollama Cloud's DeepSeek models are, goes behind a provider charging less then, and ahead of it off-peak. Those that cost the same keep their listed order; one with no known price goes last.",
     expiring: "Free quota by expiry: the accounts on a free plan, or whose model costs nothing there, go first, the one whose free quota is lost soonest first — at its next reset, or when its credits expire if sooner; once it is used up, the next. A paid one takes requests only when no free one has quota left, the paid as Smart orders them.",
+    fit: "Small context first: each request goes to the member with the smallest context window that holds it, so the big ones are kept for long requests; a member whose window the request is longer than is left out. Members of one size go as Smart orders them, and one whose window isn't known goes last.",
     manual: "Manual: every request goes to the model you pick on the group's card, over its own accounts or keys; the others, and the rules, wait until you pick another — none takes over when it fails.",
   };
   // a group in the group, and a provider set to route other than Smart, is
@@ -6749,6 +6764,11 @@ function routingPage(part) {
   const memberNote = (id) => { const o = !subOf(id) && !modelOf(id) && offOf(id); return subOf(id) ? t("routing group") : [modelOf(id)?.providerName || o && `${o.name} · ${t("switched off")}`, memberAccount(id)?.name, drawerOf(id) && t("Image model"), fixedOf(id) && fixedWords(fixedOf(id))].filter(Boolean).join(" · "); };
   // a member the group sends in its vendor's fast mode (Group.Fast)
   const fastIn = (g, id) => !!g?.fast?.includes(id) && !subOf(id);
+  // the word for a member's speed where it is said in a line: Ultrafast
+  // where the group sends it so and an account offers it (memberJSON.Ultra,
+  // as its button in the editor says), else fast (OoopsHh on X: a list
+  // card said fast of an Ultrafast member)
+  const speedIn = (g, id) => fastIn(g, id) && t(memberInfoOf(g, id)?.ultra ? "Ultrafast" : "fast");
   // a member Free first and Cheapest first count as costing nothing: its
   // provider is Free for me, or its vendor serves it free (memberJSON.Free),
   // said whatever the group's routing, so it shows before Free first is
@@ -6761,7 +6781,7 @@ function routingPage(part) {
     const i = memberInfoOf(g, id), m = modelOf(id), s = subOf(id), f = fixedOf(id);
     if (s) return { pv: t("routing group"), mn: s.name, at: "" };
     const acct = memberAccount(id);
-    const at = (acct ? ` · ${acct.name}` : "") + (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${t("fast")}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
+    const at = (acct ? ` · ${acct.name}` : "") + (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${speedIn(g, id)}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
     if (m) return { pv: m.providerName, mn: modelName(m), at };
     if (i?.providerOff) return { pv: i.name, mn: i.model, at: `${at} (${t("switched off")})` };
     return i?.name ? { pv: i.name, mn: i.model, at } : { pv: "", mn: id, at: "" };
@@ -7740,7 +7760,7 @@ function routingPage(part) {
       b.setAttribute("aria-checked", String(on));
       b.dataset.member = id;
       b.append(el("span", "dot"), memberIcon(id), el("span", "n", memberName(id)));
-      const note = [memberNote(id), fastIn(g, id) && t("fast"), freeIn(g, id) && t("free")].filter(Boolean).join(" · ");
+      const note = [memberNote(id), speedIn(g, id), freeIn(g, id) && t("free")].filter(Boolean).join(" · ");
       if (note) b.append(el("small", "", note));
       b.title = on ? t("Every request goes to {name}", { name: memberLabel(g, id) })
         : info?.providerOff ? offWords(info)
@@ -9485,6 +9505,33 @@ function routingPage(part) {
   };
   gTicks();
   new MutationObserver(gTicks).observe(gView(), { attributes: true, attributeFilter: ["hidden"] });
+  // Settings' search (app.js finder.js, canlee886 on X): the groups by name,
+  // and what a group's editor sets, each with the words it is found by in
+  // English and the reader's language: a group's strategy is its Routing
+  const G_FIELDS = [["Name"], ["Note"], ["In agents’ lists", "hidden show"], ["Models", "members model"], ["Accounts", "keys"], ["Gateway keys"],
+    ["Masking", "redact"], ["Patterns", "match"], ["Model lists"], ["Routing", "strategy order turn", "Routing strategies", ...GROUP_ROUTE_OPTS.map((x) => x[1])],
+    ["Rate limited", "429"], ["Slow to start", "first token timeout"], ["Every member busy"], ["Context", "window"], ["Compact at", "compaction"], ["Stays", "affinity session sticky"]];
+  window.routingFind = () => featuresOff.has("groups") || !groups ? null : {
+    groups: groups.groups.filter((g) => !g.hidden).map((g) => ({ id: g.id, name: g.name || g.id, note: g.note || "" })),
+    fields: G_FIELDS.map(([f, more = "", ...also]) => [f, t(f), [f, t(f), more, ...also.flatMap((x) => [x, t(x)])].join(" ").toLowerCase()]),
+  };
+  // routingOpenGroup: the group's editor, at field (its label, in English)
+  // when given, in sight when the reader's click asked (go) and lit
+  window.routingOpenGroup = async (id, field, go) => {
+    if (gView().hidden && !(await window.show("groups"))) return;
+    if (!groups) await loadGroups();
+    const g = groups?.groups.find((x) => x.id === id);
+    if (!g || (gEdit?.id !== id && !(await openGroupEditor(g)))) return;
+    const ed = gList.querySelector(".rt-gedit");
+    if (!ed) return;
+    const l = field && [...ed.querySelectorAll("label")].find((x) => x.textContent.trim() === t(field));
+    if (l?.closest("details")) l.closest("details").open = true;
+    const at = l || ed;
+    if (go) { at.scrollIntoView({ block: "center" }); window.arrived?.(gView()); }
+    at.classList.remove("find-lit");
+    void at.offsetWidth;
+    at.classList.add("find-lit");
+  };
   // newGroupWith: a new group's editor, opened with the model in it — a
   // model of a provider kept for routing groups that no group has, which
   // agents can reach no other way. The picker and the provider's editor
@@ -9873,7 +9920,7 @@ function routingPage(part) {
         if (b.classList.contains("open")) return closeProtoMenu();
         openProtoMenu(b, g.members.map((id) => {
           const info = g.memberInfo?.find((x) => x.id === id);
-          const note = [memberNote(id), fastIn(g, id) && t("fast"), freeIn(g, id) && t("free"), info && !info.ready && t("no provider serves it now")].filter(Boolean).join(" · ");
+          const note = [memberNote(id), speedIn(g, id), freeIn(g, id) && t("free"), info && !info.ready && t("no provider serves it now")].filter(Boolean).join(" · ");
           return { v: id, name: memberName(id), literalName: true, note, title: memberLabel(g, id) };
         }), picked, async (id) => {
           closeProtoMenu();
