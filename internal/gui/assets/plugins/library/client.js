@@ -2237,11 +2237,20 @@ magpie.plugin("library", (ctx) => {
     const of = (kind) => (p.parts || []).filter((x) => x.kind === kind).map((x) => x.name);
     return pluginParts({ skills: of("skill"), mcp: of("mcp"), hooks: of("hook"), subagents: of("subagent") });
   }
+  // a plugin or package's name in a row's origin shows only what it
+  // declares, under the same bar as an imported plugin's "In" tag (#7280)
+  // with Show all; per tab, in memory only, cleared once it lists none
+  const nativeOnly = {};
+  const nativeKey = (p) => p.agent + " " + p.name;
   function nativeSection(kind) {
     if (agentless()) return [];
     if (!nativeView) { if (!nativeLoading) loadNative(); return []; }
+    const shown = (p) => (p.parts || []).some((x) => x.kind === kind) && !isHidden({ id: p.agent });
+    if (nativeOnly[kind] && !nativeView.some((p) => nativeKey(p) === nativeOnly[kind] && shown(p))) delete nativeOnly[kind];
+    const only = nativeOnly[kind];
     const rows = [];
     for (const p of nativeView) {
+      if (only && nativeKey(p) !== only) continue;
       for (const x of p.parts || []) {
         if (x.kind !== kind || isHidden({ id: p.agent })) continue;
         const row = el("div", "row lib-row lib-native");
@@ -2250,8 +2259,13 @@ magpie.plugin("library", (ctx) => {
         who.append(el("div", "name mono", x.name));
         if (x.detail) who.append(el("div", kind === "hook" ? "sub mono" : "sub", x.detail));
         const origin = el("div", "lib-src");
-        const bits = [p.agentName, p.name + (p.version ? " " + p.version : ""), p.scope === "project" ? t("project scope") : t("user scope")];
-        origin.append(el("span", "", bits.join(" · ")));
+        const pick = el("button", "lib-srcpick", p.name + (p.version ? " " + p.version : ""));
+        pick.dataset.native = nativeKey(p);
+        pick.title = t("Show only what {plugin} brings", { plugin: p.name });
+        pick.onclick = (e) => { e.stopPropagation(); nativeOnly[kind] = nativeKey(p); render(); };
+        const bits = el("span", "lib-srcbits");
+        bits.append(p.agentName + " · ", pick, " · " + (p.scope === "project" ? t("project scope") : t("user scope")));
+        origin.append(bits);
         if (p.project) origin.append(pathLink(p.project));
         origin.title = p.source || "";
         who.append(origin);
@@ -2265,6 +2279,12 @@ magpie.plugin("library", (ctx) => {
     const rh = el("div", "row-head");
     rh.append(el("span", "label", t("Installed in the agents themselves")), el("span", "grow"));
     box.append(rh, intro(t("Listed as the agents' plugins and packages declare them. The agent loads them: magpie copies and changes nothing, and a session shows what is loaded.")));
+    if (only) {
+      const bar = el("div", "row-head lib-bundleonly lib-nativeonly");
+      bar.append(el("span", "label", t("Only what {plugin} brings", { plugin: only.slice(only.indexOf(" ") + 1) })), el("span", "grow"),
+        button(t("Show all"), "lib-bundleall", () => { delete nativeOnly[kind]; render(); }));
+      box.append(bar);
+    }
     const list = el("div", "list lib-list");
     list.append(...rows);
     box.append(list);
@@ -3114,7 +3134,7 @@ magpie.plugin("library", (ctx) => {
     connect.classList.add("lib-hubconnect");
     at.append(glyph(GLYPH.web), aw, copyBtn(hubURL(), t("Address")), connect);
     list.append(at);
-    list.append(hubNoteRow(), hubToolsRow());
+    list.append(hubNoteRow(), hubToolsRow(), hubCodeRow());
     const names = (why) => hubAgents().filter((a) => a.hub === why).map((a) => a.name).join(", ");
     const why = [
       ["no-remote", "{agents} reaches no MCP server over HTTP, so it keeps each server's own entry."],
@@ -3212,6 +3232,23 @@ magpie.plugin("library", (ctx) => {
         if (ok) status(v
           ? t("Agents are given the router's tools on demand — restart them to use it")
           : t("Agents are given every tool of the router — restart them to use it"), "ok");
+      })));
+    return row;
+  }
+  // Code mode: on, the default, the router also gives each agent run_code,
+  // which runs a script calling its tools and gives back only what the
+  // script returns (gateway.hubCodeOn). Off takes it away (settings'
+  // routerNoCode).
+  function hubCodeRow() {
+    const row = el("div", "row lib-row lib-hubcoderow");
+    const who = el("div", "who");
+    who.append(el("div", "name", t("Code mode")));
+    who.append(el("div", "sub wraps", t("Agents can run a short script that calls several tools in one step, and only its result reaches the model.")));
+    row.append(glyph(GLYPH.cmd), who, toggle(lib.hubCode !== false, t("Code mode"), (v) =>
+      change("servers/hub-code", { on: v }).then((ok) => {
+        if (ok) status(v
+          ? t("Agents can run code with the router's tools — restart them to use it")
+          : t("Agents no longer run code with the router's tools — restart them to use it"), "ok");
       })));
     return row;
   }

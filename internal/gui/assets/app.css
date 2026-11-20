@@ -2690,6 +2690,10 @@ body .foot .status.lift { white-space: normal; overflow-wrap: anywhere; text-ove
 .pop li.reset .ic { opacity: .75; }
 .pop li.custom .v { color: var(--fg); }
 .pop li.custom .n { color: var(--muted); }
+/* a routing group no provider serves now: in its section, greyed, with why */
+.pop li.unserved { cursor: default; }
+.pop li.unserved .v, .pop li.unserved .ic { opacity: .5; }
+.pop li.unserved.sel { background: transparent; }
 /* the models on the agent's own account through magpie, folded into one
    row (#496): a chevron says it opens, turned down while open */
 .pop li.fold .v { color: var(--muted); }
@@ -4287,6 +4291,10 @@ body.panel #find { display: none; }
 .feat-say { margin: 2px 4px 10px; font-size: 12px; line-height: 1.45; color: var(--muted); }
 .set-searching .feat-say { display: none; }
 .row.pref .sub.feat-why { color: var(--muted); font-size: 11px; }
+/* a link that starts its line sits flush with the name and the words above
+   it, its padding out to the left; one after a word or a warning keeps it
+   (every word a line starts with is an element: plugins/search/settings.js) */
+.feat-go > .link:first-child { margin-left: -4px; }
 /* the local model's row says a download, a device or an error in full */
 #privacyModelRow .val { gap: 8px; }
 #privacyModelRow .sub { white-space: normal; overflow-wrap: anywhere; }
