@@ -472,6 +472,10 @@ type providerJSON struct {
 	// each key's own rate on the official price, by its id, where it
 	// bills apart from PriceRate (@tnt12231 on X)
 	KeyPriceRates map[string]float64 `json:"keyPriceRates,omitempty"`
+	// what one of a sub2api relay's dollars cost the user, and each key's
+	// group rate read from the relay, by its id (@YIXIE233 on X)
+	TopUpRate     float64            `json:"topUpRate,omitempty"`
+	KeyGroupRates map[string]float64 `json:"keyGroupRates,omitempty"`
 
 	// what it charges against the official price, 0 for that (#819)
 	PriceRate float64     `json:"priceRate,omitempty"`
@@ -491,6 +495,11 @@ type providerJSON struct {
 	// with none listed to chat with, how many embedding and rerank models
 	// it lists: served on /v1/embeddings and /v1/rerank, with no pick
 	Retrieval int `json:"retrieval,omitempty"`
+	// its embedding and rerank models (gateway.RetrievalModels), listed
+	// apart in its editor: they need no pick, and agents don't chat with
+	// them, so they aren't among Models (@rfiacne on X couldn't find them)
+	EmbedIDs  []string `json:"embedIds,omitempty"`
+	RerankIDs []string `json:"rerankIds,omitempty"`
 	// its video models (gateway.Videomakers), listed apart in its editor
 	// as its image models are, and those unticked there
 	// (provider.HiddenVideomakers)
@@ -724,6 +733,21 @@ type presetJSON struct {
 	New bool `json:"new,omitempty"`
 }
 
+// pluginPartnerJSON is a plugin's partner as the Plugins page lists it: its
+// package, its name and logo, its tagline by language and the languages
+// it is listed in, and its site (a usemagpie.ai/go link, siteHost the
+// host it sends the browser to).
+type pluginPartnerJSON struct {
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Plugin   string            `json:"plugin"`
+	Icon     string            `json:"icon,omitempty"`
+	Notes    map[string]string `json:"notes,omitempty"`
+	Langs    []string          `json:"langs,omitempty"`
+	Website  string            `json:"website,omitempty"`
+	SiteHost string            `json:"siteHost,omitempty"`
+}
+
 type gatewayJSON struct {
 	URL     string   `json:"url"`
 	LAN     bool     `json:"lan"`
@@ -816,8 +840,11 @@ type excludedJSON struct {
 type providersJSON struct {
 	Providers []providerJSON `json:"providers"`
 	Presets   []presetJSON   `json:"presets"`
-	Excluded  []excludedJSON `json:"excluded"` // sign-ins magpie found but will not share
-	Gateway   gatewayJSON    `json:"gateway"`
+	// PluginPartners are the partners whose product is a plugin: the
+	// Plugins page lists them first in Discover
+	PluginPartners []pluginPartnerJSON `json:"pluginPartners,omitempty"`
+	Excluded       []excludedJSON      `json:"excluded"` // sign-ins magpie found but will not share
+	Gateway        gatewayJSON         `json:"gateway"`
 	// CodexDaemon is the account Codex's background app-server is still
 	// signed in to after Codex was switched to another; "" when none is
 	// left behind (provider.CodexDaemonStale).
@@ -989,7 +1016,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountWindowAmounts: p.AccountWindowAmounts, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, Billing: p.Billing, BillingKind: p.BillingKind(), InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), HTTP1: p.HTTP1, ClientCert: tilde(p.ClientCert), ClientKey: tilde(p.ClientKey), ServerCA: tilde(p.ServerCA), TakesClientCert: p.TakesClientCert(), ServerPin: p.ServerPin, TakesServerPin: p.TakesServerPin(), Resolve: p.Resolve, TakesResolve: p.TakesResolve(), Socket: p.Socket, TakesSocket: p.TakesSocket(), LimitRestOff: p.LimitRestOff, UpstreamProviders: p.UpstreamProviders, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: !p.MagpieUserAgent, OwnClient: p.OwnClient(), PassErrors: p.PassErrors, TakesPassErrors: p.TakesPassErrors(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, NoBalanceProbe: p.NoBalanceProbe, ModelsURL: p.ModelsURL, ListOff: p.ListsOff(), TakesListOff: p.Account == nil && !p.IsPlugin() && !p.DecideOnly(), TakesModelHeaders: p.Account == nil, DecideAPIKind: p.DecideAPIKind(),
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
 		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, UseFirst: p.UseFirst, NoStandIn: p.NoStandIn, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, ThisDevice: p.ThisDevice, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
-		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate, KeyPriceRates: p.KeyPriceRates,
+		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate, KeyPriceRates: p.KeyPriceRates, TopUpRate: p.TopUpRate, KeyGroupRates: keyGroupRatesOf(p),
 		RateWindows: p.RateWindows, RateNow: rateNowOf(p, time.Now()),
 		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, MaxImages: p.MaxImages,
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
@@ -1387,13 +1414,15 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		out.Deciders = &deciders
 	}
 	out.Exposed = len(exposed)
+	for _, m := range gateway.RetrievalModels(p, catalog.ServesEmbedding) {
+		out.EmbedIDs = append(out.EmbedIDs, m.ID)
+	}
+	for _, m := range gateway.RetrievalModels(p, catalog.ServesRerank) {
+		out.RerankIDs = append(out.RerankIDs, m.ID)
+	}
 	if len(out.Models) == 0 {
 		// a vendor of embedding and rerank models alone (heatonz)
-		for _, m := range append(catalog.LiveServing(p.ID, ""), p.PlanRetrieval("")...) {
-			if m.Serves == catalog.ServesEmbedding || m.Serves == catalog.ServesRerank {
-				out.Retrieval++
-			}
-		}
+		out.Retrieval = len(out.EmbedIDs) + len(out.RerankIDs)
 	}
 	// its image models aren't among those agents chat with; the editor
 	// lists them apart, as Settings → Models → Images is where one is picked
@@ -1572,6 +1601,9 @@ func providersState() providersJSON {
 		team := provider.TakesZhipuTeam(bases)
 		vendor, keyRegions := presetAccessKey(pr)
 		s.Presets = append(s.Presets, presetJSON{PresetDef: pr, Added: have[pr.ID], ZhipuTeam: team, AccessKey: vendor != "", AccessKeyVendor: vendor, AccessKeyRegions: keyRegions, Vertex: pr.ID == provider.VertexPreset, OwnClient: presetOwnClient(pr)})
+	}
+	for _, pa := range provider.PluginPartners() {
+		s.PluginPartners = append(s.PluginPartners, pluginPartnerJSON{ID: pa.ID, Name: pa.Name, Plugin: pa.Plugin, Icon: pa.Icon, Notes: pa.Notes, Langs: pa.Langs, Website: pa.Website, SiteHost: pa.SiteHost})
 	}
 	cat, models := provider.CatalogGroups()
 	s.Gateway = gatewayJSON{URL: gateway.URL(), OnNetwork: gateway.OnNetwork(), Models: models, Calls: []gateway.Call{}, Groups: []gwGroupJSON{}}
@@ -1976,7 +2008,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			RateWindows json.RawMessage `json:"rateWindows"`
 			// PriceRate is what it charges against the official price
 			// (#819): a number, null or 0 for none; left out, it is kept
-			PriceRate    json.RawMessage `json:"priceRate"`
+			PriceRate json.RawMessage `json:"priceRate"`
+			// TopUpRate is what one of a sub2api relay's dollars cost
+			// (@YIXIE233 on X): a number, null or 0 for none; left out,
+			// it is kept
+			TopUpRate    json.RawMessage `json:"topUpRate"`
 			AccountOrder []string        `json:"accountOrder"`
 			// New is set by the editor's Add: the provider is one more, never
 			// one replacing the provider that has its id or name
@@ -2355,6 +2391,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return
 			}
 			in.PriceRate = rate
+			topUp, keepTopUp, err := topUpRateOf(req.TopUpRate)
+			if err != nil {
+				fail(rw, err)
+				return
+			}
+			in.TopUpRate = topUp
 			// each key's own rate, by its id (@tnt12231 on X): {} takes
 			// them all off, left out they are kept
 			for k, r := range in.KeyPriceRates {
@@ -2511,6 +2553,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				if keepRate && old != nil {
 					in.PriceRate = old.PriceRate
+				}
+				if keepTopUp && old != nil {
+					in.TopUpRate = old.TopUpRate
+				}
+				if in.TopUpRate > 0 && (old == nil || old.TopUpRate != in.TopUpRate) {
+					defer provider.ReadKeyRatesSoon()
 				}
 				if in.KeyPriceRates == nil && old != nil {
 					in.KeyPriceRates = old.KeyPriceRates
@@ -3827,8 +3875,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
-	// the add sheet counts what it showed of the partners and what was
-	// opened of them (provider.CountPartner); only listed partners count.
+	// the add sheet and the Plugins page count what they showed of the
+	// partners and what was opened of them (provider.CountPartner); only
+	// listed partners count.
 	// Those shown are no longer new (provider.NoticePartners).
 	mux.HandleFunc("POST /api/partner", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -3990,6 +4039,43 @@ func priceRateOf(raw json.RawMessage) (r float64, keep bool, err error) {
 		return 0, false, fmt.Errorf("%s, not %v", bad, *n)
 	}
 	return *n, false, nil
+}
+
+// topUpRateOf is a save's topUpRate: keep when the save left it out, 0
+// for null, else the rate.
+func topUpRateOf(raw json.RawMessage) (r float64, keep bool, err error) {
+	if len(raw) == 0 {
+		return 0, true, nil
+	}
+	var n *float64
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return 0, false, fmt.Errorf("a top-up rate is a number, like 0.07, not %s", raw)
+	}
+	if n == nil {
+		return 0, false, nil
+	}
+	if bad := provider.TopUpRateOK(*n); bad != "" {
+		return 0, false, fmt.Errorf("%s, not %v", bad, *n)
+	}
+	return *n, false, nil
+}
+
+// keyGroupRatesOf is each of p's keys' group rate read from its relay, by
+// the key's id: nil when none was read.
+func keyGroupRatesOf(p provider.Provider) map[string]float64 {
+	if p.Account != nil || p.Key == "" {
+		return nil
+	}
+	var out map[string]float64
+	for _, k := range p.KeyList() {
+		if g, ok := p.KeyGroupRate(k.ID); ok {
+			if out == nil {
+				out = map[string]float64{}
+			}
+			out[k.ID] = g
+		}
+	}
+	return out
 }
 
 // rateWindowsOf is a save's rateWindows: keep when the save left it out,
