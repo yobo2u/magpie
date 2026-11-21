@@ -2772,6 +2772,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// which what is done with it goes by
 	who, agent := callerOf(r), agentOf(r)
 	metadata := requestSessionMetadata(r.Header, body)
+	r = r.WithContext(withCodexPluginSubagent(r.Context(), codexPluginSubagent(cmp.Or(who.agent, agent), r.Header, body)))
 	var clientResponseID string // only a reply released to the client owns this ID
 	call := Call{Time: start, From: from, Model: unprefixed(modelOf(body)), Agent: who.agent, Via: who.via, Kind: requestCallKind(r.Header, metadata),
 		wire: archiving(r, capture, start, nil), headers: headerLogOf(r.Context())}
@@ -6834,14 +6835,7 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		req.Header.Set(provider.ConversationHeader, conversationID(in, body))
 		// the session and subagent the agent named, for a plugin that
 		// keeps state per conversation (plugins#620)
-		req.Header.Del(provider.SessionToPluginHeader)
-		req.Header.Del(provider.SubagentToPluginHeader)
-		if v := sessionOf(in); v != "" {
-			req.Header.Set(provider.SessionToPluginHeader, v)
-		}
-		if v := subOf(in); v != "" {
-			req.Header.Set(provider.SubagentToPluginHeader, v)
-		}
+		tellPluginSession(ctx, req.Header, in, body)
 		tellWorkPlace(req.Header, to, body)
 		// the agent it came from, here or through another magpie
 		tellCaller(ctx, req.Header)
@@ -7474,6 +7468,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			next = prevElsewhere(r, p, asSent, true)
 		case delta && prevRefused(res.StatusCode, b):
 			next = sentWhole
+			if remote == nil && prevRelay(p) {
+				prevDeltaIgnored(p, "turned away a turn")
+			}
 		}
 		if !bytes.Equal(next, body) {
 			body = next
@@ -7483,6 +7480,18 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
 				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 			}
+		}
+	}
+	if a := prevAskOf(r.Context()); delta && remote == nil && res.StatusCode == http.StatusOK && a != nil && a.upstreamID != "" &&
+		prevRelay(p) && gjson.GetBytes(body, "previous_response_id").String() == a.upstreamID && !prevEchoed(res, a.upstreamID) {
+		// a relay that answered the new input alone without saying it
+		// followed the response named: dropped, the conversation lost,
+		// so it is asked again whole (prevRelay)
+		res.Body.Close()
+		prevDeltaIgnored(p, "answered a turn without naming the response it followed")
+		body = sentWhole
+		if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+			return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 		}
 	}
 	if proto == provider.Responses {
@@ -9935,11 +9944,6 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	if msg := unportableVideo(to, request); msg != "" {
 		// told, not left out for the model to answer the words alone (#6135)
 		return writeError(w, from, 400, msg), msg
-	}
-	if s.refusesDeferred(p, from, to, model, request) {
-		// Claude Code asks again with every tool declared, so a tool it
-		// loads doesn't change the prompt's start (deferred_route.go)
-		return writeError(w, from, 400, deferredRefusal), deferredRefusal
 	}
 	stream := request.Stream
 	request.Stream = true
