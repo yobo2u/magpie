@@ -3016,9 +3016,9 @@ magpie.plugin("library", (ctx) => {
     const all = mcpAgents();
     pickingFor("servers", lib.servers);
     // the router first, over the list (the owner, 11-21: at the list's
-    // foot nobody found it); with no server only where it is what the
-    // page is for, with no agent, to turn on before the first server
-    if (lib.servers.length || agentless()) body.append(...hubPart());
+    // foot nobody found it), and always, with no server too: a row that
+    // comes and goes reads as no such feature (the owner, 11-23)
+    body.append(...hubPart());
     if (!lib.servers.length) {
       const add = button(t("＋ Add a server"), "action", () => editServer(null));
       body.append(empty(t("No servers in the library yet"), lib.foundServers.length && !agentless() ? t("Add one, or bring in those your agents already have, below.") : t("Paste a server's JSON from its README, or fill it in."), add));
@@ -6070,6 +6070,9 @@ magpie.plugin("library", (ctx) => {
     if (line) who.append(el("div", "sub lib-plparts", line));
     // synced in from another computer, its source not reached here yet
     if (p.pending) who.append(el("div", "sub lib-plpending", t("Not fetched on this computer yet: Update tries again")));
+    // Claude Code loads it natively, so magpie leaves Claude Code out of
+    // its parts: each hook would run twice (jinpwng on X)
+    if (p.claudeNative) who.append(el("div", "sub lib-plnative", t("Claude Code loads {id} itself, so magpie gives it none of this", { id: p.claudeNative })));
     row.append(glyph(GLYPH.folder), who,
       agentChips(all, p.agents, chipsChange("plugins/agents", p.name, "plugins", (x) => pluginRow(x, all)), { all: true }),
       toggle(!p.off, t("Turn {name} on or off", { name: p.name }), (v) => change("plugins/on", { name: p.name, on: v },
@@ -6121,8 +6124,10 @@ magpie.plugin("library", (ctx) => {
       : t("A skill is a folder with a SKILL.md an agent loads when it's needed. The library keeps each one once and links it into the agents you pick.")));
     const all = skillAgents();
     // the skill router first, over the install card and the list (the
-    // owner, 11-21: at the foot of a long list nobody found it)
-    if (lib.skills.length && all.length) body.append(...skillRouterPart());
+    // owner, 11-21: at the foot of a long list nobody found it), and
+    // always: hidden while the library had no skill, the owner (11-23)
+    // found no row and took it for no such feature
+    body.append(...skillRouterPart());
     body.append(installCard());
     pickingFor("skills", lib.skills);
     if (lib.skills.length) {
@@ -7744,6 +7749,12 @@ magpie.plugin("library", (ctx) => {
       const sub = el("div", "sub lib-plparts", problem || line);
       sub.title = problem || line;
       w.append(sub);
+      // Claude Code loads it natively in this project: magpie writes
+      // Claude Code none of it here, or each hook runs twice; given to
+      // Claude Code user-wide, it runs twice here all the same
+      const native = p.claudeNative?.[b.name], twice = p.claudeTwice?.[b.name];
+      if (twice) w.append(el("div", "sub lib-plnative lib-pltwice", t("Claude Code loads {id} itself in this project too, so here it runs twice: take Claude Code off the plugin to stop it", { id: twice })));
+      else if (native) w.append(el("div", "sub lib-plnative", t("Claude Code loads {id} itself, so magpie gives it none of this", { id: native })));
       const on = (p.plugins?.[b.name] || []).filter((id) => all.some((a) => a.id === id));
       const say = (next) => next.length
         ? t("{item} is in {name} for {agents}", { item: b.name, name: p.name, agents: next.map(nameOf).join(", ") })
@@ -8043,6 +8054,8 @@ magpie.plugin("library", (ctx) => {
     who.append(el("div", "sub wraps", lib.skillRouter
       ? t("Each agent is given one skill, magpie-skills, that lists its skills. It reads a skill when a task fits it, so its prompt carries one description instead of every skill's. Restart an agent for it to read the change.")
       : t("Give each agent one skill, magpie-skills, that lists its skills, in place of each one: its prompt carries one description instead of every skill's.")));
+    // it lists the library's skills only: with none, say what brings them
+    if (!lib.skills.length) who.append(el("div", "sub wraps lib-skillrouter-empty", t("It lists the library's skills. Import the agents' own skills below for it to list them.")));
     row.append(glyph(GLYPH.skill), who, toggle(!!lib.skillRouter, t("Skill router"), (on) =>
       change("skills/router", { on }, on
         ? t("The agents are given magpie-skills in place of their skills — restart them to use it")
