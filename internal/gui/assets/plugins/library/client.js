@@ -41,8 +41,11 @@ magpie.plugin("library", (ctx) => {
     fold: "M8 2v4 M6 4.2 8 6l2-1.8 M8 14v-4 M6 11.8 8 10l2 1.8 M3 8h10",
     web: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z M2.5 8h11 M8 2.5c1.6 1.7 2.3 3.5 2.3 5.5S9.6 11.8 8 13.5 M8 2.5C6.4 4.2 5.7 6 5.7 8s.7 3.8 2.3 5.5",
     skill: "M4 2.5h6.5L12 4v9.5H4z M6 6h4 M6 8.5h4 M6 11h2.5",
+    // the sidebar's Skills star (navicons.js NAV_SUB_IC.library.skills,
+    // loaded later than this may draw): the Skill router row
+    skills: "M8 3l1.4 3.6 3.6 1.4-3.6 1.4L8 13 6.6 9.4 3 8l3.6-1.4z",
     doc: "M4 2.5h5.5L12 5v8.5H4z M9.5 2.5V5H12",
-    folder: "M2.5 4.5h4l1.2 1.3h5.8v6.7h-11z",
+    folder: "M2.5 4h4l1.2 1.3h5.8v6.7h-11z",
     up: "M8 12.5v-9 M4.5 7 8 3.5 11.5 7",
     down: "M8 3.5v9 M4.5 9 8 12.5 11.5 9",
     trash: "M3.5 4.5h9 M6.5 4.5V3h3v1.5 M4.5 4.5l.6 8.5h5.8l.6-8.5",
@@ -53,7 +56,7 @@ magpie.plugin("library", (ctx) => {
     back: "m9.5 4.5-3 3.5 3 3.5",
     // an arrow turning back: a skill going back where it came from
     putBack: "M6 3.5 3 6.5l3 3 M3 6.5h6.5a3.5 3.5 0 0 1 0 7H7",
-    hook: "M10.5 2.5v6.5a3 3 0 0 1-6 0V7.5 M3 9l1.5-1.5L6 9",
+    hook: "M10.5 3.25v6.5a3 3 0 0 1-6 0V8.25 M3 9.75l1.5-1.5L6 9.75",
     // a person with a second, smaller one it hands work to
     subagent: "M6 3a2.2 2.2 0 1 0 0 4.4A2.2 2.2 0 0 0 6 3z M2 13c.5-2.2 2-3.4 4-3.4s3.5 1.2 4 3.4 M11.5 7.5a1.5 1.5 0 1 0 0 .01 M10.2 12.5c.3-1.3 1.1-2 2.3-2s1.6.5 1.9 1.4",
     // a slash in a key, as a command is typed
@@ -61,7 +64,7 @@ magpie.plugin("library", (ctx) => {
     // a page with a ruled line and a check: a rule the agent keeps to
     rule: "M4 2.5h8v11H4z M6 5.5h4 M6 8h4 M6 10.8l1 1 2-2",
     // a clock with an arrow going back round it, as macOS draws backups
-    backup: "M3.2 8a4.8 4.8 0 1 0 1.4-3.4 M2.8 2.6v2.4h2.4 M8 5.3V8l1.9 1.2",
+    backup: "M3.2 8.3a4.8 4.8 0 1 0 1.4-3.4 M2.8 2.9v2.4h2.4 M8 5.6V8.3l1.9 1.2",
     power: "M8 2.5v5 M4.7 4.6a4.8 4.8 0 1 0 6.6 0",
   };
 
@@ -691,7 +694,7 @@ magpie.plugin("library", (ctx) => {
     if (changing) return false;
     changing = true;
     const ev = window.event;
-    const pressed = ev?.type === "click" && ev.target?.closest?.("button:not(.lib-switch):not(.lib-radio)");
+    const pressed = ev?.type === "click" && ev.target?.closest?.("button:not(.lib-switch):not(.lib-radio):not(.lib-route)");
     const held = [...document.querySelectorAll("#view-library button, #modal.lib button")].filter((b) => !b.disabled);
     for (const b of held) b.disabled = true;
     page.setAttribute("aria-busy", "true");
@@ -2310,9 +2313,9 @@ magpie.plugin("library", (ctx) => {
         button(t("Show all"), "lib-bundleall", () => { delete nativeOnly[kind]; render(); }));
       box.append(bar);
     }
-    const list = el("div", "list lib-list");
-    list.append(...rows);
-    box.append(list);
+    // folded like a long "In your agents" list; one plugin's own, picked
+    // from a row, is shown whole
+    box.append(foldedFound("native-" + kind, rows, !!only));
     return [box];
   }
 
@@ -3489,7 +3492,7 @@ magpie.plugin("library", (ctx) => {
       const out = [el("p", "lib-hublead lib-hubapps", t("Any app that speaks MCP connects at this address"))];
       const addr = el("div", "lib-hubaddr");
       addr.append(el("code", "", url), copyBtn(url, t("Address")));
-      out.push(addr, el("p", "lib-hubcap", t("From another computer, use the address magpie is reached at there, with a gateway key: Authorization: Bearer <key>.")));
+      out.push(addr, el("p", "lib-hubcap", t("From another computer, use the address magpie is reached at there, with a gateway key: Authorization: Bearer <key>. A key with a model, account or spend limit isn't given the servers that run as programs here.")));
       // the address that gives its tools on demand (gateway.HubOnDemandQuery;
       // Passings_z on X): which app connects isn't known, so the plain
       // address gives every tool, and an app that doesn't search its tools
@@ -3586,8 +3589,9 @@ magpie.plugin("library", (ctx) => {
     withPlugin(nm, s);
     if (s.plugin) nm.append(tag(t("Plugin"), "lib-local lib-plugin", t("{plugin}'s tools. Plugins can hide them from every agent, keeping the plugin; sync never carries them to your other computers", { plugin: s.plugin })));
     else if (s.local) nm.append(tag(t("Not synced"), "lib-local", s.bridge ? bridgedWhy() : t("Sync never carries it to your other computers")));
-    // out of the hub, each agent's own entry (#4382): said only while the hub is on
-    if (lib.mcpHub && s.hub === "direct") nm.append(tag(t("Not through the router"), "lib-direct", t("Each agent is given its own entry for it, as with the MCP router off")));
+    // through the hub or each agent's own entry (#4382), said on every
+    // row while the hub is on and turned from there (MetalHqa on X)
+    if (lib.mcpHub && !agentless() && !picking) nm.append(routeTag(s));
     // its status beside the name, not in it: the name is still the name
     who.classList.add("lib-srvwho");
     who.append(nm, healthEl(s.name));
@@ -3604,6 +3608,25 @@ magpie.plugin("library", (ctx) => {
     row.onclick = () => editServer(s);
     row.title = t("Edit {name}", { name: s.name });
     return row;
+  }
+
+  // Whether a server goes through the MCP router, on its row: a click
+  // turns it the other way, as the editor's switch does, and the agents
+  // are written again at once (ServerHub). Kept direct, it is the tag the
+  // row had before (.lib-direct).
+  function routeTag(s) {
+    const on = s.hub !== "direct";
+    const b = el("button", "lib-tag lib-route" + (on ? " on" : " lib-direct"), on ? t("Through the router") : t("Not through the router"));
+    b.type = "button";
+    b.setAttribute("role", "switch");
+    b.setAttribute("aria-checked", on ? "true" : "false");
+    b.title = on ? t("The agents reach it through the MCP router. Click to give each agent its own entry for it") : t("Each agent is given its own entry for it, as with the MCP router off");
+    b.onclick = (e) => {
+      e.stopPropagation();
+      change("servers/router", { name: s.name, on: !on },
+        on ? t("{name} is given to each agent directly", { name: s.name }) : t("{name} goes through the MCP router", { name: s.name }));
+    };
+    return b;
   }
 
   // A server off for everyone, or on again as it was (swang20201 on X:
@@ -6335,7 +6358,7 @@ magpie.plugin("library", (ctx) => {
     });
     const names = agents.map(nameOf).join(", ");
     add.title = names ? t("Adds it to the library for {agents}, which have its repository's other skills", { agents: names }) : t("Adds it to the library");
-    row.append(glyph(GLYPH.skill), who, have, ign, add);
+    row.append(glyph(GLYPH.skills), who, have, ign, add);
     return row;
   }
 
@@ -7718,7 +7741,10 @@ magpie.plugin("library", (ctx) => {
       const say = (next) => next.length
         ? t("{item} is in {name} for {agents}", { item: h.name, name: p.name, agents: next.map(nameOf).join(", ") })
         : t("{item} is out of {name}", { item: h.name, name: p.name });
-      row.append(glyph(GLYPH.hook), w, agentChips(all, on, projectChange("projects/hooks", p.dir, h.name, say), { blocked: hookBlocked(h) }));
+      // Antigravity takes hooks in a project only: the server says which
+      const global = hookBlocked(h);
+      const blocked = (a) => h.projectNo && a.id in h.projectNo ? h.projectNo[a.id] : global(a);
+      row.append(glyph(GLYPH.hook), w, agentChips(all, on, projectChange("projects/hooks", p.dir, h.name, say), { blocked }));
       card.append(row);
     }
     if (!(lib.hooks || []).length) card.append(el("p", "lib-aside lib-projfoot", t("No hooks in the library yet")));
@@ -8056,7 +8082,9 @@ magpie.plugin("library", (ctx) => {
       : t("Give each agent one skill, magpie-skills, that lists its skills, in place of each one: its prompt carries one description instead of every skill's.")));
     // it lists the library's skills only: with none, say what brings them
     if (!lib.skills.length) who.append(el("div", "sub wraps lib-skillrouter-empty", t("It lists the library's skills. Import the agents' own skills below for it to list them.")));
-    row.append(glyph(GLYPH.skill), who, toggle(!!lib.skillRouter, t("Skill router"), (on) =>
+    // the Skills tab's star, not a skill's page: the row is the tab's
+    // switch, not one more skill (the owner, 11-23)
+    row.append(glyph(GLYPH.skills), who, toggle(!!lib.skillRouter, t("Skill router"), (on) =>
       change("skills/router", { on }, on
         ? t("The agents are given magpie-skills in place of their skills — restart them to use it")
         : t("The agents are given each skill again — restart them to use it"))));
@@ -9212,7 +9240,7 @@ magpie.plugin("library", (ctx) => {
     // an agent with a copy of the very same files has it as much as one
     // with the folder itself: it isn't said to differ
     for (const id of [...f.agents, ...(f.copies || [])]) { const a = agentOf(id); if (a) { const i = agentIcon(a.icon); i.title = f.agents.includes(id) ? a.name : a.name + " — " + t("{agents} has the very same files; bringing it in gives it the library's, its copy kept with the backups", { agents: a.name }); have.append(i); } }
-    row.append(glyph(GLYPH.skill), who, have);
+    row.append(glyph(GLYPH.skills), who, have);
     if (f.others?.length) row.append(tag(t("differs in {agents}", { agents: f.others.map(nameOf).join(", ") }), "warn", t("{agents} has another skill by this name; bringing this one in leaves that one as it is", { agents: f.others.map(nameOf).join(", ") })));
     const b = button(t("Bring in"), "action", () => change("skills/import", { name: f.name }, t("{name} is in the library now", { name: f.name })));
     b.title = f.library ? t("Lists it in the library where it is, nothing moved: you can give it to any agent")
