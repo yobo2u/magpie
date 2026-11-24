@@ -7951,6 +7951,14 @@ function proxyPicker() {
   return box;
 }
 
+// gatewayKeysRow: the gateway keys that may use a saved provider, ticked
+// here as in each key's models (justforlxz on X), by providerkeys.js
+function gatewayKeysRow(p) {
+  const b = el("button", "rt-cond on gw-keys", "…"), row = p?.id ? field(t("Gateway keys"), b) : [];
+  if (p?.id) import("./providerkeys.js").then(() => gatewayKeysFill(p, b, row), () => {});
+  return row;
+}
+
 // concurrencyField: requests each key or account has out at once (Lemon:
 // Codex risk control past five); "" takes the plugin's, as its placeholder
 function concurrencyField(p) {
@@ -9836,7 +9844,7 @@ function drawEditor(p, presetID) {
     const perAccount = subOf(a.agent) ? accountProxyPicker(a, p) : null;
     if (perAccount) proxies.append(perAccount);
     advIn.append(...field(t("Proxy"), proxies));
-    advIn.append(...concurrencyField(p));
+    advIn.append(...concurrencyField(p), ...gatewayKeysRow(p));
     advIn.append(...priceRateField(), ...countFreeField(), ...billingField(), ...rateWindowsField());
     if (p.cline) advIn.append(...upstreamField());
     advIn.append(...unmaskRow(""));
@@ -9889,7 +9897,7 @@ function drawEditor(p, presetID) {
       if (picked === false) return pickError();
       const body = { id: p.id, models: chosenIds(), noModels: noneChosen(), bestInFamily: bestChosen(), unlisted: draft.unlisted, hiddenDrawers: draft.hiddenDrawers, hiddenVideomakers: draft.hiddenVideomakers, fallback: draft.fallback, contexts: cx.map, outputs: ox.map, compacts: cpx.map, maxImages, proxy, accountProxies: own.map, maxConcurrency, maxAccounts, ...queue, priceRate, rateWindows, modelPrefs: modelPrefsOfDraft(), pinUpstream: !!draft.pinUpstream, unredacted: !!draft.unredacted, countFree: !!draft.countFree, billing: draft.billing || "", ...(p.carriesCompaction ? { nativeCompaction: !!draft.nativeCompaction } : {}), ...routingOfDraft(p) };
       saving(saveBtn, t("Saving…"));
-      saveAccountModelsDraft(picked).then(() => savePluginOptions(subOf(a.agent))).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
+      saveAccountModelsDraft(picked).then(() => savePluginOptions(subOf(a.agent))).then(() => self.saveGatewayKeys?.(p)).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
     bar.append(cancel, saveBtn);
     ed.append(bar);
     return ed;
@@ -10104,7 +10112,7 @@ function drawEditor(p, presetID) {
   const perKey = keyProxyPicker(p);
   if (perKey) proxies.append(perKey);
   advIn.append(...field(t("Proxy"), proxies));
-  advIn.append(...concurrencyField(p));
+  advIn.append(...concurrencyField(p), ...gatewayKeysRow(p));
   advIn.append(...priceRateField(), ...keyRateField(p, "topUpRateField", custom || p?.topUpRate), ...keyRateField(p), ...countFreeField(), ...billingField(), ...rateWindowsField());
 
   if (p?.cline || (isNew && pr?.id === "clinepass")) advIn.append(...upstreamField());
@@ -10649,7 +10657,7 @@ function drawEditor(p, presetID) {
     if (picked === false) return pickError();
     saving(saveBtn, t(isNew ? "Adding…" : "Saving…"));
     const okMsg = t(isNew ? "{name} added" : "{name} saved", { name: draft.name || draft.id });
-    saveAccountModelsDraft(picked).then(() => providerAction("save", body, okMsg), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); });
+    saveAccountModelsDraft(picked).then(() => self.saveGatewayKeys?.(p)).then(() => providerAction("save", body, okMsg), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); });
   };
   saveBtn.onclick = save;
   bar.append(cancel, saveBtn);
@@ -22271,13 +22279,13 @@ function privacyModelRow(box, why) {
     if (!r.isConnected) return;
     const who = el("div", "who"), val = el("div", "val");
     who.append(name(), el("div", m && (m.on || m.installed || !m.supported || pmBusy(m) || m.error || m.models?.some((x) => x.error)) ? "sub say" : "sub", pmSub(m)));
-    if (m?.supported || m?.installed) {
+    if (m?.supported || m?.installed || m?.managedWeights === false) {
       if (m.models?.length > 1) val.append(pmPick(m, (id) => act("pick", id)));
       if (pmBusy(m)) {
         const c = el("button", "text", t("Cancel"));
         c.onclick = () => act("cancel");
         val.append(c);
-      } else if (m.installed && !m.on) {
+      } else if (m.installed && !m.on && m.managedWeights !== false) {
         const x = el("button", "text", t("Delete model"));
         x.onclick = async () => {
           if (await confirmAction(t("Delete the model?"), t("Turning it on again downloads {size} again.", { size: fmtBytes(m.size) }), t("Delete"))) act("remove");
@@ -22316,12 +22324,11 @@ function pmPick(m, pick) {
   b.type = "button";
   menuOpener(b);
   b.title = t("The local model");
-  b.append(el("span", "", (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
+  b.append(el("span", "", m.name || (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
   b.onclick = (e) => {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
-    const opts = (m.models || []).map((x) => ({ v: x.model, name: (PM_MODELS[x.model] || [x.model])[0], literalName: true,
-      note: !x.supported && !x.installed ? t("Not available on this system yet") : t(PM_MODELS[x.model]?.[1] || "") + " · " + fmtBytes(x.size) + (x.installed ? " · " + t("downloaded") : "") }));
+    const opts = (m.models || []).map(pmModelOption);
     openProtoMenu(b, opts, m.model, (v) => v !== m.model && pick(v), "The local model", "sess-menu", "right");
   };
   return b;
@@ -22349,6 +22356,8 @@ function pmScore(m, pick) {
 function pmSub(m) {
   const about = t("Names, addresses and passwords no rule can find, found by a model that runs on this computer");
   if (!m) return about;
+  // a plugin's model (pii/external.go): its files are the user's
+  if (m.managedWeights === false && !m.installed) return t("Not available: its plugin is off, or its files are gone");
   if (!m.supported && !m.installed) return t("Not available on this system yet");
   const d = pmBusy(m);
   if (d) return t("Downloading the model: {done} of {total}", { done: fmtBytes(d.done), total: fmtBytes(d.total) });

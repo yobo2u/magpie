@@ -249,6 +249,7 @@
       });
     }
     import("./pluginpartners.js").then(drawBody, () => {});
+    import("./pluginglide.js").catch(() => {});
     await Promise.all(parts);
     askNPM();
     askGit();
@@ -893,7 +894,7 @@
       const more = el("button", "pm-more");
       more.type = "button";
       more.append(el("span", "", t("See all")), glyph("M6 3.5 10.5 8 6 12.5", 11, 1.7));
-      more.onclick = () => { kindPick = k; drawBody(); page.scrollTo({ top: 0 }); };
+      more.onclick = () => { kindPick = k; drawBody(); };
       h.append(el("span", "grow"), more);
     }
     box.append(h, cardGrid(list.slice(0, limit)));
@@ -1061,9 +1062,11 @@
     const partners = window.pmPartners?.({ f, all: everything(() => true), kindPick, srcPick, onlyNew, entryOf, kindOf, opens, npm, logo, actionFor, glyph, OUTL });
     if (partners) out.push(partners);
     if (!f) {
-      const rec = !kindPick && recSection(all);
+      const rec = recSection(all);
       if (rec) out.push(rec);
       out.push(...market(all));
+      // a kind picked keeps the week's picks; pluginglide.js glides the bar up
+      if (window.pmGlide) out.push(pmGlide.room(kindPick, page));
       out.push(manual(), footer());
       if (mine?.registry) {
         out.push(regBox = regBox || el("div", "pm-registry"));
@@ -1883,6 +1886,8 @@
       w.append(glyph(SHIELD, 12, 1.5), el("span", "", t(from, { owner: l.github.owner, topic })));
       main.append(w);
     }
+    // pluginlink.js's, for a package the market doesn't list
+    main.append(l.note || "");
     if (l.replaces) main.append(el("p", "pm-note", t("magpie's own sign-in to this subscription is deprecated: this plugin takes its place, and accounts signed in there move to it.")));
     const readme = el("div", "pm-readme");
     const pageKey = l.package + "\n" + (document.documentElement.lang || "en");
@@ -1945,4 +1950,9 @@
   // opened on the Plugins tab (?view=plugins): app.js showed it before
   // this file was here to load it
   if (view === "plugins") load();
+  // a package's sheet over the page the reader is on, for a plugin page's
+  // magpie.openPlugin, or the window opened by a magpie://plugin link
+  // (?plugin=): pluginlink.js
+  window.pluginOpen = (n) => import("./pluginlink.js").then((m) => m.open(n, async () => (mine && listings || await load(), [[listings, tagged], npm, detail])));
+  if (params.has("plugin")) pluginOpen(params);
 })();
