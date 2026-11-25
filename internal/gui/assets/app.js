@@ -372,7 +372,7 @@ function toneCheck(img) {
     swap();
   }, { once: true });
 }
-const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "openbot", "avibe", "kun", "nowledge-mem"]);
+const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "catpaw", "openbot", "avibe", "kun", "nowledge-mem"]);
 
 // lazy: a picture in a long list (Plugins' rows) is asked for near the
 // screen: each SVG an <img> draws is a ~0.6 MB webview document, kept (#909)
@@ -1177,7 +1177,8 @@ const PICKS_IN = { codex: "/model", claude: "/model", opencode: "/models", pi: "
 
 function connectSaid(a) {
   if (!a.wired) return t("Not connected · {agent} uses its own settings", { agent: a.name });
-  if (menuFromList(a)) return t("Connected · {n} models in {agent}'s model menu", { n: a.models.shown, agent: a.name });
+  // no more than its menu takes (Antigravity's 32, 0xBCD18E on X)
+  if (menuFromList(a)) return t("Connected · {n} models in {agent}'s model menu", { n: Math.min(a.models.shown, a.models.menu || 1 / 0), agent: a.name });
   const at = PICKS_IN[kindOf(a)];
   return at ? t("Connected · pick magpie's models with {cmd} in {agent}", { cmd: at, agent: a.name }) : t("Connected · magpie's models are in {agent}'s model list", { agent: a.name });
 }
@@ -2291,11 +2292,13 @@ function connectPanel(a, { fields, fieldBtn }) {
     holdAgentModels(a, pick);
     chips.append(pick);
     const v = kv(t("Model list"), chips);
-    // the Codex app's menu reaches only so many of them (#1262)
-    if (a.id === "codex" && a.models.shown > CODEX_APP_MENU) {
+    // the app's menu reaches only so many of them (modelCountJSON.Menu):
+    // the Codex app's (#1262), Antigravity's (0xBCD18E on X)
+    const max = a.models.menu;
+    if (a.models.shown > max) {
       const w = line();
       w.classList.add("ag-warn", "ag-menu-cap");
-      w.append(el("span", "ag-dot"), el("span", "", t("The Codex app's model menu shows only the first {max}: the last {n} models can't be picked there (the Codex CLI's /model lists them all). In Pick, turn off the ones you don't use, or drag the ones you use to the front under Order.", { max: CODEX_APP_MENU, n: a.models.shown - CODEX_APP_MENU })));
+      w.append(el("span", "ag-dot"), el("span", "", t(a.id === "codex" ? "The Codex app's model menu shows only the first {max}: the last {n} models can't be picked there (the Codex CLI's /model lists them all). In Pick, turn off the ones you don't use, or drag the ones you use to the front under Order." : "{agent}'s model menu takes only the first {max} models: the last {n} can't be picked there. In Pick, turn off the ones you don't use, or drag the ones you use to the front under Order.", { agent: a.name, max, n: a.models.shown - max })));
       v.append(w);
     }
     if (a.id === "claude-desktop") v.append(desktopLongestLine());
@@ -3304,12 +3307,6 @@ function dragCards(e, handle, card, list, cards, commit, idle = () => {}, layout
 }
 
 // ---------- an agent's model list ----------
-
-// CODEX_APP_MENU is how many models the Codex app's model menu reaches: it
-// asks Codex's app-server for model/list with limit 100 and never for the
-// next page (ChatGPT.app 26.930), so a model past them can't be picked
-// there; the Codex CLI's /model asks for every one (#1262).
-const CODEX_APP_MENU = 100;
 
 // modelsEntry: the line under an agent's name counting the models its
 // lists show ("All 41 models", or "Showing 5 / 32 models"); it opens the
@@ -6606,14 +6603,15 @@ function renderFileError() {
 // is deprecated, said wherever it is marked so.
 const DEPRECATED_WHY = "Some subscriptions are reached in ways their vendors' terms may not allow. So that magpie itself isn't banned over them, subscription providers are being decoupled from magpie and run by community plugins instead.";
 // deprecatedSub: a built-in subscription with a plugin, not moved onto it
-const deprecatedSub = (agent) => (providers?.movable || []).includes(agent) && !movedSub(agent);
-// unusedSub: a deprecated built-in with no account in magpie, which the
+const deprecatedSub = (agent) => providers?.movable?.includes(agent) && !movedSub(agent);
+// unusedSub: a deprecated built-in, or one whose plugin magpie gives
+// nobody new (noNew: Antigravity), with no account in magpie, which the
 // add sheet leaves to the Plugins page
-const unusedSub = (agent) => deprecatedSub(agent) && !(providers?.providers || []).some((p) => p.account?.agent === agent);
+const unusedSub = (agent) => (deprecatedSub(agent) || providers?.noNew?.includes(agent)) && !providers?.providers?.some((p) => p.account?.agent === agent);
 // replacedSub: a deprecated built-in whose plugin is installed and serves
 // it, under the plugin's own id (the built-in's with "-plugin") until moved;
 // its accounts, if any, still work, and its plugin's Move brings them over
-const replacedSub = (agent) => deprecatedSub(agent) && (providers?.plugins || []).some((x) => x.pid === agent);
+const replacedSub = (agent) => deprecatedSub(agent) && providers?.plugins?.some((x) => x.pid === agent);
 function deprecatedBadge() {
   const b = el("span", "badge deprecated", t("Deprecated"));
   b.title = t(DEPRECATED_WHY);
@@ -11661,7 +11659,7 @@ function renderModels(p) {
           const why = p.testsAs[as] ? t(p.testsAs[as]) : "";
           acts.push({ name, icon: PLAY_ICON, off: !!why, why, tip: t("Asked as {agent} asks, for a relay that serves only {agent}", { agent }), run: () => testOne(id, as) });
         }
-        if (p.testPicks) acts.push({ name: "Test on account…", icon: PLAY_ICON, tip: t("Pick the account or key the test is sent to"), run: () => openProtoMenu(c, p.testPicks.map((k) => ({ v: k.id, name: k.name, literalName: true })), null, (v) => testOne(id, "", v), "Account to test", "model-account-menu") });
+        if (p.testPicks) acts.push({ name: "Test on account…", icon: PLAY_ICON, tip: t("Pick the account or key the test is sent to"), run: () => openProtoMenu(c, p.testPicks.map((k) => ({ v: k.id, literalName: true, ...k })), null, (v) => testOne(id, "", v), "Account to test", "model-account-menu") });
       }
       // its id as agents and the gateway name it, to paste where a model is
       // typed (ARNO, Discord: 右击菜单除了测试模型外，还能添加拷贝模型id的功能)
@@ -12821,7 +12819,7 @@ const subOf = (agent) => {
 // page can be open before the providers are read (providers is null then)
 const subNames = (ids) => ids.map((id) => SUBS.find((x) => x.agent === id)?.name
   || providers?.plugins?.find((x) => x.id === id)?.name || id).join(", ");
-const movedSub = (agent) => (providers?.onPlugins || []).includes(agent);
+const movedSub = (agent) => providers?.onPlugins?.includes(agent);
 
 // pluginMethod: a moved built-in's one-click way, its first or its site's;
 // none for a plugin's own provider, which asks.
@@ -12894,7 +12892,7 @@ let justAdded = ""; // the account that just came in, to greet it
 const accountToolsOpen = new Set(); // rows whose ⋯ is open
 
 // hasLogins: the subscription has an account signed in already
-const hasLogins = (agent) => (providers?.providers || []).some((p) => p.account?.agent === agent && p.account.logins?.length);
+const hasLogins = (agent) => providers?.providers?.some((p) => p.account?.agent === agent && p.account.logins?.length);
 
 async function startSignIn(agent, risky, site, o = {}) {
   if (signingOpen()) api("signin/" + signing.id + "/cancel", {}).catch(() => {});

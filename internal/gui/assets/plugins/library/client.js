@@ -1301,6 +1301,7 @@ magpie.plugin("library", (ctx) => {
       body.append(skeleton("memory").lastChild);
       return;
     }
+    body.append(memStats());
     const card = el("div", "list lib-list lib-memcard");
     const row = el("div", "row lib-row lib-memdigest");
     const who = el("div", "who");
@@ -1369,6 +1370,20 @@ magpie.plugin("library", (ctx) => {
     }
     body.append(list);
     if (memPicking) body.append(memPickBar());
+  }
+
+  // the tab's numbers and trend (memstats.js), imported the first time
+  // the tab draws; until then a place of the card's height holds the page
+  // still
+  let memStatsAsked = false;
+  function memStats() {
+    if (window.memStatsCard) return window.memStatsCard(mem);
+    const hold = el("div", "lib-memstats-hold");
+    if (!memStatsAsked) {
+      memStatsAsked = true;
+      import(new URL("plugins/library/memstats.js", document.baseURI).href).then(() => tab === "memory" && render(), () => { memStatsAsked = false; });
+    }
+    return hold;
   }
 
   // what memory suggests (memory.Suggest): a memory learned in several
@@ -4184,6 +4199,45 @@ magpie.plugin("library", (ctx) => {
         link.append(u, cp);
         if (sg.linkOnly) link.append(button(t("Open in browser"), "", () => browse(sg.url)));
         box.append(link);
+      }
+      // a browser that can't reach magpie's loopback callback (magpie on a
+      // server or in Docker, the page open on another machine) ends on a
+      // page that won't load: its whole address, pasted, carries the code
+      // to finish the sign-in (@OoopsHh on X)
+      if (sg?.state === "waiting" && sg.pasteCallback) {
+        box.append(el("div", "note", t("If the page the browser ends on won't load (magpie runs on a server or in Docker), copy its whole address and paste it here.")));
+        const form = el("form", "lib-signin-callback");
+        const u = field2(sg.cbURL || "", t("Callback URL"), () => {});
+        u.classList.add("mono");
+        u.setAttribute("aria-label", t("Callback URL"));
+        u.autocomplete = "off";
+        u.disabled = !!sg.cbBusy;
+        const finish = async (e) => {
+          if (e) { e.preventDefault(); e.stopPropagation(); }
+          const val = (sg.cbURL || "").trim();
+          if (!val || sg.cbBusy || mcpSigning !== sg) return;
+          sg.cbBusy = true;
+          sg.cbErr = "";
+          draw();
+          try {
+            await api("library/mcp-signin/" + sg.id + "/callback", { url: val });
+            // followSignIn sees the sign-in done and finishes the box
+          } catch (err) {
+            if (mcpSigning !== sg) return;
+            sg.cbBusy = false;
+            sg.cbErr = t(err.message);
+            draw();
+          }
+        };
+        const go = button(t("Finish sign-in"), "action", finish);
+        go.type = "submit";
+        go.disabled = !(sg.cbURL || "").trim() || !!sg.cbBusy;
+        u.oninput = () => { sg.cbURL = u.value; go.disabled = !u.value.trim() || !!sg.cbBusy; };
+        u.onkeydown = (e) => { e.stopPropagation(); if (e.isComposing || e.keyCode === 229) return; if (e.key === "Enter") finish(e); };
+        form.onsubmit = finish;
+        form.append(u, go);
+        box.append(form);
+        if (sg.cbErr) box.append(el("div", "lib-signin-err", sg.cbErr));
       }
       if (sg?.state === "failed") box.append(el("div", "lib-signin-err", sg.error));
     };
