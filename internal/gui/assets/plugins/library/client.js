@@ -306,10 +306,13 @@ magpie.plugin("library", (ctx) => {
     }
   });
   function handGap(box, w) {
-    const n = box._n || 1;
-    // outside -19px to 3px the CSS clamps it the same, so nothing is set
-    const gap = Math.min(3, Math.max(-19, Math.round((0.48 * w - 60 - n * 24) / Math.max(1, n - 1)))) + "px";
-    if (box.style.getPropertyValue("--lib-gap") !== gap) box.style.setProperty("--lib-gap", gap);
+    const setGap = (property, count) => {
+      const gap = Math.min(3, Math.max(-19, Math.round((0.48 * w - 60 - count * 24) / Math.max(1, count - 1)))) + "px";
+      if (box.style.getPropertyValue(property) !== gap) box.style.setProperty(property, gap);
+    };
+    setGap("--lib-gap", box._n || 1);
+    const columns = box.parentElement.parentElement?._mcpAgentCount;
+    if (columns) setGap("--lib-mcp-gap", columns);
   }
   function handRoom(row, box, n) {
     box._n = n;
@@ -3078,8 +3081,15 @@ magpie.plugin("library", (ctx) => {
       // in the order the reader picked (#481), A→Z till then
       const fill = () => {
         const sorted = [...lib.servers].sort(byName(sortOf("libServers")));
-        list.replaceChildren(...sorted.filter((s) => !s.hidden).map((s) => serverRow(s, all)));
-        offList.replaceChildren(...sorted.filter((s) => s.hidden).map((s) => serverRow(s, all)));
+        for (const [section, hidden] of [[list, false], [offList, true]]) {
+          const rows = sorted.filter((server) => !!server.hidden === hidden).map((server) => serverRow(server, all));
+          section._mcpAgentCount = rows.reduce((count, row) => {
+            const chips = row.querySelector(":scope > .lib-agents");
+            return Math.max(count, Number(chips?.style.getPropertyValue("--lib-agent-count") || 0));
+          }, 0);
+          section.style.setProperty("--lib-mcp-count", section._mcpAgentCount);
+          section.replaceChildren(...rows);
+        }
         syncFold();
       };
       // one heading over the list, with what the skills' has (#1027): the
@@ -4583,11 +4593,23 @@ magpie.plugin("library", (ctx) => {
     // server the check found won't start in home, where magpie runs it for
     // Codex too (inHome)
     d.hub = d.hub === "direct" ? "direct" : "";
+    // the Keep running row follows the kind of server (draw)
+    let drawKeep = () => {};
     if (lib.mcpHub || (s && health.get(s.name)?.h?.why === "home")) {
       const hubBox = el("div", "lib-hubbox");
-      const drawHub = () => hubBox.replaceChildren(toggle(d.hub !== "direct", t("Through the MCP router"), (on) => { d.hub = on ? "" : "direct"; drawHub(); }));
+      // a command the router runs is ended after 10 minutes unused; kept
+      // running, it lives until magpie quits (MasterYi on Discord: a
+      // server whose browser asks to allow each new connection)
+      const keepBox = el("div", "lib-keepbox");
+      const keepRow = field(t("Keep running"), keepBox, t("On keeps it running until magpie quits, for a server that asks you to allow each new connection. Off ends it after 10 minutes unused"));
+      const drawHub = () => {
+        hubBox.replaceChildren(toggle(d.hub !== "direct", t("Through the MCP router"), (on) => { d.hub = on ? "" : "direct"; drawHub(); }));
+        keepBox.replaceChildren(toggle(!!d.keepAlive, t("Keep running"), (on) => { d.keepAlive = on; drawHub(); }));
+        for (const n of keepRow) n.hidden = !lib.mcpHub || d.hub === "direct" || d.transport !== "stdio";
+      };
       drawHub();
-      ed.append(...field(t("Through the MCP router"), hubBox, t("Off gives each agent its own entry for it, as with the router off: for a server that reads its project from the folder it starts in, or keeps a session's state")));
+      drawKeep = drawHub;
+      ed.append(...field(t("Through the MCP router"), hubBox, t("Off gives each agent its own entry for it, as with the router off: for a server that reads its project from the folder it starts in, or keeps a session's state")), ...keepRow);
     }
     ed.append(err);
 
@@ -4635,6 +4657,7 @@ magpie.plugin("library", (ctx) => {
     }
     function draw() {
       slot.replaceChildren();
+      drawKeep();
       if (view === "json") {
         signBox = appBox = null;
         top.replaceChildren(...field("JSON", jsonBox(), t("As Claude Code's .mcp.json has it. A value naming a variable, as {ref}, stays a name here", { ref: "${NAME}" })));
@@ -4714,7 +4737,7 @@ magpie.plugin("library", (ctx) => {
     // send saves the form; s is then the server as saved, for a save after
     // a sign-in's to be of it
     const send = async () => {
-      const body = { old: s ? s.name : "", server: { name: d.name, transport: d.transport, agents: d.agents, startupTimeout: d.startupTimeout || 0, local: !!d.local, hub: d.hub || "", note: d.note || "" } };
+      const body = { old: s ? s.name : "", server: { name: d.name, transport: d.transport, agents: d.agents, startupTimeout: d.startupTimeout || 0, idleTimeout: d.idleTimeout || 0, keepAlive: !!d.keepAlive, local: !!d.local, hub: d.hub || "", note: d.note || "" } };
       if (d.transport === "stdio") Object.assign(body.server, { command: d.command, args: d.args, env: d.env, shared: d.local ? null : d.shared || null });
       else Object.assign(body.server, { url: d.url, headers: d.headers, oauth: d.transport === "http" && d.oauth?.clientId ? d.oauth : null });
       take(await api("library/servers/save", body));

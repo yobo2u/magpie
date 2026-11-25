@@ -2318,7 +2318,9 @@ func claudeIn(at place) *Agent {
 	}
 	// subagents: the model one runs on when it names none (general-purpose,
 	// an agent of the user's without a model:). Unset, the session's, as
-	// before; an agent that names a tier (Explore's haiku) takes the tier's.
+	// before. Explore and Plan say inherit, so Claude Code never reads the
+	// variable for them; the gateway moves their turns onto it
+	// (gateway.claudeSubagentPick, #7176).
 	// setSubagent writes the subagents' model and effort. With no model,
 	// the variable goes and the effort is kept unwritten (subagentSaved):
 	// the main model at an effort would pin every subagent to it.
@@ -2576,9 +2578,10 @@ func claudeIn(at place) *Agent {
 		ID: "claude", Name: "Claude Code", Icon: "claudecode-color", Aliases: []string{"cc", "claude-code"},
 		UA:  []string{"claude-cli", "claude-code"},
 		Bin: "claude", Dir: filepath.Dir(path), Path: path, signIn: ".credentials.json",
-		Fields:       fields,
-		ModelAliases: claudeAliases,
-		Telemetry:    claudeTelemetry(at, path),
+		claudeSettings: &ClaudeSettings{path: path, distro: at.wsl},
+		Fields:         fields,
+		ModelAliases:   claudeAliases,
+		Telemetry:      claudeTelemetry(at, path),
 		// Claude Code as it was before magpie: its default puts it back as
 		// installed, on Anthropic's endpoint, where this brings back the
 		// endpoint, token and model the user had
