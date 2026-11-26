@@ -758,10 +758,11 @@ func restrictedSaid(status int, body []byte) bool {
 // built-in's or the plugin's. Another vendor's code 11140 is its own, and
 // isn't read so.
 func restrictedRefused(p provider.Provider, status int, body []byte) bool {
-	if restrictedSaid(status, body) {
+	w := wordsOf(body)
+	if restrictedSaid(status, w) {
 		return true
 	}
-	return isWorkBuddy(p) && provider.WBRestricted(status, wordsOf(body)) || googleSuspended(p, status, body) || claudeAccountOff(p, status, body)
+	return isWorkBuddy(p) && provider.WBRestricted(status, w) || googleSuspended(p, status, body) || claudeAccountOff(p, status, body)
 }
 
 // claudeOffWords are Anthropic's, and Claude Code's, words for an account
@@ -1254,21 +1255,33 @@ func restrictedHeld(c candidate) (int, string, bool) {
 
 // resetsIn is how long until a used-up ChatGPT account is back, as its
 // refusal says: {"error":{"type":"usage_limit_reached","resets_at":<unix>,
-// "resets_in_seconds":<n>}}. Zero when it doesn't say.
+// "resets_in_seconds":<n>}}. A stream's error frame is kept as its error
+// object alone (holdWriter.errBody), so the same members on the body
+// itself count too: doubao-work ends a stream begun with reasoning with
+// {"error":{"status":429,"resets_at":<the 1st of next month>}}, and read
+// only under "error" that rest was the 15 minutes guessed for no word of
+// a reset (aaron0x10 on X). Zero when it doesn't say.
 func resetsIn(body []byte, now time.Time) time.Duration {
+	type said struct {
+		At int64 `json:"resets_at"`
+		In int64 `json:"resets_in_seconds"`
+	}
 	var e struct {
-		Error struct {
-			At int64 `json:"resets_at"`
-			In int64 `json:"resets_in_seconds"`
-		} `json:"error"`
+		Error said `json:"error"`
+		said
 	}
 	if json.Unmarshal(body, &e) != nil {
 		return 0
 	}
-	if t := time.Unix(e.Error.At, 0); e.Error.At > 0 && t.After(now) {
-		return t.Sub(now)
+	for _, s := range []said{e.Error, e.said} {
+		if t := time.Unix(s.At, 0); s.At > 0 && t.After(now) {
+			return t.Sub(now)
+		}
+		if s.In > 0 {
+			return time.Duration(s.In) * time.Second
+		}
 	}
-	return time.Duration(max(e.Error.In, 0)) * time.Second
+	return 0
 }
 
 // resetsAt is how long until a used-up subscription is back, as its
@@ -1580,6 +1593,11 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// request is asked again, and no rest and no failure counted (#2873)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
+	if c.off {
+		// an account or key turned off, pinned (pinOff): routing leaves it
+		// out as it is, and a rest would stand over it once it is on
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
 	if c.p.PassesErrors() {
 		// the user leaves its errors to the client (errors=pass): none of
 		// its keys is set aside for one, and the next request is asked
@@ -1612,6 +1630,13 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// and the failure counts nowhere; the next try goes out on a new
 		// connection (regionFresh)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
+	if legalRefused(status, body) {
+		// a 451: the vendor won't serve this request's content, which the
+		// same account serves the moment a word of it changes (Winnie7572
+		// on X). Not the account's doing: none is set aside, wherever the
+		// 451 is read (a System One group, a stream's late error frame)
+		return Rest{Why: failRefused, Status: status, By: "off", Until: now}
 	}
 	if status == http.StatusForbidden && provider.HarnessOnly(wordsOf(body)) {
 		// OpenRouter serving a free model only to the agent apps it lists
@@ -1811,7 +1836,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 			// key's own limit apart): the sink keeps the same scope, or
 			// one model's 429 would send the remote's other models, never
 			// limited, behind the others too
-			if remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) {
+			if remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) || freeRateAlone(c, failRate) {
 				sink(c.restID(), now)
 			} else {
 				sink(c.restKey(), now)
@@ -1984,8 +2009,10 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	// rested the key, and its free models, which Go still served, were
 	// answered the kept 429 in a millisecond). A free model the vendor
 	// refuses all the same rests on its own refusal, which says nothing
-	// of the paid ones (ggbdpq).
-	if (why == failCredit || why == failQuota) && (c.p.PaidBesideFree(c.model) || c.p.FreeBesidePaid(c.model)) {
+	// of the paid ones (ggbdpq). Its rate limit is its own too (xzhih on
+	// X): a 429 on hy4-flash-free held glm-5.3, which the key's windows
+	// still had room for, for the rate limit's time
+	if (why == failCredit || why == failQuota) && (c.p.PaidBesideFree(c.model) || c.p.FreeBesidePaid(c.model)) || freeRateAlone(c, why) {
 		id = c.restID()
 	}
 	if remoteModelRest(c, why, header) {
@@ -2270,7 +2297,7 @@ func remoteModelRest(c candidate, why string, header http.Header) bool {
 // rest after a failure that says nothing of why (RestCapOff) isn't
 // rested, nor its slow starts counted.
 func restSlow(c candidate, now time.Time) (Rest, bool) {
-	if c.p.NoFailRest() {
+	if c.p.NoFailRest() || c.off {
 		return Rest{}, false
 	}
 	id := c.restID()
@@ -2324,6 +2351,14 @@ func backingOff(key string, now time.Time) bool {
 	return ok && now.Before(until) && restingUntil.note[key].Why == failOther
 }
 
+// freeRateAlone says whether a rate limit is the model's alone because
+// it is a free model beside paid ones (OpenCode Go's hy4-flash-free beside
+// glm-5.3, xzhih on X): its rest, its backoff count and its sink are kept
+// to the model, so the paid models the key still has room for go on.
+func freeRateAlone(c candidate, why string) bool {
+	return why == failRate && c.p.FreeBesidePaid(c.model)
+}
+
 // vendorSaidWhen says whether a 429's headers or body name a time it is
 // limited till, as rateRest reads them.
 func vendorSaidWhen(header http.Header, body []byte) bool {
@@ -2342,7 +2377,7 @@ func vendorSaidWhen(header http.Header, body []byte) bool {
 // count where it is, so one request's own retries don't stretch it.
 func (s *Server) rateRest(c candidate, header http.Header, body []byte, sharedPool bool, now time.Time) (time.Duration, string, int) {
 	id := c.restKey()
-	if c.isOpenRouterFree() && sharedPool || remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) {
+	if c.isOpenRouterFree() && sharedPool || remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) || freeRateAlone(c, failRate) {
 		id = c.restID()
 	}
 	n := 1
@@ -2823,11 +2858,12 @@ func routingOf(routing string) string {
 }
 
 // keepsWeek: routed so, a pool keeps an account running low on its week
-// alone with those that have room (routes.Seat.WeekLow): Smart and Use
-// before expiry, which spend what a reset would lose.
+// alone with those that have room (routes.Seat.WeekLow): Smart, Use
+// before expiry and Before expiry, one by one (which picks as Use before
+// expiry does), which spend what a reset would lose.
 func keepsWeek(routing string) bool {
 	r := routingOf(routing)
-	return r == "" || r == provider.Pace
+	return r == "" || r == provider.Pace || r == provider.PaceDrain
 }
 
 // goesRound: routed so, a pool goes round by itself (in turn, by weight),

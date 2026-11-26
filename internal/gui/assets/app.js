@@ -1095,7 +1095,10 @@ function driftFix(a, label = "Apply again") {
   const fix = el("button", "ag-fix");
   fix.type = "button";
   fix.title = `${t(DRIFT_WHY[d.kind] || DRIFT_WHY.unwired, { agent: a.name, model: want })}\n${tNotice(d.detail)}`;
-  const deaf = d.kind === "unreachable" || d.kind === "proxied";
+  // "outside": something past its config (Claude Code's managed settings,
+  // a provider switch) that setting it again can't change, so the pill
+  // says how to fix it instead (jimlee0824v2 on X)
+  const deaf = d.kind === "unreachable" || d.kind === "proxied" || d.kind === "outside";
   if (deaf && d.move) label = t("Use {url}", { url: d.move.replace(/^https?:\/\//, "") });
   else if (deaf) label = "How to fix";
   fix.setAttribute("aria-label", t(label));
@@ -1142,6 +1145,7 @@ const DRIFT_WHY = {
   bypassed: "{agent} was used without going through magpie — restart it after applying",
   unreachable: "{agent} is set up, but nothing answers at the address it reaches magpie by",
   proxied: "{agent} reaches magpie through a proxy that doesn't pass its requests on",
+  outside: "{agent} is set up, but a setting outside its config takes it past magpie",
 };
 
 // an i in a circle: the pill that explains rather than acts
@@ -2514,6 +2518,10 @@ async function reapplyAgent(a, btn) {
     state = await api("agents/reapply/" + a.id, {});
     renderAgents();
     document.querySelector(`.agent[data-id="${CSS.escape(a.id)}"] .field`)?.classList.add("flash");
+    // set again, it may still not go through magpie: say why, never that
+    // it does (jimlee0824v2 on X)
+    const left = state.agents?.find((x) => x.id === a.id)?.drift;
+    if (left) return status(tNotice(left.detail) || t(DRIFT_WHY[left.kind] || DRIFT_WHY.unwired, { agent: a.name, model: left.want }), "err");
     const msg = t("{agent} goes through magpie again", { agent: a.name });
     saidOk(msg);
   } catch (e) {
@@ -11618,21 +11626,6 @@ function renderModels(p) {
     const on = set ? [set] : (m.auto || []);
     return on.length > 0 && !on.some((a) => p.speaks.includes(a));
   };
-  const pickAPI = (c, id) => {
-    const m = p.models.find((x) => x.id === id) || { id };
-    const auto = (m.auto || []).map(apiLabel).join(" · ");
-    const opts = [{ v: "", name: "Auto", note: auto ? t("As its vendor's list says: {apis}", { apis: auto }) : "Each API the provider has, as it answers" },
-      ...apis.map(([k, l, hint]) => ({ v: k, name: l, note: hint }))];
-    openProtoMenu(c, opts, apiNow(id), (v) => {
-      if (v === apiNow(id)) return;
-      const prefs = draft.modelPrefs = draft.modelPrefs || {};
-      prefs[id] = prefs[id] || {};
-      if (v === (m.api || "")) delete prefs[id].api; else prefs[id].api = v;
-      if (!Object.keys(prefs[id]).length) delete prefs[id];
-      draw();
-      status(v ? t("{model} is asked on {api} once saved", { model: id, api: apiLabel(v) }) : t("{model} is asked as its vendor's list says once saved", { model: id }), "ok");
-    }, "API this model is asked on", "model-api-menu");
-  };
   // staged as Model settings' tick stages it (archsiono on X)
   const setImages = (id, m, v) => {
     const P = draft.modelPrefs = draft.modelPrefs || {}, x = P[id] = P[id] || {};
@@ -11672,7 +11665,7 @@ function renderModels(p) {
       acts.push({ name: "Copy model ID", icon: COPY_ICON, tip: id, run: () => copy(id, id, null, t("Model ID {model} copied", { model: id })) });
       if (apis.length && (!decidesModel(p, id) || apiNow(id) === "decide")) {
         const now = apiNow(id);
-        acts.push({ name: now ? t("Asked on {api}…", { api: apiLabel(now) }) : t("Asked on: Auto…"), icon: "M2.5 5h11M2.5 11h11M10.5 2.5 13.5 5l-3 2.5M5.5 8.5 2.5 11l3 2.5", tip: t("Pick the API this model is asked on"), run: () => pickAPI(c, id) });
+        acts.push({ name: now ? t("Asked on {api}…", { api: apiLabel(now) }) : t("Asked on: Auto…"), icon: "M2.5 5h11M2.5 11h11M10.5 2.5 13.5 5l-3 2.5M5.5 8.5 2.5 11l3 2.5", tip: t("Pick the API this model is asked on"), run: () => import("./modelorder.js").then(() => modelAPIPick(c, p, id, apis, apiNow, draw), statusErr) });
       }
       if (!decidesModel(p, id)) {
         const m = p.models.find((x) => x.id === id) || {}, x = draft.modelPrefs?.[id];
@@ -11738,8 +11731,11 @@ function renderModels(p) {
     draft.dashed = [...served];
     // models that would read alike say what tells them apart (modelTells)
     const tells = modelTells(p.models);
+    // by maker, the newest first (modelorder.js; WJaunita45604 on X)
+    const mo = window.modelOrder ? modelOrder(p.models, chips) : void import("./modelorder.js").then(() => chips.isConnected && draw(), () => {});
+    const put = mo ? mo.put : (c) => chips.append(c);
     // a filter is a search: what it doesn't match is left out
-    for (const m of p.models) {
+    for (const m of mo ? mo.list : p.models) {
       const on = draft.chosen.includes(m.id);
       if (f && !m.id.toLowerCase().includes(f) && !(m.name || "").toLowerCase().includes(f) && !(m.default || "").toLowerCase().includes(f)) continue;
       // past the first 80 only the picked are drawn, till the rest are asked for (#685)
@@ -11794,7 +11790,7 @@ function renderModels(p) {
         unpickedShown = p.id;
         draw();
       };
-      chips.append(c);
+      put(c, m);
       shown++;
     }
     for (const id of draft.chosen) {
@@ -11805,7 +11801,7 @@ function renderModels(p) {
       tested(c, id);
       menu(c, id);
       c.onclick = () => { draft.chosen = draft.chosen.filter((x) => x !== id); draft.none = true; draw(); };
-      chips.append(c);
+      put(c, { id });
     }
     if (hidden || unpicked) chips.append(showRest(hidden || unpicked, () => { if (unpicked) unpickedShown = p.id; else showAll = true; draw(); }));
     if (!p.models.length && !draft.chosen[0]) chips.append(el("span", "hint", t(emptyModelsHint(p))));
@@ -12544,6 +12540,9 @@ const ROUTINGS = [
   ["drain", "Until used up", "Requests stay on one until it is used up, then go to the next in the list and stay there: one before it that renews meanwhile doesn't take them back. One rate limited or failing is passed over while it rests, and requests come back to it after."],
   // the unit that goes round is the user's message (affine's "new-turn"),
   // not a session (Wing8Aqua on X)
+  // picked as Use before expiry picks, kept as Until used up keeps
+  // (guhailin3 on X; routes.PaceDrain)
+  ["pace-drain", "Before expiry, one by one", "Requests go to the subscription with the most left per hour until it is lost, as Use before expiry picks, and stay on it until it is used up or fails; then the next is picked the same way."],
   ["rotate", "In turn", "Each message you send goes to the next one, round the list; the agent's tool calls for it stay on the same one. A move costs some prompt cache; with Stays on Session, a whole conversation stays on one instead."],
   ["usage", "Least used first", "Each request goes to the one used least: a subscription by the share of its allowance used, a key by the tokens it served in the last hours."],
   ["pace", "Use before expiry", "Each request goes to the subscription with the most left per hour until it is lost, at its reset or as credits expire; one at 90% of its five hours waits until the others can't answer, a week at 90% is still spent before its reset. A key goes by the tokens it served in the last hours."],
@@ -12557,12 +12556,15 @@ const drawRotFig = (b, on, a) => (b.hidden = !on) ? b.replaceChildren() : (drawR
 // the routings besides Smart are the built-in plugin rotation's
 // (plugins/rotation): off, their options leave the page (data-feature),
 // and Smart is left — one in use keeps it on
-const ROTATION = new Set(["order", "drain", "rotate", "usage", "pace", "weight", "free", "fast", "cheap", "expiring", "fit"]);
+const ROTATION = new Set(["order", "drain", "pace-drain", "rotate", "usage", "pace", "weight", "free", "fast", "cheap", "expiring", "fit"]);
 // jsRoutings: the routings JS gateway plugins serve now ("<plugin>/<name>",
-// settings' jsRoutings, plugins/middleware's), and saved, a routing none
-// serves now, shown as it is: its pool is tried in its listed order
+// plugins/middleware's: the state's jsRoutings, which the Routing and
+// Plugins pages' own reads bring up to date too), and saved, a routing
+// none serves now, shown as it is: its pool is tried in its listed order.
+// Settings' copy alone left a pool's picker without them once the page
+// was read again after a change (guhailin3 on X).
 function jsRoutings(saved) {
-  const out = (state.settings?.jsRoutings || []).map((r) => [r.id, r.id,
+  const out = (state.jsRoutings || []).map((r) => [r.id, r.id,
     t("Routed by {name}, a routing of the gateway plugin {plugin}: it orders the accounts or keys for each request. If it fails or takes too long, they are tried in their listed order.", { name: r.name, plugin: r.plugin }), true]);
   if (saved && !ROUTINGS.some(([id]) => id === saved) && !out.some(([id]) => id === saved))
     out.push([saved, saved, t("No plugin serves this routing now, so requests go to the accounts or keys in their listed order. Turn on the gateway plugin that serves it on the Plugins page.")]);
@@ -12630,7 +12632,7 @@ function renderRouting(p) {
       ? t("Routing picks the account for each request through magpie, in the accounts' order; {agent} on its own stays signed in to {user}, whatever it has left.", { agent: a.agentName, user: keptLogin(p) })
       : p.keepLogin && !p.switchOnly
       ? t("Routing picks the account for each request through magpie; {agent} on its own stays signed in to the first account, whatever it has left.", { agent: a.agentName })
-      : routing === "drain"
+      : routing === "drain" || routing === "pace-drain"
         // Until used up keeps the requests on the next, and the sign-in
         // with them (provider.returnsToFirst; WalterAIBuilder on X)
         ? t("Routing picks the account for each request through magpie; {agent} on its own uses the one it is signed in to, which magpie moves to the next ticked account with room once it is used up, and keeps it there till that one is used up too.", { agent: a.agentName })
@@ -13739,7 +13741,7 @@ function firstLogin(a, p) {
 }
 
 function byQuotaOf(p, r = p?.routing || "") {
-  return p?.account && ["", "usage", "pace"].includes(r) ? ROUTINGS.find(([id]) => id === r)?.[1] : "";
+  return p?.account && ["", "usage", "pace", "pace-drain"].includes(r) ? ROUTINGS.find(([id]) => id === r)?.[1] : "";
 }
 function firstNoteOf(p, user) {
   return t("{user} is first in the order; {routing} still goes by each account's quota, so the order only settles ties. In order uses the first first.", { user, routing: t(byQuotaOf(p)) });
@@ -15281,25 +15283,8 @@ function renderKeyAccounts(p) {
     edit.title = t("Paste a new value for this key; its name, place and settings stay");
     edit.setAttribute("aria-label", t("Change key"));
     edit.append(svg(PENCIL, 12, 1.4));
-    edit.onclick = (e) => {
-      e.stopPropagation();
-      if (row.querySelector(".key-value-in")) return;
-      const i = input("", t("Paste the key's new value"), "password");
-      i.className = "rename-in key-value-in";
-      let over = false;
-      const done = (save) => {
-        if (over) return;
-        over = true;
-        if (save && i.value.trim()) accountAction("keys/replace", { id: p.id, ref: k.id, key: i.value }, t("{key} now uses its new value", { key: k.name || k.masked }));
-        else renderProviders();
-      };
-      i.onkeydown = (ev) => { ev.stopPropagation(); if (ev.key === "Enter") done(true); else if (ev.key === "Escape") done(false); };
-      i.onblur = () => done(!!i.value.trim());
-      const shown = row.querySelector(".plan.mono");
-      if (shown) shown.replaceWith(i);
-      else name.after(i);
-      i.focus(NO_SCROLL);
-    };
+    // its new value, and its own balance query, in keyedit.js
+    edit.onclick = (e) => { e.stopPropagation(); import("./keyedit.js").then(() => keyEdit(row, p, k, name), statusErr); };
     // a double-click on the row is the shortcut, away from its controls
     row.ondblclick = (e) => { if (!e.target.closest("button, input, textarea, .acct-models")) edit.onclick(e); };
     // each key copies its own (#1480)
@@ -18260,11 +18245,13 @@ function resetsWords(r, q) {
     // whether the one that runs out first is kept from going to waste:
     // with Auto-use on it is used shortly before it does (#624, #719)
     // or, the week's alone, when the week runs out (tongzhenbao on X)
+    // and not when its days left are out of those set (ResetDays)
     if (q && autoResetKept(q)) {
-      const { expiring: x, week } = autoResetWhen(q);
+      const { expiring: o, week: k } = autoResetWhen(q), x = o && resetInDays(resetLeadMinutes() * 6e4), week = k && resetInDays(at - Date.now());
       w.append(el("span", "resets-kept" + (x || week ? " on" : ""), " · " + t(x ? "auto-used before it expires" : week ? "auto-used when the week runs out" : "not auto-used")));
       w.title += "\n" + t(x ? "Auto-use is on: the reset that runs out first is used {lead} before it does, if this account's windows have been used, so what they have left can be used until then and it isn't lost; at once if the account is held up until after then."
         : week ? "Auto-use is on for a used-up week: a reset is used by itself when this account's week is used up, before its credits are spent. One about to run out is otherwise lost unless it's used by hand or the week runs out before then."
+        : o || k ? "Auto-use is on, but the reset that runs out first has more or fewer days left than those set for one used by itself: it's lost unless it's used by hand before then."
         : "Auto-use is off: the reset that runs out first is lost unless it's used by hand before then.", resetLeadVars());
     }
   } else if (r.each?.length) w.title = resetsEach(r);
@@ -18395,8 +18382,8 @@ function autoResetTitle(on) {
 }
 
 // How long before a reset runs out it is used (codexResetLead; the owner, 10-30):
-// half an hour unless set or out of range, as the gateway reads it. RESET_LEADS in minutes.
-const RESET_LEADS = [3, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440];
+// half an hour unless set or out of range, as the gateway reads it (the
+// choices, RESET_LEADS, are autoresetown.js's).
 function resetLeadMinutes(s = state?.settings) {
   const m = s?.codexResetLead;
   return Number.isInteger(m) && m >= 3 && m <= 1440 ? m : 30;
@@ -18405,6 +18392,10 @@ function resetLeadWords(m) {
   return m < 60 || m % 60 ? t("{n} min", { n: m }) : t("{n} h", { n: m / 60 });
 }
 const resetLeadVars = (s) => ({ lead: resetLeadWords(resetLeadMinutes(s)) });
+// resetInDays: whether a reset ms from running out may be used by itself,
+// by the days set for that (codexResetDaysLeast/Most, 0 no bound), as
+// settings' ResetInDays (shangyuan0818 on X)
+const resetInDays = (ms, s = state?.settings) => ms >= (s?.codexResetDaysLeast || 0) * 864e5 && ms <= (s?.codexResetDaysMost || 1e9) * 864e5;
 
 // autoResetBrief: the say and its switch beside an account's name in brief (#801).
 function autoResetBrief(q) {
@@ -20330,6 +20321,18 @@ function renderSettings() {
   $("#lightweightRow").hidden = web;
   $("#lightweightSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")]], s.lightweight === true ? "on" : "off",
     (v) => savePrefs({ ...keep, lightweight: v === "on" })));
+  // Linux's app alone: whether WebKitGTK draws on the GPU, read at the
+  // next start (webkit_linux.go; ZDegress on X). Unchosen it follows
+  // magpie's pick, and a choice equal to it is saved as none, so a
+  // later pick (a driver changed) still applies. WEBKIT_* variables the
+  // user set are theirs, and the row says so instead.
+  const gpu = !web && s.gpu;
+  $("#generalMore").hidden = !gpu;
+  if (gpu) {
+    $("#gpuSub").textContent = gpu.env?.length ? t("Set by {vars} in the environment; magpie leaves it as it is", { vars: gpu.env.join(", ") }) : t("Takes effect when magpie next starts");
+    $("#gpuSegs").replaceChildren(gpu.env?.length ? "" : segs([["off", t("Off")], ["on", t("On")]], (s.gpuRendering ?? gpu.auto) ? "on" : "off",
+      (v) => savePrefs({ ...keep, gpuRendering: (v === "on") === gpu.auto ? null : v === "on" })));
+  }
   // the display kept on too (#975)
   $("#keepAwakeSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")], ["display", t("Screen on too")]],
     !s.keepAwake ? "off" : s.keepAwakeDisplay ? "display" : "on",
@@ -22258,6 +22261,10 @@ function renderRedact(s, keep) {
   rowIn(find, t("Rules"), masking ? t("Keys, tokens, emails and numbers whose checksum adds up: patterns that are certain, checked on every request") : why, always).id = "maskRulesRow";
   if (window.hideAccounts) rowIn(share, t("Hide accounts"), t("Email addresses and account names on every page are blurred, for a screenshot to share"),
     onOff(window.hideAccounts.on(), (on) => { window.hideAccounts.set(on); renderSettings(); }));
+  // what the last requests said, on Routing and Gateway (llxth1 on X);
+  // off, the gateway keeps none of it (gateway/request_text.go)
+  rowIn(share, t("Show request content"), t("What the last requests said, on the Routing and Gateway pages, kept in memory only. Off, magpie keeps none of it"),
+    onOff(!s.hideRequestText, (on) => savePrefs({ ...keep, hideRequestText: !on }))).id = "hideRequestTextRow";
   rowIn(share, t("Turn off telemetry for all agents"), t("Over each agent's own Telemetry switch, an agent found later too"),
     onOff(s.agentTelemetryOff, (off) => writingPrefs(api("settings/agent-telemetry", { off })).then((ns) => {
       prefs = state.settings = ns;
@@ -22278,132 +22285,19 @@ function renderRedact(s, keep) {
   }
 }
 
-// privacyModelRow: the local masking model (internal/pii); its state read
-// on drawing, each second while it downloads or starts; then pmScore.
-let pmState = null, pmTimer = 0;
+// privacyModelRow: the local masking model (internal/pii); its controls and
+// status live in privacymodel.js, imported when Settings › Privacy draws it.
 function privacyModelRow(box, why) {
   const r = el("div", "row pref" + (why ? " pm-wait" : ""));
   r.id = "privacyModelRow";
-  box.append(r);
-  const sr = el("div", "row pref");
-  sr.id = "pmScoreRow";
   const name = () => { const n = el("div", "name", t("Find with a local model")); n.append(el("span", "badge new", t("New"))); return n; };
-  if (why) {
-    clearTimeout(pmTimer);
-    const who = el("div", "who");
-    who.append(name(), el("div", "sub say", why));
-    r.append(who);
-    return;
-  }
-  let tries = 0;
-  const draw = (m) => {
-    if (!r.isConnected) return;
-    const who = el("div", "who"), val = el("div", "val");
-    who.append(name(), el("div", m && (m.on || m.installed || !m.supported || pmBusy(m) || m.error || m.models?.some((x) => x.error)) ? "sub say" : "sub", pmSub(m)));
-    if (m?.supported || m?.installed || m?.managedWeights === false) {
-      if (m.models?.length > 1) val.append(pmPick(m, (id) => act("pick", id)));
-      if (pmBusy(m)) {
-        const c = el("button", "text", t("Cancel"));
-        c.onclick = () => act("cancel");
-        val.append(c);
-      } else if (m.installed && !m.on && m.managedWeights !== false) {
-        const x = el("button", "text", t("Delete model"));
-        x.onclick = async () => {
-          if (await confirmAction(t("Delete the model?"), t("Turning it on again downloads {size} again.", { size: fmtBytes(m.size) }), t("Delete"))) act("remove");
-        };
-        val.append(x);
-      }
-      val.append(segs([["off", t("Off")], ["on", t("On")]], m.on || m.downloading ? "on" : "off", (v) => act(v)));
-    }
-    r.replaceChildren(who, val);
-    if (m && (m.supported || m.installed) && m.defaultScore) {
-      const sw = el("div", "who");
-      sw.append(el("div", "name", t("Confidence threshold")), el("div", "sub", t("What the model is less sure of goes as written. Higher masks less, with fewer false alarms")));
-      const sv = el("div", "val");
-      sv.append(pmScore(m, (score) => act("score", m.model, score)));
-      sr.replaceChildren(sw, sv);
-      if (!sr.isConnected) r.after(sr);
-    } else sr.remove();
-    import("./pmfolder.js").then(() => window.pmFolder(r, sr, m, act), () => {});
-    clearTimeout(pmTimer);
-    // a download's progress, and where pf-serve runs once it has started
-    const starting = m?.on && m.installed && !m.running && !m.failed && tries++ < 30;
-    if (pmBusy(m) || starting || m?.moving) pmTimer = setTimeout(load, 1000);
-  };
-  const load = () => api("privacy-model").then((m) => { pmState = m; draw(m); }).catch(() => {});
-  const act = (doing, model, score, dir) => { tries = 0; api("privacy-model", { do: doing, model, score, dir }).then((m) => { pmState = m; draw(m); }).catch((e) => { statusTErr(e); load(); }); };
-  draw(pmState);
-  load();
-}
-// the local models to pick from (pii.Models), by the app's menu: what
-// each is, its size and whether it is downloaded
-const PM_MODELS = { "astrlink-guard": ["AstrLink Guard", "Chinese and English, few false alarms in code"], "privacy-filter": ["Privacy Filter", "OpenAI's, masks more ordinary values in code"] };
-// pmBusy is the model downloading (the one picked while another masks, too)
-const pmBusy = (m) => (m?.models || []).find((x) => x.downloading) || (m?.downloading ? m : null);
-function pmPick(m, pick) {
-  const b = el("button", "sess-pick pm-model");
-  b.type = "button";
-  menuOpener(b);
-  b.title = t("The local model");
-  b.append(el("span", "", m.name || (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
-  b.onclick = (e) => {
-    e.stopPropagation();
-    if (b.classList.contains("open")) return closeProtoMenu();
-    const opts = (m.models || []).map(pmModelOption);
-    openProtoMenu(b, opts, m.model, (v) => v !== m.model && pick(v), "The local model", "sess-menu", "right");
-  };
-  return b;
-}
-// pmScore picks the model's threshold (privacy-model's score) by the
-// app's menu: its default, or one of PM_SCORES
-const PM_SCORES = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95];
-function pmScore(m, pick) {
-  const cur = m.minScore === m.defaultScore ? "0" : String(m.minScore);
-  const b = el("button", "sess-pick pm-score");
-  b.type = "button";
-  menuOpener(b);
-  b.title = t("Confidence threshold");
-  b.append(el("span", "", String(m.minScore)), svg(CHEV, 11, 1.6));
-  b.onclick = (e) => {
-    e.stopPropagation();
-    if (b.classList.contains("open")) return closeProtoMenu();
-    const note = (s) => s === PM_SCORES[0] ? "Masks the most" : s === PM_SCORES.at(-1) ? "Masks the least" : "";
-    const opts = [{ v: "0", name: t("Default ({score})", { score: m.defaultScore }), literalName: true, note: note(m.defaultScore) },
-      ...PM_SCORES.filter((s) => s !== m.defaultScore).map((s) => ({ v: String(s), name: String(s), literalName: true, note: note(s) }))];
-    openProtoMenu(b, opts, cur, (v) => v !== cur && pick(Number(v)), "Confidence threshold", "sess-menu", "right");
-  };
-  return b;
-}
-function pmSub(m) {
-  const about = t("Names, addresses and passwords no rule can find, found by a model that runs on this computer");
-  if (!m) return about;
-  // a plugin's model (pii/external.go): its files are the user's
-  if (m.managedWeights === false && !m.installed) return t("Not available: its plugin is off, or its files are gone");
-  if (!m.supported && !m.installed) return t("Not available on this system yet");
-  const d = pmBusy(m);
-  if (d) return t("Downloading the model: {done} of {total}", { done: fmtBytes(d.done), total: fmtBytes(d.total) });
-  const bad = (m.models || []).find((x) => x.error) || (m.error ? m : null);
-  if (bad) return t("The download stopped: {error}", { error: bad.error });
-  if (m.on && m.failed) return m.chosen ? t("The model didn't answer, so requests are held back: {error}", { error: m.failed }) : t("The model didn't answer, so the rules mask requests alone: {error}", { error: m.failed });
-  if (m.on && m.running) {
-    if (m.gpu) return t("On, on the GPU ({device})", { device: m.device });
-    // AstrLink Guard on a Mac: CoreML, on the device its plan picked
-    if (m.via) return { "Neural Engine": t("On, with CoreML on the Neural Engine"), GPU: t("On, with CoreML on the GPU"), CPU: t("On, with CoreML on the CPU") }[m.device] || t("On, with CoreML");
-    // the Intel build on Apple silicon: Go, translated, several times slower
-    if (m.rosetta) return t("On, slowly under Rosetta: the next update installs magpie for Apple silicon");
-    // the x64 build on Windows on Arm, emulated
-    if (m.emulated) return t("On, slowly under x64 emulation: the next update installs magpie for Arm");
-    if (m.gpuError && m.model === "astrlink-guard") return t("On, on the CPU: CoreML failed ({error})", { error: m.gpuError });
-    // Privacy Filter lost the GPU: to its driver resetting it (device
-    // lost), or to a fault; the GPU is tried again at gpuAgain
-    const time = m.gpuAgain ? hhmm(m.gpuAgain) : "";
-    if (m.gpuReset) return time ? t("On, on the CPU until {time}: the graphics driver reset the GPU (device lost)", { time }) : t("On, on the CPU: the graphics driver reset the GPU (device lost)");
-    if (m.gpuError && time) return t("On, on the CPU until {time}: the GPU failed ({error})", { time, error: m.gpuError });
-    return m.gpuError ? t("On, on the CPU: the GPU failed ({error})", { error: m.gpuError }) : t("On, on the CPU");
-  }
-  if (m.on) return t("On: the model starts with the next request");
-  if (m.installed) return t("Off. The model is downloaded ({size})", { size: fmtBytes(m.size) });
-  return t("Names, addresses and passwords no rule can find, found by a model that runs on this computer. Turning it on downloads {size} once", { size: fmtBytes(m.size) });
+  const who = el("div", "who");
+  who.append(name(), el("div", why ? "sub say" : "sub", why || t("Names, addresses and passwords no rule can find, found by a model that runs on this computer")));
+  r.append(who);
+  box.append(r);
+  if (why) { window.pmStop?.(); return; }
+  if (window.pmFill) pmFill(r, name);
+  else import("./privacymodel.js").then(() => pmFill(r, name), () => {});
 }
 
 // ---------- what masking swapped (maskrec) ----------

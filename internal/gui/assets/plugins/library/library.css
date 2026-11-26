@@ -331,6 +331,7 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-problems-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .lib-problems-head b { flex: 1 1 10em; font-weight: 600; min-width: 0; overflow-wrap: break-word; }
 .lib-problems-head .action { flex: none; margin-left: auto; }
+.lib-problems-head .lib-problems-all { margin-left: auto; height: 24px; }
 .lib-problems-head .lib-x { margin: -4px -6px -4px -2px; color: var(--muted); }
 .lib-problems-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
 .lib-problems ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 15px; display: grid; gap: 4px; }
@@ -480,6 +481,9 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-pick { display: flex; align-items: flex-start; gap: 10px; padding: 7px 6px; border-radius: 8px; cursor: default; }
 .lib-pick:hover:not(.dim) { background: var(--pill); }
 .lib-pick.dim { opacity: .55; }
+/* a row is a label, and an editor sets its labels (a form's names) right:
+   in a sheet the row still reads from its tick (AXmake110 on X) */
+.editor label.lib-pick { text-align: start; }
 .lib-pick input { margin: 2px 0 0; accent-color: var(--fg); flex: none; }
 .lib-pick .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .lib-pick .name { font-size: 13px; font-weight: 500; }
@@ -781,6 +785,14 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
    phone's taller picker (body.web .sess-pick), which wins */
 .row-head .lib-skillagent { height: 24px; flex: 0 1 auto; min-width: 0; max-width: 180px; gap: 6px; }
 .lib-skillagent .ic { width: 13px; height: 13px; }
+/* on In your agents' heading (no skill in the library): whole, and the
+   heading takes a second line before the pick is cut to "All…" */
+#view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) { flex-wrap: wrap; row-gap: 6px; padding-block: 1px; }
+#view-library .row-head.lib-foundhead > .lib-skillagent, #view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) > .label { flex: none; }
+/* the note takes what room is left, and never pushes the buttons down */
+#view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) > .note { flex: 1 1 0; text-align: right; }
+/* in a narrow window it would show a letter or two: none */
+@media (max-width: 640px) { #view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) > .note { display: none; } }
 /* its menu: each agent's icon, its count at the end (as Sessions' agent menu) */
 .pop.proto-menu.lib-agentmenu { width: min(260px, calc(100vw - 16px)); max-height: min(360px, 70vh); overflow-y: auto; }
 .lib-agentmenu .pm-item { align-items: center; }

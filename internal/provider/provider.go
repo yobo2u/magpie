@@ -136,7 +136,9 @@ type Provider struct {
 	// The window can be shorter than a week. "weight" by each key's
 	// weight, a key with 3 taking three requests to one with 1's.
 	// "drain" one until it is used up, then the next, which keeps them
-	// when an earlier one renews (routes.Drain). Whichever it is, one out
+	// when an earlier one renews (routes.Drain). "pace-drain" picks as
+	// "pace" does and then stays on it as "drain" does until it is used
+	// up (routes.PaceDrain). Whichever it is, one out
 	// of credit, out of quota, rate limited or failing is passed over for
 	// as long as that lasts.
 	Routing string `json:"routing,omitempty"`
@@ -658,6 +660,11 @@ type Provider struct {
 	// BalanceURL (see TakesBalanceToken). It is asked with nothing else but
 	// the provider's headers, when the endpoint is one named.
 	BalanceToken string `json:"balanceToken,omitempty"`
+	// KeyBalanceAuth is, by KeyID, the access token and user id of the
+	// account a key belongs to, where it isn't BalanceToken's (keys of two
+	// accounts at one relay): that key's balance is asked with them (see
+	// key_balance_auth.go). A key not in it is asked as the provider says.
+	KeyBalanceAuth map[string]KeyBalanceAuth `json:"keyBalanceAuth,omitempty"`
 	// ZhipuTeam, for a Zhipu or Z.ai key on a team's GLM Coding Plan, is
 	// the team's organization and project, from the BigModel console: the
 	// team's windows are told to the key only with them (see
@@ -811,6 +818,12 @@ type file struct {
 	// their models are in none, so a model only one other provider serves
 	// is no group. The groups the user made or changed keep them.
 	AutoGroupSkip []string `json:"autoGroupSkip,omitempty"`
+	// AutoGroupsOfOne: the user asked for a group of a model only one
+	// provider serves too (SetAutoGroupsOfOne; realLemonawa on X), so
+	// auto/<model> is there before a second provider lists it and stays
+	// when one goes. Off, as it is unless set, a found group is a model
+	// two or more providers serve.
+	AutoGroupsOfOne bool `json:"autoGroupsOfOne,omitempty"`
 	// Order is the order the user put the providers in on the Providers
 	// tab (#499), by id; one not in it follows those that are, in the
 	// order it was added (see SetOrder).
@@ -971,10 +984,16 @@ func store(f file) error {
 	if err != nil {
 		return err
 	}
-	if err := lastgood.Keep(p, validProviders, 0o600); err != nil {
+	// a file edited by hand that doesn't parse is the user's, left as it
+	// is: read gave its last good generation, and writing that with this
+	// change over it lost the edit (sarosaka1023 on X)
+	if err := lastgood.KeepEdited(p, validProviders, 0o600); err != nil {
+		if e := (*lastgood.EditedError)(nil); errors.As(err, &e) {
+			return &unreadableError{p, errors.New(e.Why)}
+		}
 		return err
 	}
-	if err := writePrivate(p, append(b, '\n')); err != nil {
+	if err := writeStored(p, append(b, '\n')); err != nil {
 		return err
 	}
 	pruneIcons(f)
@@ -1047,6 +1066,7 @@ func (p Provider) clone() Provider {
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
 	p.KeyPriceRates = maps.Clone(p.KeyPriceRates)
 	p.KeyRateFactors = maps.Clone(p.KeyRateFactors)
+	p.KeyBalanceAuth = maps.Clone(p.KeyBalanceAuth)
 	if p.AccountWindowCaps != nil {
 		m := make(map[string]map[string]int, len(p.AccountWindowCaps))
 		for k, v := range p.AccountWindowCaps {
@@ -1664,6 +1684,10 @@ func AddCopy(p Provider, from string) (string, error) {
 		if p.BalanceToken == "" {
 			p.BalanceToken = src.BalanceToken
 		}
+		// each key's own, likewise
+		if p.KeyBalanceAuth == nil {
+			p.KeyBalanceAuth = maps.Clone(src.KeyBalanceAuth)
+		}
 	}
 	// the access key as the copy's editor showed it: the form sends its ID
 	// but never the saved Secret, which went missing from the copy (#1821)
@@ -1975,6 +1999,7 @@ func normalize(p Provider) Provider {
 	p.KeyOwnBalances = normalKeyOwnBalances(p.KeyOwnBalances)
 	p.KeyPriceRates = normalKeyPriceRates(p.KeyPriceRates)
 	p.KeyRateFactors = normalKeyRateFactors(p.KeyRateFactors)
+	p.KeyBalanceAuth = normalKeyBalanceAuth(p.KeyBalanceAuth, p)
 	if TopUpRateOK(p.TopUpRate) != "" {
 		p.TopUpRate = 0
 	}
@@ -2054,10 +2079,11 @@ func normalize(p Provider) Provider {
 	if anon := p.AnonymousKey(); anon != "" && p.Key == "" {
 		p.Key = anon
 	}
-	// a Zen provider saved before its preset had System One for Jev
-	// (01huadalang: its Jev was asked as a chat model, and failed), an
-	// OpenRouter one before its decision models were listed (ARNO)
-	if (p.Preset == "opencode-zen" || p.Preset == "openrouter") && p.Decide == "" && p.Chat != "" {
+	// a Zen or Go provider saved before its preset had System One for its
+	// decision models (01huadalang: Zen's Jev was asked as a chat model,
+	// and failed), an OpenRouter one before its decision models were listed
+	// (ARNO)
+	if (p.Preset == "opencode-zen" || p.Preset == "opencode-go" || p.Preset == "openrouter") && p.Decide == "" && p.Chat != "" {
 		if pr := Preset(p.Preset); pr != nil {
 			p.Decide = pr.Decide
 		}
@@ -2082,7 +2108,7 @@ func normalize(p Provider) Provider {
 	if p.Decide == "" {
 		p.Decide = p.googleDecisions()
 	}
-	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && p.Routing != Drain && !PluginRouting(p.Routing) {
+	if p.Routing != Ordered && p.Routing != Rotate && p.Routing != LeastUsed && p.Routing != Pace && p.Routing != Weighted && p.Routing != FreeFirst && p.Routing != Fastest && p.Routing != Drain && p.Routing != PaceDrain && !PluginRouting(p.Routing) {
 		p.Routing = ""
 	}
 	if !slices.Contains(Affinities, p.Affinity) {

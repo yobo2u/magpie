@@ -785,6 +785,8 @@ function routingPage(part) {
     "": ["Quota first", "Quota first: of the accounts with quota to spare, the one whose allowance renews soonest goes first — what it has left would be lost at the reset. The week decides; an account with five hours and no week goes by its five hours, and one whose month its weeks can no longer use up before it renews by its week. One at 90% or more waits until the others can't answer; one resting after a failure goes last."],
     order: ["In order", "In order: the first answers everything until it can't; then the next."],
     drain: ["Until used up", "Until used up: one answers everything until its quota is used up; then the next, which keeps them even after the one before renews."],
+    // guhailin3 on X (routes.PaceDrain)
+    "pace-drain": ["Before expiry, one by one", "Before expiry, one by one: the account with the most left per hour until it is lost is picked, as Use before expiry picks, and takes every request until it is used up or fails; then the next is picked the same way."],
     // the unit that goes round is the user's message (Wing8Aqua on X)
     rotate: ["In turn", "In turn: each message you send goes to the next account, round the list; the agent's tool calls for it stay on the same one. With Stays on Session, a whole conversation stays on one instead."],
     usage: ["Least used first", "Least used first: the account with the most of its allowance left goes first; a key by the tokens magpie sent it lately."],
@@ -1053,6 +1055,7 @@ function routingPage(part) {
         ? t("In order: with {rested} resting after a failure, {who} is the first that can answer.", { rested: rested.join(", "), who: w })
         : t("In order: {who} is first, and answers everything while it can.", { who: w });
       case "drain": return t("Until used up: {who} is the one in use, and answers everything until it is used up.", { who: w });
+      case "pace-drain": return t("Before expiry, one by one: {who} is the one in use, picked for the most left per hour until it is lost, and answers everything until it is used up.", { who: w });
       case "rotate": return t("In turn: it's {who}'s turn — each request starts one further along.", { who: w });
       case "weight": return t(f.kind === "account" ? "By weight: it's {who}'s share — each account takes requests as its weight says." : "By weight: it's {who}'s share — each key takes requests as its weight says.", { who: w });
       case "free":
@@ -1452,16 +1455,19 @@ function routingPage(part) {
     // wasn't asked for it (#4358): the turn reasons at that pick
     const above = c.above ? t("{by} wasn't asked how hard turn {turn} is: the group above picked {level} reasoning for it.", { by, turn: r.rule.turn, level: c.above }) : "";
     if (above && !c.intents?.length) return above;
-    // it couldn't say, and the turn keeps the intent the turn before had
-    // (#1826), rather than going with none
-    if (c.error && c.fallback === "previous" && c.intent) return t("{by} was to tell which of {kinds} turn {turn} is, but couldn't — {err} — so the turn keeps “{intent}”, as turn {prev} was.", { by, kinds, turn: r.rule.turn, err: c.error, intent: c.intent, prev: r.rule.turn - 1 });
-    if (c.error) return c.intents?.length
-      ? t("{by} was to tell which of {kinds} turn {turn} is, but couldn't — {err} — so no rule with an intent matches it.", { by, kinds, turn: r.rule.turn, err: c.error }) + (above ? " " + above : "")
-      : t("{by} was to rate how hard turn {turn} is, but couldn't — {err} — so it reasons as the agent asked.", { by, turn: r.rule.turn, err: c.error });
     const when = c.cached ? t("said before, for the same message") : t("in {ms}", { ms: took(c.ms) });
     const told = c.after ? " " + t("It was told turn {prev} was “{after}”, which a message that only carries on from it is too.", { prev: r.rule.turn - 1, after: c.after }) : "";
     const toldEffort = c.afterEffort ? " " + t("It was told turn {prev} reasoned at {level}, which a message that only carries on from it needs too.", { prev: r.rule.turn - 1, level: c.afterEffort }) : "";
     const effort = c.effort ? t("{by} rated turn {turn} {score} of 3, so it picks {level} reasoning for the turn — each model gets the level it has nearest.", { by, turn: r.rule.turn, score: (c.score || 0).toFixed(1), level: c.effort }) + toldEffort : "";
+    // the effort a decision model rated though it declined the intent
+    // (zyh6036 on X): said beside why no intent came of the turn
+    const rated = effort ? " " + effort : above ? " " + above : "";
+    // it couldn't say, and the turn keeps the intent the turn before had
+    // (#1826), rather than going with none
+    if (c.error && c.fallback === "previous" && c.intent) return t("{by} was to tell which of {kinds} turn {turn} is, but couldn't — {err} — so the turn keeps “{intent}”, as turn {prev} was.", { by, kinds, turn: r.rule.turn, err: c.error, intent: c.intent, prev: r.rule.turn - 1 }) + rated;
+    if (c.error) return c.intents?.length
+      ? t("{by} was to tell which of {kinds} turn {turn} is, but couldn't — {err} — so no rule with an intent matches it.", { by, kinds, turn: r.rule.turn, err: c.error }) + rated
+      : t("{by} was to rate how hard turn {turn} is, but couldn't — {err} — so it reasons as the agent asked.", { by, turn: r.rule.turn, err: c.error });
     if (!c.intents?.length) return effort ? `${effort} (${when})` : null;
     const sure = c.sure ? t(", {n} sure", { n: Math.round(c.sure * 100) + "%" }) : "";
     // c.said is the answer as it was said (#4598): a chat model's 0 is
@@ -3525,6 +3531,9 @@ function routingPage(part) {
   // request archive's copy, when it was on. Nothing more is recorded for
   // it: without the archive an older request says how to keep them.
   const bodiesGot = new Map(); // route id → { busy } | its bodies | { gone } | { error }
+  // Show request content as the bodies were read (llxth1 on X): switched
+  // in Settings › Privacy, the bodies read before go
+  let hidRead = !!prefs?.hideRequestText;
   const wireOpen = new Set(); // route ids whose HTTP headers are open
   async function loadBodies(id) {
     const pending = { busy: true };
@@ -3550,9 +3559,10 @@ function routingPage(part) {
       if (bodiesKey) { bodiesKey = ""; bodies.replaceChildren(); }
       return;
     }
+    if (prefs && !!prefs.hideRequestText !== hidRead) { hidRead = !hidRead; bodiesGot.clear(); bodiesKey = ""; }
     if (!bodiesGot.has(r.id)) loadBodies(r.id);
     const got = bodiesGot.get(r.id);
-    const key = JSON.stringify([document.documentElement.lang, r.id, r.archive || "", !!providers?.gateway?.archive?.on, got.busy ? "busy" : got.gone ? "gone" : got.error ? "error" : "in", wireOpen.has(r.id)]);
+    const key = JSON.stringify([document.documentElement.lang, r.id, r.archive || "", !!providers?.gateway?.archive?.on, got.busy ? "busy" : got.gone ? "gone" : got.error ? "error" : got.hidden ? "hidden" : "in", wireOpen.has(r.id)]);
     if (key === bodiesKey) return;
     bodiesKey = key;
     if (got.busy) { bodies.replaceChildren(el("div", "none", t("Fetching…"))); return; }
@@ -3576,12 +3586,16 @@ function routingPage(part) {
         : t("magpie keeps the request and response of only the last 40 requests, until it quits. To keep every request's, turn on Request archive at the top of Usage › Requests.")));
       return;
     }
-    const grid = el("div", "call-details");
-    grid.append(
-      callBodyPanel("Request Body", got.requestBody, got.requestTruncated, undefined, "rt|" + r.id + "|req"),
-      callBodyPanel("Response Body", got.responseBody, got.responseTruncated, "rt|" + r.id),
-    );
-    bodies.replaceChildren(grid);
+    // Show request content off (llxth1 on X): no bodies, the headers kept
+    if (got.hidden) bodies.replaceChildren(hiddenContentNote());
+    else {
+      const grid = el("div", "call-details");
+      grid.append(
+        callBodyPanel("Request Body", got.requestBody, got.requestTruncated, undefined, "rt|" + r.id + "|req"),
+        callBodyPanel("Response Body", got.responseBody, got.responseTruncated, "rt|" + r.id),
+      );
+      bodies.replaceChildren(grid);
+    }
     // the headers both ways, folded (wireHeadersView, usage/page.js)
     if (got.headers) bodies.append(wireHeadersView(got.headers, wireOpen.has(r.id), () => {
       if (wireOpen.has(r.id)) wireOpen.delete(r.id); else wireOpen.add(r.id);
@@ -3881,6 +3895,10 @@ function routingPage(part) {
       else if (tr.done && tryOk(tr) && tr.routed) items.push([routedWhy(tr), "aside", tr]);
       if (tr.done && tryOk(tr) && tr.upstream) items.push([upstreamWhy(tr), "aside upstream-said", tr]);
     });
+    // the request ended on a provider's refusal with nothing set to take
+    // over: said where it ended, with the way to set something
+    const lone = fallbackWanted(r);
+    if (lone) items.push([t("{name} has no fallback, so nothing took over.", { name: lone.name }), "aside fallback-none", { model: lone.id }, lone.w]);
     if (r.done && !r.tries.length) items.push([t("Nothing was tried: {error}", { error: r.error || r.status }), "bad"]);
     // one magpie held too long before routing it was stopped, and what
     // held it saved to a report (the app's log goes only to stderr, which
@@ -3920,9 +3938,48 @@ function routingPage(part) {
       if (c === "swap") li.prepend(swapTag(tr), " ");
       if (c === "aside time") li.replaceChildren(timeElement(tr));
       if (c === "aside held") li.append(" ", ...heldActions(tr.model));
+      if (c === "aside fallback-none") li.append(" ", fallbackAction(tr.model));
       return li;
     }));
     keptIcons = null;
+  }
+
+  // fallbackWanted is the provider a request ended on, when it ended on
+  // an error a fallback takes — rate limited, out of quota or credit,
+  // overloaded, down, slow — with no fallback set for it, the agent having
+  // asked for its model, not a group: null otherwise. jimlee0824v2 on X:
+  // OpenCode Zen Free's DeepSeek ran out after a few requests, the agent
+  // stopped on the 429, and the backup they asked for, a group to go on
+  // to, is the provider's Fallback, under Advanced, where they didn't
+  // find it.
+  const FALLS_OVER = new Set(["rate", "quota", "credit", "overloaded", "slow"]);
+  function fallbackWanted(r) {
+    const tr = r.tries.at(-1);
+    if (!r.done || r.group || !tr?.done || tryOk(tr) || tr.gone) return null;
+    if (!(tr.status === 429 || tr.status >= 500 || FALLS_OVER.has(tr.fail))) return null;
+    if ([...r.order, ...(r.left || [])].some((x) => x.fallback)) return null;
+    const w = tried(r, tr);
+    if (!w || w.fallback || !w.provider) return null;
+    // as the provider is now: one given a fallback since asks for none
+    const p = providers?.providers?.find((x) => x.id === w.provider);
+    if (providers && (!p || p.fallback?.length || decideOnly(p))) return null;
+    return { id: w.provider, name: p?.name || w.name || w.provider, w };
+  }
+  // fallbackAction opens the provider's editor at its Fallback, Advanced
+  // open, where a model or a routing group is picked
+  function fallbackAction(id) {
+    const b = el("button", "link", t("Set a fallback"));
+    b.onclick = async () => {
+      advanced = { of: id, open: true };
+      await openProvider(id);
+      // an editor first drawn waits for advgroups.js (app.js advMod)
+      await advMod();
+      if (editing !== id) return;
+      const q = document.querySelector(".editor .fallback input");
+      q?.scrollIntoView({ block: "center" });
+      q?.focus(NO_SCROLL);
+    };
+    return b;
   }
 
   // heldActions are a held request's report's buttons: Copy Report, and
@@ -6410,7 +6467,16 @@ function routingPage(part) {
   const gSet = el("div", "list rt-gset");
   gSet.dataset.feature = "groups";
   gSet.append(gFound, gNames, ...gDefs);
-  gsec.append(gHead, gList, gOff, sHead, gSet, pHead, pList);
+  // what few change, folded under Advanced below them: whether a model one
+  // provider alone serves is a found group too (realLemonawa on X), shown
+  // while found groups are on
+  const gOne = el("div", "rt-gone hint-row");
+  const gMore = el("details", "prefs-more rt-gmore");
+  gMore.dataset.feature = "groups";
+  const gMoreList = el("div", "list rt-gset");
+  gMoreList.append(gOne);
+  gMore.append(el("summary", "", t("Advanced")), gMoreList);
+  gsec.append(gHead, gList, gOff, sHead, gSet, gMore, pHead, pList);
   // on the Routing groups page, a page of their own; Try again on it puts
   // them back in its markup made anew. With the groups off, that page's
   // tab leaves the sidebar (yyddbds on Discord: it stayed), and what is
@@ -6424,7 +6490,7 @@ function routingPage(part) {
   };
   window.routingGroupsHome();
   if (gHome()) byWidth(gHome(), { max520: (w) => w <= 520 });
-  const ROUTE_OPTS = [["", "Quota first"], ["order", "In order"], ["drain", "Until used up"], ["rotate", "In turn"], ["usage", "Least used first"], ["pace", "Use before expiry"], ["free", "Free first"], ["fast", "Speed first"]];
+  const ROUTE_OPTS = [["", "Quota first"], ["order", "In order"], ["drain", "Until used up"], ["pace-drain", "Before expiry, one by one"], ["rotate", "In turn"], ["usage", "Least used first"], ["pace", "Use before expiry"], ["free", "Free first"], ["fast", "Speed first"]];
   // a group may also be routed by hand: every request to the member the
   // user picks on its card (provider.Manual, #317) — a provider's keys can't
   // and by its members' weights, as a provider's keys are (#1910)
@@ -6485,6 +6551,7 @@ function routingPage(part) {
     "": "Quota first, over the members' accounts and keys together: of the subscriptions with quota to spare, the one whose allowance renews soonest goes first — the week decides, and an account with five hours and no week (Claude Enterprise) goes by its five hours, so ahead of every week renewing later, and one whose month its weeks can no longer use up before it renews by its week; one resting after a failure goes last.",
     order: "In order: the first model until it can't answer, then the next — each over its own accounts or keys as its provider routes them.",
     drain: "Until used up: one account or key, across the members, takes every request until it is used up; then the next in the list, which keeps them even after an earlier one renews. One rate limited or failing is passed over only while it rests.",
+    "pace-drain": MODES["pace-drain"][1],
     rotate: "In turn: each message you send goes to the next member's account or key, round the list; the agent's tool calls for it stay on the same one. A move costs some prompt cache; with Stays on Session, a whole conversation stays on one instead.",
     usage: "Least used first: the account or key with the most of its allowance left goes first.",
     pace: "Use before expiry: the account with the most left per hour until it is lost goes first — its week at its reset, or credits in it that expire sooner — so less of each member's allowance is lost; an account with five hours and no week (Claude Enterprise) by what its five hours have left per hour until they renew, so almost always first; a key by the tokens magpie sent it lately.",
@@ -6607,6 +6674,10 @@ function routingPage(part) {
   // here, and an entry that isn't a group at all is left out.
   function groupsFrom(x) {
     x = x && typeof x === "object" ? x : {};
+    // the routings JS gateway plugins serve now, read with the groups: one
+    // installed since the state was read is in the pickers at once (app.js
+    // jsRoutings)
+    if (Array.isArray(x.jsRoutings)) state.jsRoutings = x.jsRoutings;
     const objs = (v) => Array.isArray(v) ? v.filter((o) => o && typeof o === "object") : [];
     const ids = (v) => Array.isArray(v) ? v.filter((s) => typeof s === "string") : [];
     // the lists Go leaves out when empty stay out; null or a non-list is none
@@ -6713,6 +6784,28 @@ function routingPage(part) {
     const a = groupIndexOf().accounts.get(pid)?.get(full);
     return { id: full, name: a?.name || acct, plan: a?.plan || "" };
   };
+  // groupAllows: a group's accounts (Group.Accounts) allow the account a,
+  // "<provider>/<id>", by the gateway's rule (access.AllowsAccount, which
+  // groupHeld asks): a provider the list names no account of may use each
+  // of its accounts, one it names only those, in any case, and one kept
+  // out ("<provider>/!<id>") never. A member pinned to an account the
+  // group leaves out is never sent (JJasonsun on Discord)
+  const groupAllows = (accounts, a) => {
+    const lc = (x) => String(x || "").trim().toLowerCase();
+    const key = lc(a), pid = key.slice(0, key.indexOf("/") + 1);
+    let named = false;
+    for (const x of (accounts || []).map(lc)) {
+      if (!x.startsWith(pid)) continue;
+      const ref = x.slice(pid.length);
+      if (ref.startsWith("!")) { if (pid + ref.slice(1) === key) return false; continue; }
+      if (x === key) return true;
+      named = true;
+    }
+    return !named;
+  };
+  // memberOut: the account member id is pinned to, when the group's
+  // accounts leave it out; null when it names none or one they allow
+  const memberOut = (accounts, id) => { const a = memberAccount(id); return a && !groupAllows(accounts, a.id) ? a : null; };
   // a decision model (Jev) is a member of a group of decision models only,
   // asked at /v1/systemone (provider/decide_group.go): it is in
   // groups.deciders, not groups.models
@@ -6838,7 +6931,7 @@ function routingPage(part) {
     const i = memberInfoOf(g, id), m = modelOf(id), s = subOf(id), f = fixedOf(id);
     if (s) return { pv: t("routing group"), mn: s.name, at: "" };
     const acct = memberAccount(id);
-    const at = (acct ? ` · ${acct.name}` : "") + (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${speedIn(g, id)}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
+    const at = (acct ? ` · ${acct.name}` + (memberOut(g?.accounts, id) ? ` (${t("not allowed in this group")})` : "") : "") + (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${speedIn(g, id)}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
     if (m) return { pv: m.providerName, mn: modelName(m), at };
     if (i?.providerOff) return { pv: i.name, mn: i.model, at: `${at} (${t("switched off")})` };
     return i?.name ? { pv: i.name, mn: i.model, at } : { pv: "", mn: id, at: "" };
@@ -7042,6 +7135,7 @@ function routingPage(part) {
       // so the key being typed into it lands once (#1055)
       replaceKeeping(gHead, head);
       drawFound();
+      drawOne();
       drawNames();
       drawDefaults();
     }
@@ -7455,6 +7549,45 @@ function routingPage(part) {
       : t("Off: only the groups you made or changed are listed and served. An agent set to a found group is moved to its model from one provider, and a request still naming one goes there too.")));
     if (on) txt.append(skipPick());
     gFound.replaceChildren(txt, s);
+  }
+  // drawOne: the switch under Advanced for a group of a model one provider
+  // alone serves (provider.SetAutoGroupsOfOne): on, auto/<model> is there
+  // before a second provider lists the model and stays when one goes
+  // (#5799). Off by default; the groups the user made or changed stay as
+  // they are either way. Open at first when it is on.
+  function drawOne() {
+    const on = groups.ofOne === true;
+    gMore.hidden = groups.found === false;
+    if (!gMore.dataset.drawn) {
+      gMore.dataset.drawn = "1";
+      gMore.open = on;
+    }
+    const s = el("button", "lib-switch" + (on ? " on" : ""));
+    s.type = "button";
+    s.setAttribute("role", "switch");
+    s.setAttribute("aria-checked", String(on));
+    s.setAttribute("aria-label", t("Groups of one provider"));
+    s.append(el("i"));
+    s.onclick = (e) => { e.stopPropagation(); setOne(!on, s); };
+    const txt = el("div", "txt");
+    txt.append(el("b", "", t("Groups of one provider")), el("small", "expl", t("A model only one of your providers serves becomes a group too (auto/…), so agents keep that name when a second provider comes or one goes.")));
+    gOne.replaceChildren(txt, s);
+  }
+  async function setOne(on, s) {
+    if (groupDirty() && !(await confirmDiscard())) return;
+    s.classList.toggle("on", on);
+    s.setAttribute("aria-checked", String(on));
+    try {
+      groups = groupsFrom(await api("groups/ofone", { on }));
+      gEdit = null;
+      renderGroups();
+      saidMoved(t("Found groups changed"), groups.moved);
+      load(); // the gateway's model list, the agents' pickers
+    } catch (e) {
+      s.classList.toggle("on", !on);
+      s.setAttribute("aria-checked", String(!on));
+      status(e.message, "err");
+    }
   }
   // skipPick: the providers kept out of found groups (chenxiang0010 on
   // Discord), picked in the app's menu and saved as it closes: their
@@ -8042,7 +8175,8 @@ function routingPage(part) {
         const nm = el("span", "", memberName(id));
         nm.title = memberName(id);
         n.append(nm);
-        if (m || s) n.append(el("small", "", subOf(id) || drawerOf(id) ? memberNote(id) : [m.providerName, memberAccount(id)?.name].filter(Boolean).join(" · ")));
+        const out = m && !s && memberOut(d.accounts, id);
+        if (m || s) n.append(el("small", "", subOf(id) || drawerOf(id) ? memberNote(id) : [m.providerName, memberAccount(id)?.name, out && t("not allowed in this group")].filter(Boolean).join(" · ")));
         else if (info?.providerOff) n.append(el("small", "", `${info.name} · ${t("switched off")}`));
         if (info?.free && !s) {
           const fr = el("small", "rt-free", t("free"));
@@ -8202,18 +8336,25 @@ function routingPage(part) {
           const accts = groups.accounts?.[m?.provider] || [];
           if (accts.length) {
             const mine = memberAccount(id);
-            const ab = el("button", "rt-cond rt-fixed rt-macct" + (mine ? " on" : ""));
+            // only an account the group's Accounts allow can be picked:
+            // the gateway never sends a member on another (planLevel's
+            // groupHeld). One picked before the group left it out stays
+            // on the row, said, until another is picked
+            const allows = (a) => groupAllows(d.accounts, a);
+            const ab = el("button", "rt-cond rt-fixed rt-macct" + (mine ? " on" : "") + (out ? " bad" : ""));
             ab.type = "button";
             ab.append(el("span", "", mine ? mine.name : t("Any account")));
-            ab.title = mine ? t("Sent on {account} alone; when it can't answer, the next model in the group is tried", { account: mine.name }) : t("Sent on any account the group allows");
-            ab.setAttribute("aria-label", `${memberName(id)}: ${ab.textContent}`);
+            ab.title = out ? t("{account} is not an account this group may use, so this model is never used. Pick one the group allows, or Any account", { account: mine.name })
+              : mine ? t("Sent on {account} alone; when it can't answer, the next model in the group is tried", { account: mine.name }) : t("Sent on any account the group allows");
+            ab.setAttribute("aria-label", `${memberName(id)}: ${ab.textContent}` + (out ? ` (${t("not allowed in this group")})` : ""));
             const bare = (a) => a.slice(m.provider.length + 1);
             const used = (a) => d.members.some((x) => x !== id && splitMember(x)[0] === model && splitMember(x)[2] === bare(a));
-            // the accounts it isn't on yet, here or in another row
-            const free = accts.filter((a) => !used(a.id) && a.id !== mine?.id);
+            // the accounts it isn't on yet, here or in another row, that
+            // the group allows
+            const free = accts.filter((a) => !used(a.id) && a.id !== mine?.id && allows(a.id));
             ab.onclick = (ev) => pickFrom("account", ab, ev, [
               { value: "", label: t("Any account"), note: t("any the group allows") },
-              ...accts.map((a) => ({ value: a.id, label: a.name, note: [planName(a.plan), used(a.id) && t("in the group already")].filter(Boolean).join(" · ") })),
+              ...accts.map((a) => ({ value: a.id, label: a.name, unserved: !allows(a.id), note: [planName(a.plan), !allows(a.id) ? t("not allowed in this group") : used(a.id) && t("in the group already")].filter(Boolean).join(" · ") })),
               ...(free.length ? [{ value: "+", label: t("Also on another account…"), note: t("a member of its own, tried after this one") }] : []),
             ], (v) => {
               if (v === "+") {
@@ -8349,7 +8490,7 @@ function routingPage(part) {
           options: all.map((a) => ({ value: a.id, label: a.name, note: planName(a.plan) || "" })), picked: (v) => d.accounts.includes(v), onPick: (v) => {
             if (!v) return;
             d.accounts = d.accounts.includes(v) ? d.accounts.filter((x) => x !== v) : [...d.accounts, v];
-            drawAccounts();
+            draw(); // a member's account the group now leaves out says so
           } }, b, ev);
         row.append(b);
         accList.append(row);

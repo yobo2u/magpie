@@ -4,8 +4,9 @@ The full manual: every agent magpie wires, every provider option, the gateway, r
 
 Renamed a project folder? See [relocating Claude Code sessions](session-relocation.md).
 
-One place to pick every agent's model: Codex on DeepSeek, Claude Code
-on Kimi, Gemini CLI on GLM, from the menu bar. [usemagpie.ai](https://usemagpie.ai)
+Every plan you pay for, in one pool, for any agent: Claude Code on your
+ChatGPT Pro, Codex on your Claude Max, Claude Desktop on your GLM Coding
+Plan. When one runs out, the next takes over. [usemagpie.ai](https://usemagpie.ai)
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF)
 
@@ -720,6 +721,7 @@ magpie gateway-key limit <id> reset    # count its usage from 0 again (reset 2: 
 magpie gateway-key limit <id> off      # no limit
 magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
+magpie gateway-key models <id> none    # no model: a key for MCP servers only
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> codex/!me@example.com  # every account but these, later ones too
 magpie gateway-key accounts <id> all    # every account
@@ -871,6 +873,30 @@ under a held key is held to its issuer's list too. `GET /v1/magpie/limit`
 tells a held key its list as `mcp`. A model's own web search, which magpie
 serves through its search when the provider has none, is not an MCP call
 and is not held by this list.
+
+A key's two surfaces, the models and the MCP servers, are chosen on their
+own (ifitscolorful on X): **No model** at the top of the key's models menu,
+or `magpie gateway-key models <id> none`, makes a key for MCP servers only,
+and **No MCP server** (`gateway-key mcp <id> none`) one for models only. A
+key with neither choice, as every key made before, has both. The gateway
+refuses a key for MCP servers only every route that uses a model or tells
+of them, by the route the request is sent to before anything is read or
+sent upstream (`keySurfaceGuard`): chat completions, responses (its
+WebSocket too), messages and count_tokens, embeddings, rerank, images,
+audio, video, realtime, `/v1/decisions` and `/v1/systemone`, Gemini's,
+Ollama's and Codex's routes, a vendor's own API, the chat page, every
+model list, the quotas, the accounts and routing behind them. The answer
+is a 403 with `gateway_key_mcp_only`. A key for models only is refused
+every MCP route the same way, with `gateway_key_no_mcp`: the hub,
+`/mcp/<name>`, `/mcp/run/<name>`, magpie's own servers and
+`/v1/magpie/mcp` (before, it reached them and was given no tool). A key
+issued under either is held to the same. From another computer, a key for
+MCP servers only is given the Library's servers that run as programs on
+this computer, as a key with every model is: its MCP list, not a model
+limit, is what holds it, so hold it to the servers it needs. magpie's own
+servers that ask a model (`magpie-vision`, `magpie-image`) still work for
+it, with the model magpie is set to use for them; leave them out of its
+MCP list to keep it off them.
 
 A gateway key can also be held to some **accounts** (#905): the accounts
 and keys its requests may use, picked in the same menu right after their
@@ -1156,6 +1182,12 @@ API key, asked at `https://ark.cn-beijing.volces.com/api/v1/systemone` with
 the `ark-beta-systemone-api: true` header magpie adds on Ark's host, and its
 one decision model `doubao-seed-2-1-lite-260915`. The Coding and Agent
 Plans' paths don't serve it, so it bills as pay as you go.
+
+A Google Gemini provider with an AI Studio key (the `google` preset) decides
+with `google/gemini-decision-1` on Google's Decisions API, on the same keys.
+`/v1/systemone` sends it the state, the questions, and `images` and `audio`,
+each a list of data: URLs or URLs. A decision model that can't take audio
+is refused a request with audio, with a 400 that says so.
 
 Qwen Cloud (qwencloud.com), Alibaba's international Qwen platform, has keys
 of its own, made at home.qwencloud.com. Its pay as you go is `qwencloud`,
@@ -2339,6 +2371,13 @@ each of these groups ordered by the share used.
   is. Each member's own accounts go as its provider routes them, and the
   Routing page says an account went after those known only of one
   weighed against a known account of the same member.
+- **Before expiry, one by one** (`pace-drain`): picks the account as Use
+  before expiry does, the highest pace first, and then stays on it, as
+  Until used up does, until it is used up (100%), refused for its quota or
+  credit, or fails; then it picks again by pace. A pick isn't left for
+  another whose pace has risen since, nor taken back by one that renews;
+  so each account's allowance is used up in turn, the one that would lose
+  the most at its reset first.
 - **In turn**: each turn of a conversation goes to the next account. A new
   conversation goes to the account the fewest other conversations of the
   last 30 minutes are on.
@@ -2834,7 +2873,10 @@ provider, those whose vendor tells no quota included, by identifiers only:
 never the key), `kind` (`account` or `key`), `label`, `user`, `plan`, `on`
 and `pin`, `"<provider>/<id>"`. `?provider=<id>` lists one provider's.
 `X-Magpie-Account: <pin>` (or the id alone) pins a request to that
-account or key. `?models=1` adds each one's `models`: the id of every
+account or key, one turned off (`on: false`) too: it is sent that request
+alone, routing still leaves it out, and its failure rests nothing. A
+gateway key held to models, accounts or limits is told 403 for one that
+is off. `?models=1` adds each one's `models`: the id of every
 model it can be asked for, its provider's whole list (not the first 24
 agents are offered of a provider with no picks), less a model the user
 keeps off that account and one on none of the provider's APIs. Each is
@@ -4192,6 +4234,7 @@ magpie settings set noBird on   # checked and saved as the window saves it
 magpie settings set redactWords acme,globex
 magpie settings reset theme     # back to its default
 magpie settings set dayStart 4   # a day starts at 4:00 (0 to 6): the Usage page and daily and monthly key caps cut days there; the Sessions page does not yet
+magpie settings set timeZone Asia/Shanghai   # this magpie's days and times in that zone, not the computer's: Usage, Sessions, the TUI and CLI, key caps, the menu bar, quota alerts, and every time the window shows; reset follows the system
 
 magpie quota                    # what is left of every subscription, plan and key balance
 magpie quota refresh codex      # read Codex's cards again now (once per 30s)

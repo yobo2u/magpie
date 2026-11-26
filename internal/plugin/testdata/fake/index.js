@@ -85,6 +85,14 @@ export const FakePlugin = async ({ client }) => ({
         "fake-gemini": { name: "Fake Gemini", provider: { npm: "@ai-sdk/google" }, reasoning: true, modalities: { input: ["text"], output: ["text"] }, limit: { context: 3000, output: 300 } },
       },
     }
+    // $FAKE_SPLIT: a provider declared as WorkBuddy's plugin declares it,
+    // its chat at <root>/v2 and its Claude model on Messages at <root>/v1,
+    // the loader giving no base (each model's own URL says where it goes)
+    if (process.env.FAKE_SPLIT) {
+      const root = String(process.env.FAKE_BASE).replace(/\/v1$/, "")
+      cfg.provider[ID].api = root + "/v2"
+      cfg.provider[ID].models["fake-claude"].provider.api = root + "/v1"
+    }
     // $FAKE_KIRO: a Claude model named as Kiro's plugin names it, on
     // Anthropic's Messages API
     if (process.env.FAKE_KIRO) cfg.provider[ID].models["claude-opus-5.5"] = { name: "Claude Opus 5.5", provider: { npm: "@ai-sdk/anthropic" }, reasoning: true, modalities: { input: ["text", "image"], output: ["text"] }, limit: { context: 200000, output: 32000 } }
@@ -244,7 +252,7 @@ export const FakePlugin = async ({ client }) => ({
       if (process.env.FAKE_LOAD_WAIT) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_LOAD_WAIT)))
       return {
       apiKey: "dummy",
-      baseURL: process.env.FAKE_BASE,
+      baseURL: process.env.FAKE_SPLIT ? "" : process.env.FAKE_BASE,
       async fetch(url, init) {
         let a = await getAuth()
         // "r-revoked": the vendor turned the refresh away, said as Zed's says it
@@ -275,6 +283,23 @@ export const FakePlugin = async ({ client }) => ({
           await new Promise((_, no) => {
             const t = setTimeout(() => no(new Error("FakeCo's queue gave up")), 300e3)
             init.signal?.addEventListener("abort", () => (clearTimeout(t), no(init.signal.reason)))
+          })
+        }
+        // $FAKE_PIN_OFF ("<provider>/<model>"): the plugin sends the request
+        // on through magpie's gateway at $MAGPIE_ADDR, pinned to that
+        // provider's account or key turned off, as a plugin testing an
+        // account before it is turned on does (tmr11235 on X)
+        if (process.env.FAKE_PIN_OFF) {
+          const [pid] = process.env.FAKE_PIN_OFF.split("/")
+          const base = "http://" + process.env.MAGPIE_ADDR
+          const { data } = await (await fetch(base + "/v1/magpie/accounts?provider=" + pid)).json()
+          const off = data.find((a) => !a.on)
+          if (!off) return new Response(JSON.stringify({ error: { message: "FakeCo: none of " + pid + " is off" } }), { status: 404, headers: { "content-type": "application/json" } })
+          return fetch(base + "/v1/chat/completions", {
+            method: "POST",
+            signal: init.signal,
+            headers: { authorization: "Bearer magpie", "content-type": "application/json", "x-magpie-account": encodeURIComponent(off.pin) },
+            body: JSON.stringify({ ...JSON.parse(init.body), model: process.env.FAKE_PIN_OFF }),
           })
         }
         // $FAKE_H2: the request goes on node:http2 to that origin, as
