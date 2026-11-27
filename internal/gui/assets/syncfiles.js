@@ -61,36 +61,22 @@ window.davForm = function (v) {
   // server's never come in, and none here is taken away
   let except = [...(v.signInsExcept || [])];
   const exL = el("div", "sync-sub-tick sync-except");
-  const exPick = el("button", "proto pick");
-  exPick.type = "button";
-  const subName = (id) => providers?.providers?.find((p) => p.id === id)?.name || id;
-  const exPaint = () => {
-    exPick.classList.toggle("set", !!except.length);
-    exPick.replaceChildren(el("span", "", !except.length ? t("None") : except.length > 2 ? t("{n} subscriptions", { n: except.length }) : except.map(subName).join(", ")), svg(CHEV, 11, 1.6));
-  };
-  exPaint();
-  if (except.length && !providers) loadProviders().catch(() => {}).then(exPaint);
-  exPick.onclick = async (e) => {
-    e.stopPropagation();
-    if (exPick.classList.contains("open")) return closeProtoMenu();
-    if (!providers) { exPick.classList.add("busy"); await loadProviders().catch(() => {}); exPick.classList.remove("busy"); if (!exPick.isConnected) return; }
-    const opts = (providers?.providers || []).filter((p) => p.account).map((p) => ({ v: p.id, name: p.name || p.id, note: "", literalName: true }));
-    // one left out that isn't here now stays to be ticked back
-    for (const id of except) if (!opts.some((o) => o.v === id)) opts.push({ v: id, name: id, note: "", literalName: true });
-    if (!opts.length) opts.push({ v: "\x00", name: "No subscriptions yet", note: "" });
-    openProtoMenu(exPick, opts, except, (ids) => { except = ids; exPaint(); }, "Not synced", "", "left", true);
-  };
+  const exPick = el("div", "sync-except-pick");
+  // one left out that isn't here now stays, to be taken out of the field
+  const exDraw = () => provCombo("provField", exPick, {
+    items: (providers?.providers || []).filter((p) => p.account).map((p) => ({ id: p.id, name: p.name || p.id, icon: p.icon })),
+    value: except, label: "Not synced", placeholder: "None", empty: "No subscriptions yet", pick: (ids) => { except = ids; exDraw(); },
+  });
+  exDraw();
+  if (!providers) loadProviders().catch(() => {}).then(() => exPick.isConnected && exDraw());
   exL.append(el("span", "", t("Not synced")), exPick);
   const siShow = () => { siSay.hidden = exL.hidden = !si.checked; };
   siShow();
   si.onchange = siShow;
   const what = el("div", "stack");
   what.append(provL, keysL, setL, agentsL, libL, memL);
-  const adv = el("details", "more advanced sync-advanced");
-  adv.open = v.profiles === false || !!v.usage || !!v.signIns || !!v.providerSettingsHere;
-  const advIn = el("div", "stack");
+  const [adv, advIn] = advFold({ cls: "advanced sync-advanced", editor: true, inner: "stack", open: v.profiles === false || !!v.usage || !!v.signIns || !!v.providerSettingsHere });
   advIn.append(ownL, profL, useL, siL, exL, siSay, el("div", "hint", t("Usage goes as a file a day: times, tokens, models and costs, never what was said. Turn it on on each computer that shares its own.")));
-  adv.append(el("summary", "", t("Advanced")), advIn);
   const davFields = [...field(t("Address"), url, t("A folder named magpie is made in it.")),
     ...field(t("User"), user),
     ...field(t("Password"), pass)];

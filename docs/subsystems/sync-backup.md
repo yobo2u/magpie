@@ -411,6 +411,17 @@ moves magpie's own files and cache to another disk, and back.
   `cli.Main` before anything reads a file, after the old process is gone
   and only when no gateway answers. It is made once: a failure is not asked
   for again, and why is kept in `move-result.json` for the row.
+- **Held on Windows (#7812):** there a folder can't be renamed while a
+  process has a file in it open, and an agent keeps the MCP servers it
+  started from `mcp-npm` for its whole session. `AskMove` refuses while a
+  process this magpie didn't start runs from its folders (`HeldBy`, set by
+  the cli on Windows from `proc.Family`, matched by command line in
+  `Holding`), naming each one and what started it. At the move, after up to
+  10s for what ran under the old magpie to end (`waitFree`), `movable`
+  renames each folder to `<folder>.moving-check` and back before anything
+  is copied; a refusal is a `HeldError` and nothing is touched.
+  `Unreachable`, at every start, puts back a `.moving-check` left by a
+  magpie that died between the two renames.
 - **How:** within one disk, a rename. Across disks, a copy, and the old
   folder is put aside (`.moved`) until the link is made, then removed; a
   failed copy removes the half copy and leaves the old folder as it was.
@@ -429,7 +440,9 @@ moves magpie's own files and cache to another disk, and back.
 Routes: `GET /api/datafolder`, `POST /api/datafolder/{move,home,cancel,reveal}`
 ([`datafolder.go`](../../internal/gui/datafolder.go)). Tests:
 `internal/appdir/move_test.go` (both disks, refused targets, a failed copy,
-disk gone, once only), `move_windows_test.go` (the junction),
+disk gone, once only), `held_test.go` (what holds the folders, nothing
+copied when held, the check's leftover), `move_windows_test.go` (the
+junction), `held_windows_test.go` (a file held open),
 `TestDataFolderMoveRestarts` and `data-folder.test.cjs`.
 
 ## Sign-ins, when picked
@@ -696,6 +709,22 @@ Update fetched the skill), and Settings › Sync shows them in red under the
 status (`askPreviewRows` in syncfiles.js; `TestSyncSkillsBySourceAndLeftOut`,
 `sync-library-left.test.cjs`). A restore (`backup.Restore` through the
 restore and plan paths) doesn't record them yet.
+
+Skill and local plugin files carried by `readSkillsMax` leave dependency
+directories and Python bytecode on the computer that installed them
+(`#7952`, `fromInstall` in `skill_changed.go`): they use no file budget,
+appear in neither `Files` nor `Left`, and are omitted from Remote magpie's
+shared library too
+Lock files are kept because the skill may ship them and `npm ci` needs
+them to rebuild dependencies on another computer
+Old `Skill.Missing` records for installation files are no longer carried
+on as `Left`; source files and assets that exceeded the budget still are
+An unchanged skill keeps the receiving computer's local installation
+Replacing a changed skill retains the existing restore behavior; its
+dependencies may need installing again there
+`TestCarryLeavesInstalledFilesLocal`, `TestCarryInstalledFilesTakeNoBudget`,
+`TestCarryOldMissingInstalledFilesStayLocal` and
+`TestCarryPluginLeavesInstalledFilesLocal` exercise these cases
 
 ## Verification
 

@@ -895,15 +895,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	ln, err := s.listen(listenAddr())
 	if err != nil {
-		if addrInUse(err) {
-			// say who has it, when that can be read (portbusy.go)
-			if b, ok := NoteHeld(); ok {
-				return fmt.Errorf("%w (%s)", err, b.Sentence())
-			}
+		// say who has it, when that can be read, or that Windows keeps
+		// it (portbusy.go)
+		if b, ok := listenHeld(err); ok {
+			return fmt.Errorf("%w (%s)", err, b.Sentence())
 		}
 		return err
 	}
 	ClearHeld()
+	reservedPort.Store("")
 	s.lnMu.Lock()
 	s.ln = ln
 	s.lnMu.Unlock()
@@ -1026,6 +1026,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		// and fetches the partner list every hour, asked for or not
 		bg.Go("provider.KeepPartnersFresh", func() { provider.KeepPartnersFresh(ctx) })
 		bg.Go("provider.KeepPluginsListed", func() { provider.KeepPluginsListed(ctx) }) // models a plugin's vendor drops or adds, while magpie runs
+		bg.Go("provider.KeepNewListed", func() { provider.KeepNewListed(ctx) })         // accounts signed in after the gateway started
 		// and renews the plugins' sign-ins as they come due, used or not (#5080)
 		bg.Go("provider.KeepPluginsSignedIn", func() { provider.KeepPluginsSignedIn(ctx) })
 		// and those a signed-in account's vendor adds (a ChatGPT plan's new GPT)
@@ -1369,6 +1370,13 @@ var catalogSize stamped[struct{}, int]
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "magpie", "version": Version, "models": catalogSize.get(struct{}{}, func() int { return len(provider.Catalog()) }), "window": Window,
 		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", NativePath + "{provider}/{path}", "/v1/embeddings", "/v1/rerank", "/v1/decisions", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/realtime", "/v1/magpie/quotas", "/v1/magpie/quotas/history", AccountsPath, "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", StatuslinePath, "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, MemoryMCPPath, SessionsMCPPath, ArtifactsMCPPath, ImageMCPPath, BrowserMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
+	// whether this is the magpie that asked (selfproof.go): told to anyone,
+	// as it proves nothing to one without the secret
+	if n := r.URL.Query().Get(SelfParam); n != "" && len(n) <= 128 {
+		if p := SelfProof(n); p != "" {
+			out["self"] = p
+		}
+	}
 	// which process serves, for another magpie on this computer to name it
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
@@ -2541,7 +2549,10 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 	// counted, and not at all where there are none
 	wires := sync.OnceValue(func() map[string]string { return settings.Shared().Wires() })
 	for i, c := range counts {
-		res, err := s.forward(r.Context(), c.p, provider.Anthropic, "/v1/messages/count_tokens", rewriteModel(body, provider.UpstreamNameAsIn(wires(), c.p.ID, model, c.p.SentIDAt(model, sentEffortIf(c.p, model, provider.Anthropic, body)))), r.Header)
+		// xAI's own API checks the tools and messages counted as it
+		// checks a turn's (xai_body.go, #3392)
+		counted := xaiBody(c.p, provider.Anthropic, rewriteModel(body, provider.UpstreamNameAsIn(wires(), c.p.ID, model, c.p.SentIDAt(model, sentEffortIf(c.p, model, provider.Anthropic, body)))))
+		res, err := s.forward(r.Context(), c.p, provider.Anthropic, "/v1/messages/count_tokens", counted, r.Header)
 		if tooMany := (*errRPM)(nil); errors.As(err, &tooMany) {
 			break // its minute filled since: nobody rests, the estimate answers
 		}
@@ -2837,6 +2848,11 @@ func estimate(req *Request) int {
 // serve routes one parsed-enough request to its provider.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
 	start := time.Now()
+	// magpie's own ask made while serving an agent's request — a search,
+	// an image description, a classifier asked through chat — is held to
+	// the accounts magpie's own requests are set to, not the agent's
+	// (ownHeld)
+	r = ownHeld(r)
 	// a client's "off" is magpie's none, for every route and check below
 	// that reads the body's effort (plugins#334)
 	body = offAsNone(from, body)
@@ -4090,8 +4106,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the plan as it stands for the tries: whether the one that answers
 	// stood in for a member listed ahead of its own (standsInFor)
 	plannedCs, plannedOrder := slices.Clone(cands), pl.order
-	// the row of the try before, when it failed, billed something and
-	// handed the request on, written once the next try begins
+	// the row of the try before, when it failed and handed the request
+	// on, written once the next try begins
 	var failedRow func()
 	walkBegan := time.Now() // the serial walk's start, for groupBudget (#5113)
 	// the turn near its cap the try before took, given back as the next
@@ -5071,15 +5087,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// written the whole conversation to that account's cache, and the
 		// next account wrote it again, while the Usage page counted the
 		// second alone, "2 tries" the only sign of the first (hhxk233 and
-		// Kayrainforest on X). A failure that billed nothing has no row.
+		// Kayrainforest on X). So is one that billed nothing, with its
+		// status and the vendor's words: a member's 429 or 529 the
+		// Routing page showed for a moment was nowhere on the Requests
+		// page, the answer's "2 tries" the only sign of it (Dazzle_sys on
+		// X), while Codex's own sign-in already kept a row for each try
+		// it handed on (codexUpstreamOn's handOn). A try that never went
+		// out (call.To empty) has none.
 		failedRow = func() {
 			if call.To == "" {
 				return
 			}
 			u := call.Usage.billed()
-			if u.Input+u.Output+u.CacheRead+u.CacheWrite == 0 {
-				return
-			}
 			rec := usage.Record{RouteID: tr.ID, Time: began, Agent: call.Agent, Via: call.Via, Provider: call.Provider, Host: where, Model: c.model,
 				ProviderKeyID: providerKeyID, ProviderKeyName: providerKeyName, ProviderAccount: providerAccount,
 				Requested: call.Model, Served: call.Usage.Served, Wire: wentAs, Upstream: call.Usage.Upstream,
@@ -7466,7 +7485,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// vendor's (Muse Spark's "rs_…:rs_…"), to an upstream that checks
 		// them (echo_ts)
 		if validatesItemIDs(p) || !s.fits(p.ID, itemIDsRefused(model), proto) {
-			body = plainItemIDs(body)
+			body = plainItemIDs(boundCallIDs(body))
 		}
 		// xAI's API turns away a tool_choice with no tools beside it ("A
 		// tool_choice was set on the request but no tools were specified"),
@@ -8019,7 +8038,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// have, which a relay in front of OpenAI turns away as it
 			// does (echo_ts): asked once more with ids it takes, and so
 			// from then on
-			if nb := plainItemIDs(body); !bytes.Equal(nb, body) {
+			if nb := plainItemIDs(boundCallIDs(body)); !bytes.Equal(nb, body) {
 				refused = append(refused, itemIDsRefused(model))
 				body = nb
 				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
@@ -9285,6 +9304,17 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			// characters and more (#4525, #5812), which the build never
 			// bound. A request of no id to plain goes as it came.
 			body = plainItemIDs(body)
+		}
+		if to == provider.Responses {
+			// and a call's call_id longer than the 64 OpenAI's schema
+			// takes, which Copilot, OpenAI and the relays in front of
+			// them turn the whole request away over ("Invalid
+			// 'input[157].call_id': string too long", IotXws97689 on X):
+			// another provider's in the history (Cursor's are 87), or one
+			// a client was given salted (saltCallID). The body is
+			// magpie's own writing, so it goes bound to every upstream:
+			// a call and its output the same way, every turn
+			body = boundCallIDs(body)
 		}
 		if to == provider.Chat && req.WebSearch && p.IsRemoteMagpie() {
 			// the other magpie searches for it (search_remote.go)

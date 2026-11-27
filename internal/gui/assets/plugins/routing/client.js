@@ -780,6 +780,29 @@ function routingPage(part) {
   // a try that answered: one whose reply broke off after it began (its 200
   // sent, then the vendor's error, #733) didn't, and has a fail
   const tryOk = (tr) => tr.status < 400 && !tr.fail;
+  // what the vendor said, word for word, without the hint magpie put after
+  // it (HINTS): the steps' "It said", and the row of a try gone on from
+  const saidOf = (tr) => {
+    const e = typeof tr.error === "string" ? tr.error : "", hint = e && HINTS.find((h) => e.endsWith(" — " + h));
+    return { said: hint ? e.slice(0, -(hint.length + 3)) : e, hint };
+  };
+  // a row the request went on from: its status, magpie's reading of the
+  // failure when it has a kind (a proxy down, a rate limit) and the vendor's
+  // own words (Dazzle_sys on X), cut short on the row and read whole over it
+  const wentSay = (tr) => {
+    const { said } = saidOf(tr), status = tr.status, fail = failWord(tr.fail, tr.rest);
+    if (!said) return t("{status} · {fail} · went on to the next", { status, fail });
+    const error = said.length > 600 ? said.slice(0, 600) + "…" : said;
+    return FAIL[tr.fail] && tr.fail !== "other" ? t("{status} · {fail} · went on to the next · {error}", { status, fail, error })
+      : t("{status} · went on to the next · {error}", { status, error });
+  };
+  // a row a new conversation passed over: a session kept whole went to the
+  // one fewer sessions are on (Affinity.Spread), and this one, ahead of it,
+  // holds more
+  const spreadPast = (r, w) => {
+    const a = r.affinity, i = a?.why === "first" && a.spread > 0 ? r.order.findIndex((y) => seat(y) === seat(w)) : -1;
+    return i >= 1 && i <= a.spread;
+  };
   const API = { anthropic: "Anthropic", chat: "OpenAI", responses: "OpenAI Responses", gemini: "Gemini" };
   const MODES = {
     "": ["Quota first", "Quota first: of the accounts with quota to spare, the one whose allowance renews soonest goes first — what it has left would be lost at the reset. The week decides; an account with five hours and no week goes by its five hours, and one whose month its weeks can no longer use up before it renews by its week. One at 90% or more waits until the others can't answer; one resting after a failure goes last."],
@@ -1186,7 +1209,9 @@ function routingPage(part) {
   // read as every conversation stuck to one account (YsiCing on X: three
   // Codex accounts, two at 0% "conversation kept on another").
   function behindWhy(r, w) {
-    const f = r.order[0], x = r.order.find((y) => y.id === w.id);
+    // the row's own seat: two members on one account (a model each) are
+    // two rows of one id
+    const f = r.order[0], x = r.order.find((y) => seat(y) === seat(w)) || r.order.find((y) => y.id === w.id);
     if (!f || !x || x === f || f.rest || f.fallback || x.fallback || x.routing || !x.known || group(x) !== "fine") return null;
     if (!weighedWith(r, x).includes(f) || memberSplit(r, f, x)) return null;
     const kept = ["session", "turn", "cache"].includes(r.affinity?.why) ? "kept" : null;
@@ -1795,7 +1820,10 @@ function routingPage(part) {
   // what it adds to WorkBuddy's 403 11140 for an account it restricted
   // (provider.WBRestrictedHint, #1849)
   const WB_RESTRICTED = "WorkBuddy restricted this account for unusual activity; it stays out until WorkBuddy lifts that, which an appeal (Submit feedback in WorkBuddy) asks for";
-  const HINTS = [WB_REFUSED, BLOCKED, ZCODE_BLOCKED, AG_TURNED_AWAY, AG_CODEX, AG_HERMES, AG_OPENCODE, AG_CODEX_CLI, AG_PI, AG_RFC, WB_RESTRICTED];
+  // what it adds to GitHub's refusal of a Copilot account under its terms
+  // (provider.CopilotToSHint)
+  const COPILOT_TOS = "GitHub turned this account's Copilot requests away under its Terms of Service (its limits on automated and heavy use), not for its sign-in, so signing in again doesn't help; the account rests, and other accounts and providers are used. If it lasts, look for mail from GitHub about the account, or ask GitHub Support";
+  const HINTS = [WB_REFUSED, BLOCKED, ZCODE_BLOCKED, AG_TURNED_AWAY, AG_CODEX, AG_HERMES, AG_OPENCODE, AG_CODEX_CLI, AG_PI, AG_RFC, WB_RESTRICTED, COPILOT_TOS];
 
   function trySaid(r, i) {
     const tr = r.tries[i], w = tried(r, tr), agent = agentName(r.agent);
@@ -3300,8 +3328,12 @@ function routingPage(part) {
         // done, not one the gateway went on from (#2281)
         else if (tr.done && !tr.rest && !tr.again && !tr.earlier && r.done && tr === r.tries[r.tries.length - 1]) gave.set(tryseat(r, tr), tr);
         // one the gateway went on from says what it answered, and that the
-        // request went on, not that the agent got it
-        else if (tr.done && !tr.rest && !tr.again && !tr.credits && tr !== r.tries[r.tries.length - 1]) went.set(tryseat(r, tr), tr);
+        // request went on, not that the agent got it: one that rested too,
+        // whose rest the next on its account lifted by answering (Dazzle_sys
+        // on X: GPT-6.2 Sol failed, GPT-6 Luna on the same Codex account
+        // answered, and Sol's row said nothing of why); while it still
+        // rests, the row says so instead
+        else if (tr.done && !tr.again && !tr.credits && tr !== r.tries[r.tries.length - 1]) went.set(tryseat(r, tr), tr);
         if (tr.rest) restAt(tr.id, modelOf(tr), tr.rest, at(tr.start) + (tr.ms || 0));
       }
       // it answered: whatever rest it began in is over
@@ -3339,7 +3371,8 @@ function routingPage(part) {
       }
       else if (answered.has(id)) { s = (agents.size > 1 ? t("answered {agent}", { agent: agentName(r.agent) }) : t("answered this request")) + (said && " · " + said); named = titleOf(r); }
       else if (gave.has(id)) s = t("{status} · {fail} · passed to {agent}", { status: gave.get(id).status, fail: failWord(gave.get(id).fail, gave.get(id).rest), agent: agentName(r.agent) });
-      else if (went.has(id)) s = t("{status} · {fail} · went on to the next", { status: went.get(id).status, fail: failWord(went.get(id).fail, went.get(id).rest) });
+      else if (went.has(id)) s = wentSay(went.get(id));
+      else if (spreadPast(r, w)) s = w.known ? quota(w, "{n} used · other sessions on it · a new one went to one with fewer", "{n} left · other sessions on it · a new one went to one with fewer") : t("other sessions on it · a new one went to one with fewer");
       else if (w.noURL) s = noURLWord(w);
       else if (w.reserve) s = t("in reserve · {n} at once", { n: w.reserve });
       else if (w.sunk && !lifted(sunkKey(w), at(w.sunk))) s = t("rate limited at {time} · at the back", { time: clock(w.sunk) });
@@ -3900,8 +3933,7 @@ function routingPage(part) {
       }
       // what the vendor said, word for word: the why above is magpie's reading of it
       if (tr.done && !tryOk(tr) && tr.error) {
-        const hint = HINTS.find((h) => tr.error.endsWith(" — " + h));
-        const said = hint ? tr.error.slice(0, -(hint.length + 3)) : tr.error;
+        const { said, hint } = saidOf(tr);
         items.push([t("It said: {error}", { error: said.length > 600 ? said.slice(0, 600) + "…" : said }), "aside said"]);
         if (hint) items.push([t(hint), "aside"]);
       }
@@ -6488,11 +6520,9 @@ function routingPage(part) {
   // provider alone serves is a found group too (realLemonawa on X), shown
   // while found groups are on
   const gOne = el("div", "rt-gone hint-row");
-  const gMore = el("details", "prefs-more rt-gmore");
+  const [gMore, gMoreList] = advFold({ cls: "rt-gmore", inner: "list rt-gset" });
   gMore.dataset.feature = "groups";
-  const gMoreList = el("div", "list rt-gset");
   gMoreList.append(gOne);
-  gMore.append(el("summary", "", t("Advanced")), gMoreList);
   gsec.append(gHead, gList, gOff, sHead, gSet, gMore, pHead, pList);
   // on the Routing groups page, a page of their own; Try again on it puts
   // them back in its markup made anew. With the groups off, that page's
@@ -7337,16 +7367,13 @@ function routingPage(part) {
       ed.append(...field(t("Link"), link));
     }
     // what goes out, read from magpie as Share would send it
-    const adv = edAligned(el("details", "more advanced"));
-    adv.append(el("summary", "", t("Advanced")));
-    const inner = el("div", "inner");
+    const [adv, inner] = advFold({ cls: "advanced", editor: true });
     const out = el("pre", "rt-gshare-json");
     const asText = el("button", "text", t("Copy as text"));
     asText.type = "button";
     asText.title = t("{name} as text to paste into another magpie: its models, routing and rules, no key", { name: g.name });
     asText.onclick = (e) => { e.stopPropagation(); copyAsText(g, null); };
     inner.append(el("div", "hint expl", t("What goes to usemagpie.ai: no key or account, and a provider you added yourself is named custom.")), out, asText);
-    adv.append(inner);
     adv.ontoggle = async () => {
       if (!adv.open || out.textContent) return;
       try { out.textContent = JSON.stringify((await api("groups/public", { id: g.id })).shared.group, null, 2); }
@@ -7926,29 +7953,26 @@ function routingPage(part) {
     }
   }
   // skipPick: the providers kept out of found groups (chenxiang0010 on
-  // Discord), picked in the app's menu and saved as it closes: their
-  // models join none, and the groups the user made or changed keep them
-  // (provider.SetAutoGroupSkip)
+  // Discord), picked in the provider field and saved as its list closes:
+  // their models join none, and the groups the user made or changed keep
+  // them (provider.SetAutoGroupSkip). The field stays across draws, so
+  // what is typed in it does too.
+  let skipBox;
   function skipPick() {
-    const skip = Array.isArray(groups.skip) ? groups.skip : [];
-    const opts = (Array.isArray(groups.skippable) ? groups.skippable : []).filter((p) => p && typeof p.id === "string");
-    const nameOf = (id) => opts.find((p) => p.id === id)?.name || id;
-    const b = el("button", "text rt-skip-pick"), label = el("span");
-    b.type = "button";
-    b.setAttribute("aria-haspopup", "menu");
-    b.setAttribute("aria-expanded", "false");
-    b.dataset.tt = "Their models join no found group; the groups you made or changed keep them";
-    label.textContent = skip.length ? t("Left out: {names}", { names: skip.map(nameOf).join(", ") }) : t("Leave out a provider…");
-    b.append(label, svg(CHEV, 10, 1.6));
-    b.onclick = (e) => {
-      e.stopPropagation();
-      if (b.classList.contains("open")) return closeProtoMenu();
-      openProtoMenu(b, opts.map((p) => ({ v: p.id, name: p.name, literalName: true, note: "" })), skip, (ids) => setSkip(ids), "Leave out of found groups", "rt-skip-menu");
-    };
-    return b;
+    const row = el("label", "rt-skip");
+    skipBox ||= el("div", "rt-skip-pick");
+    provCombo("provField", skipBox, {
+      items: (Array.isArray(groups.skippable) ? groups.skippable : []).filter((p) => p && typeof p.id === "string"),
+      value: Array.isArray(groups.skip) ? groups.skip : [],
+      label: "Leave out of found groups", placeholder: "Leave out a provider…", pick: setSkip,
+    });
+    const say = el("span", "", t("Leave out of found groups"));
+    say.dataset.tt = "Their models join no found group; the groups you made or changed keep them";
+    row.append(say, skipBox);
+    return row;
   }
   async function setSkip(ids) {
-    if (groupDirty() && !(await confirmDiscard())) return;
+    if (groupDirty() && !(await confirmDiscard())) return drawFound();
     try {
       groups = groupsFrom(await api("groups/skip", { skip: ids }));
       gEdit = null;
@@ -7957,6 +7981,7 @@ function routingPage(part) {
       load(); // the gateway's model list, the agents' pickers
     } catch (e) {
       status(e.message, "err");
+      drawFound();
     }
   }
   function drawNames() {
@@ -8957,13 +8982,8 @@ function routingPage(part) {
     // Advanced below the rules, as a provider's editor folds its own (the
     // owner: the form was too much at once). Open when one of them is set,
     // or as it was left while this group is being edited
-    const adv = edAligned(el("details", "more advanced rt-gadv"));
-    adv.open = gEdit.adv ?? !!(d.match.length || d.unlists || d.routing || d.sink === "sink" || d.sink === "" || d.firstToken || d.patience || d.context || d.compact || d.affinity || d.effort || d.classifyPrompt || d.levels?.length || d.keys.length || d.redact);
     const advOf = gEdit;
-    adv.onfold = (open) => { advOf.adv = open; };
-    adv.append(el("summary", "", t("Advanced")));
-    const advIn = el("div", "inner");
-    adv.append(advIn);
+    const [adv, advIn] = advFold({ cls: "advanced rt-gadv", editor: true, keep: (open) => { advOf.adv = open; }, open: gEdit.adv ?? !!(d.match.length || d.unlists || d.routing || d.sink === "sink" || d.sink === "" || d.firstToken || d.patience || d.context || d.compact || d.affinity || d.effort || d.classifyPrompt || d.levels?.length || d.keys.length || d.redact) });
     advIn.append(el("label", "", t("Patterns")), pw);
     // its models in the lists agents see too, or the group alone (#1783)
     const listHint = el("div", "hint", t(LIST_HINT[d.unlists ? "unlists" : ""])), listW = el("div");
@@ -10546,30 +10566,23 @@ function routingPage(part) {
       const picked = g.picked || (g.members.includes(g.pick) ? g.pick : g.members[0]);
       const row = el("div", "pr-pick");
       row.dataset.id = g.id;
-      const b = el("button", "sess-pick set");
-      b.type = "button";
-      b.setAttribute("aria-haspopup", "menu");
-      b.setAttribute("aria-expanded", "false");
+      // the members, in the model picker: each under its provider, a
+      // group among the routing groups, none typed in
+      const options = g.members.map((id) => {
+        const info = memberInfoOf(g, id), m = modelOf(id), s = subOf(id);
+        const note = [memberNote(id), speedIn(g, id), info && !info.ready && t("no provider serves it now")].filter(Boolean).join(" · ");
+        return { value: id, label: memberName(id), note, icon: m?.icon || offOf(id)?.icon || info?.icon, icons: s && groupIcons(s), free: freeIn(g, id), group: s || info?.group ? ROUTING_GROUPS : m?.providerName || info?.name || "", ref: m?.id };
+      });
+      const b = modelButton("set", { value: picked, options, any: false, onPick: async (id) => {
+        if (id === picked) return;
+        try {
+          groups = groupsFrom(await api("groups/pick", { id: g.id, pick: id }));
+          renderPanel();
+          load(); // the gateway's model list, the agents' pickers
+        } catch (err) { status(err.message, "err"); }
+      } });
       b.setAttribute("aria-label", t("Model every request goes to") + " · " + g.name);
       b.title = t("Every request goes to {name}", { name: memberLabel(g, picked) });
-      b.append(el("span", "", memberName(picked)), svg(CHEV, 10, 1.6));
-      b.onclick = (e) => {
-        e.stopPropagation();
-        if (b.classList.contains("open")) return closeProtoMenu();
-        openProtoMenu(b, g.members.map((id) => {
-          const info = g.memberInfo?.find((x) => x.id === id);
-          const note = [memberNote(id), speedIn(g, id), freeIn(g, id) && t("free"), info && !info.ready && t("no provider serves it now")].filter(Boolean).join(" · ");
-          return { v: id, name: memberName(id), literalName: true, note, title: memberLabel(g, id) };
-        }), picked, async (id) => {
-          closeProtoMenu();
-          if (id === picked) return;
-          try {
-            groups = groupsFrom(await api("groups/pick", { id: g.id, pick: id }));
-            renderPanel();
-            load(); // the gateway's model list, the agents' pickers
-          } catch (err) { status(err.message, "err"); }
-        }, "Model every request goes to", "", "right");
-      };
       row.append(el("span", "pr-gname", g.name), b);
       box.append(row);
     }

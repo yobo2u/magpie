@@ -146,6 +146,7 @@ line; agents connected to magpie lose it when it quits.
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
 | Dim (alpha, `dima`) | Dim's built-in **Magpie** provider, through Dim's own daemon (`$DIMCODE_HOME`, else `~/.dimcode-alpha`), and magpie's own `dim.json` beside its settings | model (Dim's Magpie provider gets the gateway's `/v1` and magpie's key, is turned on and made Dim's model, so a plain `dima` runs on magpie; no other provider is touched, and a key or address you set on the Magpie entry yourself is kept. Picking Dim's own again turns the entry off and puts back the model Dim was on. When Dim's daemon can't be reached, a `dima` function in your shell profiles starts it with `DIM_BASE_URL`, `DIM_API_KEY`, `DIM_MODEL` and the token limits for that run instead) |
 | Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting). Vibe Desktop (bundle `ai.mistral.lechat.desktop`; `le-chat-desktop\Vibe.exe` on Windows) runs the same app server on the same file, lists the agent with no CLI installed, and reads the file when a chat starts |
+| Bub | `config.yml` in `$BUB_HOME`, else `~/.bub` | model (a `providers.magpie` entry, Republic's `magpie` type with the gateway's `/v1` and the key naming Bub, `openai` on a Bub 0.5 install; `model` set to `magpie:<provider>/<model>`, what was there, and an entry of your own named magpie, put back on Disconnect; Bub lists the provider's models itself; restart open bub sessions after connecting) |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`, or the folder the desktop app moved it to) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
@@ -1569,8 +1570,10 @@ on the command line, where the plugin's name or the id alone will do when it
 names one API; an empty `magpie search` lists the plugins' APIs). An API
 that signs in to the plugin's own provider (agy-cli's) is added by itself
 when you sign in to that provider and no search API was ever set up; one you
-remove stays removed. magpie keeps its keys (several, tried in turn, a refused
-one resting), its order and its place in the request log, masks the query
+remove stays removed. A list that has the withdrawn Antigravity plugin's
+search gets agy-cli's in front of it, once, while you are signed in to
+agy-cli. magpie keeps its keys (several, tried in turn, a refused one
+resting), its order and its place in the request log, masks the query
 as it does for every search API, and asks the plugin only while the
 plugin is on and the Web search plugin is.
 
@@ -2668,8 +2671,9 @@ serves Gemini CLI's sign-in to individual accounts, only to Gemini Code
 Assist Standard and Enterprise, which need a Google Cloud project named
 (`magpie accounts project gemini <email> <project-id>`, or
 `GOOGLE_CLOUD_PROJECT` in `~/.gemini/.env`). Google may suspend an
-Antigravity account it sees used outside Antigravity, so magpie asks before
-adding one; use an account you can afford to lose.
+Antigravity account it sees used from another agent, the built-in's and
+agy-cli's (Google's own agy) alike, so magpie asks before adding the first
+one; use an account you can afford to lose.
 
 Accounts signed in elsewhere can be imported from their files instead of
 signed in again: *Import accounts from a file…* under a subscription's

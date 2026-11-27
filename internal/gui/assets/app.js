@@ -4952,7 +4952,7 @@ function openPicker(agent, field, anchor, ev, only) {
     options.splice(at < 0 ? options.length : at, 0, { value: "\0disconnect", label: t("Disconnect from magpie"), note: t("put back what {agent} had before magpie", { agent: agent.name }), svg: UNPLUG, reset: true, run: () => askDisconnect(agent) });
   }
   const modelPicker = (["model", "small", "large", MEMORIES, SUB_MODEL, AUTO_MODE, ADVISOR, COMPACT_MODEL, "executor", "planner", ...ROLE_MODELS].includes(field.label) || hermesBot(field)) && !only;
-  pick = { agent, field, options, groups, anchor, cursor: 0, free: !only && !field.menu, modelPicker, effortPicker, groupFilter: "all" };
+  pick = { agent, field, options, groups, anchor, cursor: 0, free: !only && !field.menu && field.any !== false, modelPicker, effortPicker, groupFilter: "all" };
   if (modelPicker) { readSpeeds(); readLoads(); }
   anchor.classList.add("open");
   const pop = $("#pop");
@@ -5459,7 +5459,7 @@ function pathTag(o) {
   let tag = null;
   if (o.ref || o.via) {
     tag = el("span", "badge path via", t("via magpie"));
-    tag.title = t("{agent} asks magpie for it", { agent: pick.agent.name });
+    if (pick.agent.name) tag.title = t("{agent} asks magpie for it", { agent: pick.agent.name });
   } else if (o.direct) {
     tag = el("span", "badge path direct", t("direct, not via magpie"));
     tag.title = t("straight to {vendor}, not through magpie", { vendor: o.direct });
@@ -8118,6 +8118,25 @@ function shown(x) {
   for (let d = x?.closest("details"); d; d = d.parentElement?.closest("details")) d.open = true;
   return x;
 }
+// advFold makes every Advanced fold, a page's and an editor's (the owner,
+// 11-27: 从根上避免这种垃圾布局; billion-context's had the toolbar's
+// .lib-more class, an inline-flex row, so its summary sat left of its
+// content). Its own block, its summary on a line above what it folds: on
+// a page a .list card as wide as the cards above; in an editor (editor)
+// an .inner grid starting where the fields do. open: a value isn't its
+// default, or the reader left it open; keep(open) is told when they fold
+// it. inner: the content's class, or false to add it oneself.
+function advFold({ cls = "", open, keep, editor, inner, label } = {}) {
+  const d = el("details", (editor ? "adv-fold more " : "adv-fold prefs-more ") + cls);
+  d.open = !!open;
+  if (keep && editor) d.onfold = keep;
+  else if (keep) d.ontoggle = () => keep(d.open);
+  if (editor) edAligned(d);
+  d.append(el("summary", "", label || t("Advanced")));
+  const body = inner !== false && el("div", inner || (editor ? "inner" : "list"));
+  if (body) d.append(body);
+  return [d, body];
+}
 // An editor's fold opens as an iOS disclosure: it and the dialog grow on one
 // spring, rows in one by one; at once with Reduce motion or for a Save
 // (shown). A click while it moves turns it back.
@@ -8798,7 +8817,9 @@ const BIRD = `<svg viewBox="0 0 44 44"><use href="#bird" clip-path="url(#bird-bo
 // what is loading, with magpie's bird on it (the owner, after the plugin
 // page's README): skeletons still up after a moment, as on a slow page, get
 // the bird. It drops onto one, hops from bar to bar, each bar giving under
-const SKEL = ".skeleton, .pm-card.ghost .sk";
+// Discover's week too, which waits on npm and magpie's counts (the owner,
+// 11-27: 「加载的过程中也没有小喜鹊的动画」)
+const SKEL = ".skeleton, .pm-card.ghost .sk, .pm-rec.ghost .sk";
 // the skeletons a reader sees now: on screen, big enough to stand on, and
 // not under a dialog or out of their scroller
 function skelSeen() {
@@ -9196,23 +9217,10 @@ function holdModal(later) {
   m.addEventListener("pointerdown", (e) => { modalHold.touched = true; modalMark(e.target); }, true);
   m.addEventListener("keydown", () => { modalHold.touched = true; }, true);
   m.addEventListener("focusin", (e) => { if (!modalRefocus) modalMark(e.target); }, true);
-  // a scroll moves the marked element, not the dialog; one held low with
-  // its fields cut short takes the room above as they scroll
-  m.addEventListener("scroll", (e) => { modalClimb(e.target); modalMark(modalHold.at); }, true);
-}
-// A dialog held low rises as its fields scroll, its foot staying, to the room it needs.
-function modalClimb(body) {
-  const m = $("#modal"), d = m.firstElementChild;
-  if (!body?.classList?.contains("ebody") || body.parentElement?.parentElement !== d) return;
-  if (m.hidden || !m.classList.contains("held") || !modalHold.touched || modalHold.cap != null || modalHold.off <= 0) return;
-  const space = m.clientHeight - parseFloat(getComputedStyle(m).paddingTop) - parseFloat(getComputedStyle(m).paddingBottom);
-  const need = d.offsetHeight + body.scrollHeight - body.clientHeight;
-  const by = Math.min(modalHold.off - Math.max(0, (space - Math.min(need, space)) / 2), body.scrollTop);
-  if (by < 1) return;
-  modalHold.off -= by;
-  d.style.top = modalHold.off + "px";
-  d.style.maxHeight = modalHold.capSet = modalCap();
-  body.scrollTop -= by;
+  // a scroll moves the marked element, never the dialog: one held low with
+  // its fields cut short stays there, its fields scrolling (the owner,
+  // 11-27: a sheet rising as it was scrolled read as absurd)
+  m.addEventListener("scroll", () => { modalMark(modalHold.at); }, true);
 }
 function openModal(content, quiet) {
   const m = $("#modal"), d = m.firstElementChild;
@@ -9790,13 +9798,8 @@ function drawEditor(p, presetID) {
     return field(t("Upstream"), ptk, t("Since 2026-11-06 Cline refuses a pinned DeepSeek or GLM request with 403, so magpie sends them unpinned and Cline picks the host; only glm-5.3-flash still asks Z.ai"));
   };
 
-  const adv = edAligned(el("details", "more advanced"));
-  adv.open = advanced && advanced.of === editing ? advanced.open : advancedSet(draft, p) || (custom && !!(draft.balanceURL || "").trim());
   const of = editing;
-  adv.onfold = (open) => { advanced = { of, open }; };
-  adv.append(el("summary", "", t("Advanced")));
-  const advIn = el("div", "inner");
-  adv.append(advIn);
+  const [adv, advIn] = advFold({ cls: "advanced", editor: true, open: advanced && advanced.of === editing ? advanced.open : advancedSet(draft, p) || (custom && !!(draft.balanceURL || "").trim()), keep: (open) => { advanced = { of, open }; } });
   // a plugin's panels for this provider (magpie.panels' provider), told
   // which: rows of the form, before Advanced
   const panels = p && magpie.slot?.("provider", { provider: { id: p.id, name: p.name || p.id } }) || "";
@@ -10474,9 +10477,7 @@ function drawEditor(p, presetID) {
   groupAdvanced(advIn);
 
   if (custom) {
-    const more = edAligned(el("details", "more"));
-    more.append(el("summary", "", t("More endpoints")));
-    const inner = el("div", "inner");
+    const [more, inner] = advFold({ editor: true, label: t("More endpoints") });
     // the other protocols' URLs, drawn again when the base URL's changes
     const eps = el("div");
     eps.style.display = "contents";
@@ -10548,7 +10549,6 @@ function drawEditor(p, presetID) {
       balPair.classList.add("wrap");
     }
     balSlot.append(...field(t("Balance field"), balPair, t("Where the amount is in the reply, e.g. data.balance; it can be a sum with + - * / and brackets, e.g. data.total / 500000 or (1 - credits.used / 70) %; \"$\" in front adds the sign, \"%\" after it shows a percent, with a bar; several, each with a label, go apart by \";\", e.g. 5h: a.used / a.cap %; $credits.left; a list's items are a.*.used, or a[status=active].used for those that match, put in sum(), max(), min() or count(); an amount the reply hasn't shows \"—\" and the others still show")));
-    more.append(inner);
     ed.append(more);
   }
 
@@ -12858,7 +12858,7 @@ function pluginMethod(sub, site) {
 // magpie, signs in and carries the requests.
 function pluginSubs() {
   return ((providers || panelAccts)?.plugins || []).map((x) => ({
-    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true, single: !!x.single, importable: x.importable,
+    agent: x.id, pid: x.pid, name: x.name, icon: x.icon, plugin: x, own: true, single: !!x.single, importable: x.importable, risk: x.id == "agy-cli",
     get plans() { return t("from the plugin {spec}", { spec: x.spec }); },
   }));
 }
@@ -12913,6 +12913,10 @@ const signingOpen = () => signing?.state === "waiting" || signing?.state === "in
 let justAdded = ""; // the account that just came in, to greet it
 const accountToolsOpen = new Set(); // rows whose ⋯ is open
 
+// AGY_RISK: said before a first Antigravity account is used, the built-in's
+// or agy-cli's (WdBlink_ on X: an agy-cli account was suspended after use
+// from Claude Code); the CLI says provider.AntigravityRisk
+const AGY_RISK = "Google may suspend an Antigravity account it sees used from another agent. Use one you can afford to lose.";
 // hasLogins: the subscription has an account signed in already
 const hasLogins = (agent) => providers?.providers?.some((p) => p.account?.agent === agent && p.account.logins?.length);
 
@@ -13404,7 +13408,7 @@ function renderSigning(sub) {
     box.append(el("span", "mark", "!"));
     tt.append(el("span", "n", t("{name} accounts can be suspended", { name: sub.name })));
     if (sub.hint) tt.append(el("span", "s", t(sub.hint)));
-    tt.append(el("span", "s", t(sub.riskNote || "Google may suspend an Antigravity account it sees used outside Antigravity. Use one you can afford to lose.")));
+    tt.append(el("span", "s", t(sub.riskNote || AGY_RISK)));
     box.append(tt);
     const go = el("button", "text primary", t("Sign in anyway"));
     const o = { user: signing.forUser, proxy: signing.picked };
@@ -14234,7 +14238,7 @@ function renderLoginImport(sub) {
       tt.append(ao);
     }
   }
-  if (sub.risk) tt.append(el("span", "s", t(sub.riskNote || "Google may suspend an Antigravity account it sees used outside Antigravity. Use one you can afford to lose.")));
+  if (sub.risk) tt.append(el("span", "s", t(sub.riskNote || AGY_RISK)));
   const area = el("textarea");
   area.rows = 3;
   area.spellcheck = false;
@@ -17777,9 +17781,9 @@ function renderPanelUse() {
   }
   const pick = el("button", "sess-pick");
   pick.type = "button";
-  const opts = (l?.providers || []).map((p) => ({ v: p.id, name: t(p.name), note: "" }));
-  if (panelUseProvider && l && !opts.some((o) => o.v === panelUseProvider)) panelUseProvider = "";
-  sessPick(pick, "All providers", panelUseProvider, opts, "Provider", (id) => { panelUseProvider = id; renderPanelUse(); loadPanelUse().catch(() => {}); });
+  const items = (l?.providers || []).map((p) => ({ id: p.id, name: t(p.name), icon: p.icon }));
+  if (panelUseProvider && l && !items.some((x) => x.id === panelUseProvider)) panelUseProvider = "";
+  provCombo("provPick", pick, { items, value: panelUseProvider, all: "All providers", head: "Provider", pick: (id) => { panelUseProvider = id; renderPanelUse(); loadPanelUse().catch(() => {}); } });
   // the computers whose usage sync shares (#542): none, and it isn't there
   const comp = el("button", "sess-pick");
   comp.type = "button";
@@ -19587,6 +19591,13 @@ function stamp(when) {
 const baseName = (p) => (p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
 // sessPick is a filter button that drops a menu of what there is to pick
+// provCombo draws the one provider picker (provcombo.js: provField,
+// provPick, provPop), imported with the first one drawn
+function provCombo(f, ...a) {
+  if (window[f]) return window[f](...a);
+  if (f === "provPick") a[0].hidden = true; // till it is drawn
+  return import("./provcombo.js").then(() => window[f](...a), statusErr);
+}
 function sessPick(btn, all, value, opts, head, choose) {
   btn.hidden = opts.length < 2 && !value;
   const cur = opts.find((o) => o.v === value);
@@ -19917,8 +19928,9 @@ function applyPrefs(s, rate) {
     // tooltip says which mode it was drawn in
     for (const b of document.querySelectorAll(".quota-curve:not(.balance-curve)")) b.title = quotaCurveTitle();
   }
-  // an accent or picture of the user's own (appearance.go), when not the one drawn
-  const look = (s.accent || "") + "," + (s.wallpaper || "");
+  // an accent, picture or contrast of the user's own (appearance.go), when not the one drawn;
+  // lookKey's "accent,stampcontrast", an unset one "" as an array joins it
+  const look = [s.accent, s.wallpaper] + [s.contrast];
   if (look !== (applyPrefs.look ??= window.bootPrefs?.look ?? ",")) applyPrefs.look = look, import("./appearance.js").then(() => lookPaint(), () => {});
   applyPrefs.ready = true;
   // a browser tab's title names this magpie (Settings' Name, else
@@ -20105,6 +20117,9 @@ function mountProvPrefs(slots, agent) {
   }
   // a label shown widens the labels' column, which the folds' sizes don't say
   document.querySelectorAll(".editor details.more").forEach(edAlignAt);
+  // Claude's way out, looked up as its editor opens when none is known
+  // (egress.js; loaded with the rows it draws)
+  if (agent === "claude") window.wayOutShown?.();
 }
 function remountProvPrefs() {
   const m = provPrefMount;
@@ -21712,7 +21727,29 @@ function renderAgentPrefLinks() {
 // modelOpt is a Settings model picker's row: a routing group (no provider
 // of its own) goes with the others, as in an agent's picker.
 function modelOpt(x) {
-  return { value: x.id, label: x.name || x.id, note: x.providerName, icon: x.icon, group: x.provider ? x.providerName : ROUTING_GROUPS, ref: x.id };
+  return { value: x.id, label: x.name || x.id, note: x.note || x.providerName, icon: x.icon, icons: x.icons, context: x.context, group: x.provider ? x.providerName : ROUTING_GROUPS, ref: x.id };
+}
+
+// openModelPicker is the one model picker, the Agents page's, for a model
+// picked anywhere: models as the API lists them (modelRef), extras the
+// rows above them ({ value, label, note, icon }), options rows made as
+// modelOpt's, the rest openPicker's field (value, onPick, any: false for no
+// model typed in). Never a menu of models of a page's own:
+// model-picker-only.test.cjs holds pages to this.
+function openModelPicker(anchor, ev, { models = [], extras = [], options = [], ...f }) {
+  openPicker({ id: "", name: "", fields: [] }, { key: "model", label: "model", ...f, options: [...extras.map((o) => ({ ...o, reset: true })), ...options, ...models.map(modelOpt)] }, anchor, ev);
+}
+
+// modelButton: a model picked, as the Agents page shows it (its logo,
+// name and chevron), opening the model picker; o as openModelPicker's,
+// with name for a value it lists nowhere
+function modelButton(cls, o) {
+  const b = el("button", "sess-pick model-btn " + cls), m = o.models?.find((e) => e.id === o.value);
+  const x = [...o.extras || [], ...o.options || []].find((e) => e.value === o.value) || (m ? modelOpt(m) : { icon: "generic" });
+  b.type = "button";
+  b.append(optionIcon(x), el("span", "", o.name || x.label || o.value), svg(CHEV, 11, 1.6));
+  b.onclick = (ev) => openModelPicker(b, ev, o);
+  return b;
 }
 
 // a model id as "Name · Provider", else as is

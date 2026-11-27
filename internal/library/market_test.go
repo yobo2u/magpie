@@ -2,6 +2,7 @@ package library
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -233,10 +234,11 @@ func TestFeaturedSkills(t *testing.T) {
 	t.Cleanup(func() { popular.Lock(); popular.list = nil; popular.Unlock() })
 
 	list, _ := MarketSkills("")
-	if len(list) != 4 || list[0].ID != "magpie-community/plugins/magpie-setup" || list[1].ID != "magpie-community/plugins/magpie-quota" || list[2].ID != "magpie-community/plugins/magpie-sessions" || list[3].ID != "o/r/pdf" {
+	if len(list) != 5 || list[0].ID != "magpie-community/plugins/magpie-setup" || list[1].ID != "magpie-community/plugins/magpie-quota" || list[2].ID != "magpie-community/plugins/magpie-sessions" ||
+		list[3].ID != "magpie-community/plugins/magpie-api" || list[4].ID != "o/r/pdf" {
 		t.Fatalf("market: %+v", list)
 	}
-	for _, m := range list[:3] {
+	for _, m := range list[:4] {
 		if !m.Official || !m.Featured || m.Description == "" || m.Icon != gh("magpie-community") || !offered(m.Icon) {
 			t.Fatalf("magpie's own: %+v", m)
 		}
@@ -253,6 +255,12 @@ func TestFeaturedSkills(t *testing.T) {
 	// Leyuu_5 on X: an agent sets magpie up; found by what a user searches
 	for _, q := range []string{"setup", "routing", "gateway key"} {
 		if list, _ := MarketSkills(q); len(list) == 0 || list[0].SkillID != "magpie-setup" {
+			t.Fatalf("%s: %+v", q, list)
+		}
+	}
+	// thedavidweng on X: an orchestrating agent reads magpie's own API
+	for _, q := range []string{"http api", "orchestrat", "magpie-api"} {
+		if list, _ := MarketSkills(q); len(list) == 0 || list[0].SkillID != "magpie-api" {
 			t.Fatalf("%s: %+v", q, list)
 		}
 	}
@@ -561,6 +569,76 @@ func TestThirdPartyMemoryServers(t *testing.T) {
 	if e == nil || e.Command != "npx" || strings.Join(e.Args, " ") != "-y @everme/memory-mcp" ||
 		e.Env["EVERME_API_BASE"] != "https://api.everme.evermind.ai" || e.Env["EVERME_AGENT_TOKEN"] != "evt_x" || e.Env["EVERME_AGENT_ID"] != "agt_1" {
 		t.Fatalf("everme %+v", e)
+	}
+}
+
+func TestMarketSearchRanksAllSources(t *testing.T) {
+	sandbox(t)
+	servers := []string{`{"name":"io.github.morluto/rea","title":"REA","packages":[{"registryType":"npm","identifier":"rea-agents"}]}`}
+	for i := range 100 {
+		servers = append(servers, fmt.Sprintf(`{"name":"io.github.read/read-%d","title":"Read %d","description":"A read server.","packages":[{"registryType":"npm","identifier":"read-%d"}]}`, i, i, i))
+	}
+	fakeRegistry(t, servers...)
+
+	list, err := MarketServers("REA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) == 0 || list[0].ID != "io.github.morluto/rea" {
+		t.Fatalf("REA ranking: first=%+v, total=%d", list[:min(len(list), 3)], len(list))
+	}
+	if slices.IndexFunc(list, func(m MarketServer) bool {
+		return m.Featured && strings.Contains(strings.ToLower(m.Description), "real")
+	}) >= 0 {
+		t.Fatalf("description-only featured match was offered: %+v", list)
+	}
+}
+
+func TestMarketSearchMatchTiers(t *testing.T) {
+	for _, c := range []struct {
+		name, text, q string
+		want          bool
+	}{
+		{"description mid-word", "Reads files and searches", "rea", false},
+		{"description word", "Use a postgres database", "postgres", true},
+		{"multi-word description", "A browser automation server", "browser automation", true},
+		{"Chinese description", "用于文件系统访问", "文件系统", true},
+		{"long query mid-word", "Reads databases", "atabase", true},
+		{"short Chinese query mid-text", "用于文件访问", "文件", true},
+		{"package prefix", "@acme/postgres-mcp", "postgres", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := MarketServer{Description: c.text}
+			if c.name == "package prefix" {
+				m.server = Server{Command: "npx", Args: []string{"-y", m.Name}}
+				m.server.Args[1] = c.text
+			}
+			if _, got := marketScore(m, c.q); got != c.want {
+				t.Fatalf("marketScore(%q, %q) matched %v, want %v", c.text, c.q, got, c.want)
+			}
+		})
+	}
+}
+
+// A word search lists every server that has the word, however many, each
+// once at its best score (#7891): ranking the sources together dropped
+// everything past 100, and a server two sources gave kept its first score.
+func TestMarketBestKeepsEveryServerOnce(t *testing.T) {
+	var list []scored
+	for i := range 150 {
+		m := MarketServer{ID: fmt.Sprintf("s%d", i)}
+		m.server = Server{Command: "npx", Args: []string{"-y", fmt.Sprintf("pkg-%d", i)}}
+		list = append(list, scored{m: m, score: 1000})
+	}
+	again := list[149]
+	again.score = 8000
+	list = append(list, again)
+	out := best(list)
+	if len(out) != 150 {
+		t.Fatalf("%d servers, want 150", len(out))
+	}
+	if out[0].ID != "s149" || out[1].ID != "s0" {
+		t.Fatalf("order: %s, %s, …", out[0].ID, out[1].ID)
 	}
 }
 

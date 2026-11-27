@@ -14,6 +14,8 @@ magpie.plugin("library", (ctx) => {
 
   let lib = null;        // the page, as /api/library gives it
   let taken = 0;         // how many times lib was set, for a read to tell a newer answer came first
+  let wholeAt = 0;       // the last time it was set whole, not a part of it
+  const partAt = {};     // when each key was last set by a part of the page
   let tab = "instructions";
   let shown = "";        // the tab the page last drew, which fades in only when it changes
   let fits = [];         // textareas to fit before the page is painted
@@ -607,7 +609,22 @@ magpie.plugin("library", (ctx) => {
   // written kept as they were last clicked. A server or skill added,
   // removed or renamed changes what the market calls added (#300): one gone
   // from the library loses its mark at once, and the market is asked again.
+  // What a change to the MCP servers alone answers with (library.ReadMCP):
+  // reading the whole page again went through every agent's skill folders,
+  // seconds of each Save on Windows (zysicyj on X).
+  const MCP_PART = ["agents", "servers", "foundServers", "projects", "plugins", "mcpHub"];
   function take(v) {
+    // a part of the page, the rest kept as it is: the instructions' (#1624)
+    // or the MCP servers'
+    if (v.part) {
+      const keys = v.part === "mcp" ? MCP_PART : ["instructions"], from = v.part === "mcp" ? v.mcp : v;
+      const p = { ...lib, problems: v.problems, result: v.result };
+      for (const k of [...keys, "problems"]) {
+        if (k !== "problems") p[k] = from[k];
+        partAt[k] = taken + 1;
+      }
+      v = p;
+    } else if (v !== lib) wholeAt = taken + 1; // lib taken again is no newer than it was
     // What the reader hid stays hidden while it still fails and nothing
     // else does: every change writes every agent again, so a file magpie
     // can't stat fails at each one (#3745). A failure not hidden brings the
@@ -682,8 +699,12 @@ magpie.plugin("library", (ctx) => {
     try {
       const at = taken;
       const v = await api("library");
-      // a change answered meanwhile, with the library as it is after it
-      if (taken !== at) return;
+      // a change answered meanwhile, with the library as it is after it;
+      // one answered with a part of it, newer than this read in that part
+      if (taken !== at) {
+        if (wholeAt > at) return;
+        for (const k of Object.keys(partAt)) if (partAt[k] > at) v[k] = lib[k];
+      }
       const was = lib && seen(lib);
       take(v);
       if (glanced && tab !== "skills") return;
@@ -723,7 +744,7 @@ magpie.plugin("library", (ctx) => {
     let ok = false;
     try {
       const v = await api("library/" + path, body);
-      take(v.part === "instructions" ? { ...lib, instructions: v.instructions, problems: v.problems, result: v.result } : v);
+      take(v);
       status(""); // what it did, said next, or nothing for one that says nothing
       report(v.result, done, null, settled);
       ok = true;
@@ -1362,16 +1383,12 @@ magpie.plugin("library", (ctx) => {
     // summary is in the instructions: whether it gives each memory's why
     // (#7780). Open while it doesn't, or while the user keeps it open.
     if (mem.digest) {
-      const more = el("details", "prefs-more lib-memmore");
-      more.open = memMore || !!mem.digestOmitWhy;
-      more.ontoggle = () => { memMore = more.open; };
-      const list = el("div", "list lib-list");
+      const [more, list] = advFold({ cls: "lib-memmore", open: memMore || !!mem.digestOmitWhy, keep: (o) => { memMore = o; }, inner: "list lib-list" });
       const r = el("div", "row lib-row lib-memwhy");
       const w = el("div", "who");
       w.append(el("div", "name", t("Include reasons in summary")));
       r.append(glyph(GLYPH.rule), w, toggle(!mem.digestOmitWhy, t("Include reasons in summary"), (on) => memChange("memory/digest", { omitWhy: !on }, on ? t("Reasons are shown in the memories' summary") : t("Reasons are left out of the memories' summary"))));
       list.append(r);
-      more.append(el("summary", "", t("Advanced")), list);
       body.append(more);
     }
 
@@ -1583,11 +1600,9 @@ magpie.plugin("library", (ctx) => {
   function memModelPick(d) {
     const modelName = (id) => { const m = d.models.find((x) => x.id === id); return m ? (m.name || m.id) : id; };
     const auto = d.auto ? t("Automatic") + " · " + modelName(d.auto) : t("Automatic");
-    const pick = menuButton(d.model ? modelName(d.model) : auto, "lib-distmodel", () => openProtoMenu(pick, [
-      { v: "", name: t("Automatic"), note: d.auto ? modelName(d.auto) : t("No models"), literalName: true },
-      ...d.models.map((m) => ({ v: m.id, name: m.name || m.id, note: m.providerName || "", literalName: true }))],
-    d.model || "", (v) => distChange("memory/distill", { on: d.on, model: v }), "Model", "", "left", false, d.models.length > 8 ? "Search models" : ""));
-    return pick;
+    return modelButton("lib-menu lib-distmodel", { value: d.model || "", models: d.models, name: d.model ? modelName(d.model) : auto,
+      extras: [{ value: "", label: t("Automatic"), note: d.auto ? modelName(d.auto) : t("No models"), icon: d.models.find((x) => x.id === d.auto)?.icon || "generic" }],
+      onPick: (v) => distChange("memory/distill", { on: d.on, model: v }) });
   }
   // the reasoning level the model reads and tidies at, when its levels
   // are known: Default sends none (RealZeroP27 on X)
@@ -2155,13 +2170,11 @@ magpie.plugin("library", (ctx) => {
     const target = s.targets[0] || "";
     const ours = target.startsWith("magpie/") ? target.slice(7) : "";
     const named = ours ? (models.find((m) => m.id === ours)?.name || ours) : target;
-    const pick = menuButton(named || t("Choose a model"), "lib-bili-model", () => openProtoMenu(pick, [
-      ...models.map((m) => ({ v: "m\n" + m.id, name: m.name || m.id, note: m.providerName || "", literalName: true })),
-      ...s.recipes.map((r) => ({ v: "r\n" + r, name: r, note: "billion-context.json", literalName: true }))],
-    ours ? "m\n" + ours : target ? "r\n" + target : "", (v) => {
-      const [k, id] = v.split("\n");
-      biliChange(k === "m" ? { model: id, summary: true } : { target: id, summary: true });
-    }, "Model", "", "left", false, models.length + s.recipes.length > 8 ? "Search models" : ""));
+    // the file's own recipes are the picker's rows above magpie's models,
+    // told apart by a value no model id starts with
+    const pick = modelButton("lib-menu lib-bili-model", { value: ours || (target && "\x01" + target), models, name: named || t("Choose a model"),
+      extras: [...new Set([...s.recipes, ...(target && !ours ? [target] : [])])].map((r) => ({ value: "\x01" + r, label: r, note: "billion-context.json", icon: "generic" })),
+      onPick: (v) => biliChange(v[0] === "\x01" ? { target: v.slice(1), summary: true } : { model: v, summary: true }) });
     pick.disabled = biliSetBusy;
     const sum = toggle(s.summary, t("Summarize with a fast model"), (v) => biliChange({ summary: v }));
     sum.disabled = biliSetBusy || !target;
@@ -2188,21 +2201,20 @@ magpie.plugin("library", (ctx) => {
     row(t("Nudge every"), num, el("span", "note", t("tokens")));
     body.append(list);
 
-    const more = el("details", "lib-more lib-bili-more");
-    more.append(el("summary", "", t("Advanced")));
+    // one card under Advanced, as the Settings card above: the markers'
+    // row and the philosophy's, its words, note and Save inside the card
+    const [more, adv] = advFold({ cls: "lib-bili-more", open: biliMoreOpen, keep: (o) => { biliMoreOpen = o; }, inner: "list lib-list" });
     // compress.visibilityMarkers: the 📦/❌ lines after a fold, which
     // some models imitate (@JamesYu32 on X)
-    const marks = el("div", "list lib-list lib-bili-marks");
     const mk = toggle(s.markers !== false, t("Show compression markers"), (v) => biliChange({ markers: v }));
     mk.disabled = biliSetBusy;
-    const mr = el("div", "row lib-row");
+    const mr = el("div", "row lib-row lib-bili-marks");
     const mw = el("div", "who");
     mw.append(el("div", "name", t("Show compression markers")));
     mr.append(mw, el("span", "grow"), mk);
-    marks.append(mr);
-    more.append(marks);
-    const ph = el("div", "lib-bili-phil");
-    ph.append(el("div", "name", t("Compression philosophy")));
+    const ph = el("div", "row lib-row lib-bili-phil");
+    const pw = el("div", "who");
+    pw.append(el("div", "name", t("Compression philosophy")));
     const ta = el("textarea", "lib-text small");
     // what's typed outlives a redraw until it is saved
     ta.value = biliPhil ?? (s.philosophy || "");
@@ -2210,16 +2222,12 @@ magpie.plugin("library", (ctx) => {
     ta.placeholder = t("billion-context's own");
     ta.setAttribute("aria-label", t("Compression philosophy"));
     ta.disabled = biliSetBusy;
-    ph.append(ta, el("p", "lib-rtk-note", t("Replaces billion-context's guidance on what a fold keeps. Setting it also tells billion-context you accept the risk of changing its prompts.")));
     const acts = el("div", "lib-acts");
     const save = button(t("Save"), "action", () => ta.value.trim() !== (s.philosophy || "") && biliChange({ philosophy: ta.value }));
     save.disabled = biliSetBusy;
     acts.append(save);
-    ph.append(acts);
-    more.append(ph);
-    // open as it was across redraws
-    more.open = biliMoreOpen;
-    more.ontoggle = () => { biliMoreOpen = more.open; };
+    ph.append(pw, ta, el("p", "lib-rtk-note", t("Replaces billion-context's guidance on what a fold keeps. Setting it also tells billion-context you accept the risk of changing its prompts.")), acts);
+    adv.append(mr, ph);
     body.append(more);
     autosize(ta, 72);
   }
@@ -4111,6 +4119,9 @@ magpie.plugin("library", (ctx) => {
       // a renewal the server rate-limited (429): still signed in, and
       // renewed once the server's wait is over (#7451)
       case "ratelimited": return [t("renewal rate-limited"), more(t("The server is limiting how often magpie renews its sign-in. It stays signed in, and magpie renews it once the wait is over"))];
+      // a renewal whose token endpoint answered 5xx or couldn't be reached
+      // (#7915): still signed in, backed off and retried
+      case "renewal-unavailable": return [t("renewal failed, retrying"), more(t("The sign-in is kept. Renewal will be tried again after a wait"))];
       // a ${NAME} magpie's own environment hasn't; an agent started from a
       // shell that has it still gets it
       case "novar": return [t("{names} not set", { names: h.detail }), t("magpie can't check it: {names} isn't set where magpie runs. An agent started where it is set still gets it", { names: h.detail })];
@@ -4168,7 +4179,7 @@ magpie.plugin("library", (ctx) => {
       // agent's own launch sets says nothing of the server, so it isn't
       // painted as broken (#2308, ASD-max: Codex's host-only codex_app,
       // whose pipe Codex itself hands it)
-      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" || e.h.why === "ratelimited" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
+      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" || e.h.why === "ratelimited" || e.h.why === "renewal-unavailable" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
       b.replaceChildren(el("span", "", text));
       if (toolList(b.dataset.server).length) {
         const open = toolsOpen.has(b.dataset.server);
@@ -5608,25 +5619,15 @@ magpie.plugin("library", (ctx) => {
     return b;
   }
 
-  // the model a subagent runs on, from the app menu: the agent's pick ("")
-  // or one of the models and routing groups Codex lists, the one agent
-  // whose subagent file takes a model
+  // the model a subagent runs on, in the model picker: the agent's pick
+  // ("") or one of the models and routing groups Codex lists, the one
+  // agent whose subagent file takes a model; one set before that Codex no
+  // longer lists stays, as the picker's current value
   function modelPick(d, changed) {
-    const b = el("button", "sess-pick lib-menu lib-subagentmodel");
-    b.type = "button";
-    b.setAttribute("aria-haspopup", "menu");
-    b.setAttribute("aria-expanded", "false");
-    const draw = () => b.replaceChildren(el("span", "", d.model ? subagentModelName(d.model) : t("Picked by the agent")), svg(CHEV, 11, 1.6));
-    b.onclick = (e) => {
-      e.stopPropagation();
-      const models = lib.subagentModels || [];
-      const opts = [{ v: "", name: t("Picked by the agent"), literalName: true, note: "", always: true },
-        ...models.map((m) => ({ v: m.id, name: m.name, literalName: true, note: m.group ? t("routing group") : m.note || "" }))];
-      // a model set before that Codex no longer lists stays pickable
-      if (d.model && !models.some((m) => m.id === d.model)) opts.push({ v: d.model, name: d.model, literalName: true, note: "" });
-      openProtoMenu(b, opts, d.model, (v) => { d.model = v; draw(); changed(); }, "Model", "", "left", false, opts.length > 8 ? "Find a model…" : "");
-    };
-    draw();
+    const b = modelButton("lib-menu lib-subagentmodel", { value: d.model || "", models: lib.subagentModels || [],
+      name: d.model ? subagentModelName(d.model) : t("Picked by the agent"),
+      extras: [{ value: "", label: t("Picked by the agent"), icon: "generic" }],
+      onPick: (v) => { d.model = v; b.replaceWith(modelPick(d, changed)); changed(); } });
     return b;
   }
 
@@ -5717,14 +5718,10 @@ magpie.plugin("library", (ctx) => {
     // a file of the user's own, in a git repository say: rarely, so under
     // Advanced, open while it is
     if (!s?.bundle) {
-      const more = el("details", "more advanced lib-subagentmore");
-      more.open = !!d.file;
-      more.append(el("summary", "", t("Advanced")));
-      const inner = el("div", "inner");
+      const [more, inner] = advFold({ cls: "advanced lib-subagentmore", editor: true, open: !!d.file });
       own = field2(d.file, ownExample(), (v) => { d.file = v; });
       own.classList.add("mono", "lib-subagentownfile");
       inner.append(...field(t("Keep in a file of your own"), own, t("A Markdown file anywhere, in a git repository say. One there already is what the subagent says.")));
-      more.append(inner);
       ed.append(more);
     }
     ed.append(err);
@@ -6101,17 +6098,13 @@ magpie.plugin("library", (ctx) => {
     }
     if (files.childElementCount) ed.append(...field(t("Files"), files));
     // kept to some files: rarely, so under Advanced, open while it is
-    const more = el("details", "more advanced lib-rulemore");
-    more.open = !!d.paths;
-    more.append(el("summary", "", t("Advanced")));
-    const inner = el("div", "inner");
+    const [more, inner] = advFold({ cls: "advanced lib-rulemore", editor: true, open: !!d.paths });
     const paths = box("lib-rulepaths mono", d.paths, "src/api/**/*.ts", 2, 25000);
     const pathsHint = el("div", "hint lib-rulehint-paths");
     paths.oninput = () => { d.paths = paths.value; drawHint(); };
     const [ml, mw] = field(t("Only for files"), paths, t("One glob a line. Empty: read in every conversation"));
     mw.append(pathsHint);
     inner.append(ml, mw);
-    more.append(inner);
     ed.append(more, err);
     function drawHint() {
       const no = rulePaths(d.paths).length ? noRulePaths(all, d.agents) : [];

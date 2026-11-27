@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -459,18 +460,78 @@ func untilShort(d time.Duration) string {
 	return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
 }
 
+// signInRisks are what is said before a sign-in to a subscription whose
+// vendor may suspend an account used from another agent, as the window's
+// risk step says it.
+var signInRisks = map[string]string{"antigravity": provider.AntigravityRisk, "agy-cli": provider.AntigravityRisk,
+	"claude": provider.ClaudeRisk, "workbuddy": provider.WorkBuddyRisk, "workbuddy-ai": provider.WorkBuddyRisk}
+
+// askRisk says id's risk, if it has one, and asks before signing in.
+func askRisk(id string) error {
+	risk := signInRisks[id]
+	if risk == "" {
+		return nil
+	}
+	fmt.Println(bold.Render("!"), risk)
+	fmt.Print("Sign in anyway? [y/N] ")
+	var yes string
+	fmt.Scanln(&yes)
+	if !strings.EqualFold(strings.TrimSpace(yes), "y") && !strings.EqualFold(strings.TrimSpace(yes), "yes") {
+		return fmt.Errorf("sign-in canceled")
+	}
+	return nil
+}
+
+// agyCLI adds agy-cli's plugin and signs in to it; tests stand in for it.
+var agyCLI = struct {
+	installed func() bool
+	add       func(ctx context.Context) error
+	login     func(ctx context.Context, id, method string) error
+}{
+	installed: func() bool {
+		for _, e := range plugin.Load().Plugins {
+			if plugin.Name(e.Spec) == provider.AgyCLIPackage {
+				return true
+			}
+		}
+		return false
+	},
+	add: func(ctx context.Context) error {
+		if !plugin.HasBun() {
+			fmt.Println(muted.Render("Downloading Bun " + plugin.BunInUse() + ", which plugins run on…"))
+		}
+		if _, err := provider.AddPlugin(ctx, provider.AgyCLIPackage); err != nil {
+			return err
+		}
+		provider.HandOver(ctx, false)
+		return nil
+	},
+	login: pluginLogin,
+}
+
+// addAntigravity signs in to Antigravity through agy-cli's plugin, the one
+// that serves it now that the built-in and the plugin before agy-cli are
+// withdrawn, adding the plugin first when it isn't here (#7828: the
+// account card sent a personal Google account here, and the sign-in looked
+// for a plugin of the old id).
+func addAntigravity(ctx context.Context) error {
+	if !agyCLI.installed() {
+		fmt.Println(muted.Render("Adding " + provider.AgyCLIPackage + ", which Antigravity is signed in to through…"))
+		if err := agyCLI.add(ctx); err != nil {
+			return fmt.Errorf("adding %s: %w", provider.AgyCLIPackage, err)
+		}
+	}
+	return agyCLI.login(ctx, provider.AgyCLIID, "")
+}
+
 // addAccount signs in to one more subscription in the browser, the way the
 // window's "Add account" does.
 func addAccount(agentID string) error {
-	if risk := map[string]string{"antigravity": provider.AntigravityRisk, "claude": provider.ClaudeRisk,
-		"workbuddy": provider.WorkBuddyRisk, "workbuddy-ai": provider.WorkBuddyRisk}[agentID]; risk != "" {
-		fmt.Println(bold.Render("!"), risk)
-		fmt.Print("Sign in anyway? [y/N] ")
-		var yes string
-		fmt.Scanln(&yes)
-		if !strings.EqualFold(strings.TrimSpace(yes), "y") && !strings.EqualFold(strings.TrimSpace(yes), "yes") {
-			return fmt.Errorf("sign-in canceled")
-		}
+	if err := askRisk(agentID); err != nil {
+		return err
+	}
+	if agentID == "antigravity" {
+		return addAntigravity(context.Background())
 	}
 	if _, plug := provider.PluginOf(agentID); plug || provider.PluginServes(agentID) {
 		return pluginLogin(context.Background(), agentID, "")
@@ -652,6 +713,9 @@ func importAccounts(args []string) error {
 	default:
 		if pp, ok := provider.PluginOf(id); ok && pp.ImportFrom != "" {
 			say = []string{pp.ImportFrom}
+		}
+		if id == "agy-cli" {
+			say = append([]string{provider.AntigravityRisk}, say...)
 		}
 	}
 	for _, s := range say {

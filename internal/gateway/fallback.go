@@ -133,8 +133,9 @@ type capHold struct {
 	// (carefulDoubt), cap then the account's own
 	unread string
 	// turn: held short of cap, as a turn there is taken to spend this
-	// many points, and those come back no reading has yet (nearCapHeld)
-	turn float64
+	// many points, and those come back no reading has yet (nearCapHeld);
+	// ahead of it what those are taken to spend
+	turn, ahead float64
 	// spend: a key held at the spend cap set on it (provider.SpendCap),
 	// cap then 100 and used the share of it spent
 	spend *spendHold
@@ -1091,7 +1092,7 @@ func heldReasons(ws []Weighed, now time.Time) ([]string, time.Time) {
 		}
 		s := fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, past its %d%% cap", w.Name, w.Who, w.Used, w.Capped)
 		if w.CapTurn > 0 && w.Used < float64(w.Capped) {
-			s = fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, and its next turn would take it past its %d%% cap: a turn there has spent up to %s points", w.Name, w.Who, w.Used, w.Capped, amountText(w.CapTurn))
+			s = fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, and its next turn would take it past its %d%% cap: %s", w.Name, w.Who, w.Used, w.Capped, capTurnWhy(w.CapTurn, w.CapAhead))
 		}
 		if w.CapAmount > 0 {
 			s = fmt.Sprintf("%s (%s) has used %s %s of a usage window, past its cap of %s", w.Name, w.Who, amountText(w.CapCount), w.CapUnit, amountText(w.CapAmount))
@@ -1136,6 +1137,28 @@ func spendOnly(ws []Weighed) bool {
 		n++
 	}
 	return n > 0
+}
+
+// capTurnWhy says why an account near its cap is held short of it by
+// turn points (Weighed.CapTurn): what a turn there has spent, and what
+// turns its reading doesn't have yet are taken to spend (ahead, of turn).
+func capTurnWhy(turn, ahead float64) string {
+	var why []string
+	if own := turn - ahead; own > 0.005 {
+		why = append(why, "a turn there has spent up to "+pointsText(own))
+	}
+	if ahead > 0 {
+		why = append(why, "turns its last reading doesn't have yet are taken to spend "+pointsText(ahead))
+	}
+	return strings.Join(why, ", and ")
+}
+
+// pointsText is v points of a usage window.
+func pointsText(v float64) string {
+	if t := amountText(v); t != "1" {
+		return t + " points"
+	}
+	return "1 point"
 }
 
 // amountText is a window's count as a cap at a fixed amount says it: whole
@@ -1294,7 +1317,7 @@ func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.
 		w := weighed(c, q, weighing{}, fallback, from)
 		w.Unlisted, w.Via = true, via
 		if h := c.capped; h != nil {
-			w.Capped, w.Used, w.NoCredits, w.ExtraUsage, w.Unread, w.CapTurn = h.cap, h.used, h.noCredits, h.extra, h.unread, h.turn
+			w.Capped, w.Used, w.NoCredits, w.ExtraUsage, w.Unread, w.CapTurn, w.CapAhead = h.cap, h.used, h.noCredits, h.extra, h.unread, h.turn, h.ahead
 			w.CapAmount, w.CapCount, w.CapUnit = h.amount, h.count, h.unit
 			if sp := h.spend; sp != nil {
 				w.SpendCap, w.Spent, w.SpendPeriod = sp.usd, sp.spent, sp.period
@@ -2134,13 +2157,16 @@ func elsewhere(left []candidate, c candidate) []candidate {
 // says the service was disabled in this account before the request came,
 // a ruling on the account, not on what was sent, so the provider's other
 // accounts are asked (bestony on Discord). Nor does Anthropic's disabling
-// of a Claude account or organization (claudeAccountOff): the same.
+// of a Claude account or organization (claudeAccountOff): the same. Nor
+// GitHub's turning a Copilot account away under its terms
+// (provider.CopilotToSHint): it refuses the account's GitHub token before
+// the request is sent, so nothing of the request was read.
 func riskRefused(c candidate, status int, header http.Header, body []byte) bool {
 	if failureOf(c, status, body) != failRestricted || remoteModelRest(c, failRestricted, header) {
 		return false
 	}
 	status = carriedStatus(status, body)
-	return !googleSuspended(c.p, status, body) && !claudeAccountOff(c.p, status, body)
+	return !googleSuspended(c.p, status, body) && !claudeAccountOff(c.p, status, body) && !bodyHas(wordsOf(body), provider.CopilotToSHint)
 }
 
 // elsewhereWeighed is elsewhere on a list of candidates beside their
@@ -2517,6 +2543,14 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	case wait > longestPause:
 		return 0, false
 	case busyStatus(status):
+		if restrictedSaid(status, body) {
+			// an account its vendor restricted is out till the vendor
+			// lifts it: GitHub's refusal of a Copilot account under its
+			// terms comes as the sign-in's 502, and was asked again as a
+			// busy one, 15 trades a request from an account GitHub had
+			// just turned away for its use (yidasanqian on X)
+			return 0, false
+		}
 		if bodyHas(body, didNotStream) || bodyHas(body, cutVoidWords) {
 			// a void cut at its length fails the same every ask: the
 			// budget went to reasoning, and mostly would again — the same

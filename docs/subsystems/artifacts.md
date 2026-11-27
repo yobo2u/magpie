@@ -79,7 +79,9 @@ the text of its answers, never for access:
 
 - every address it answers is at that base (`artifactCaller.link`); the
   publish answer says so, and names `MAGPIE_PUBLIC_URL` when the base is
-  the Host called rather than it;
+  the Host called rather than it. When `magpie web` serves artifacts at
+  `MAGPIE_PUBLIC_URL` (below), the address is that one instead, as for an
+  agent here;
 - a `file_path` (or a file in `files` given by path) that is relative, or
   that magpie's computer doesn't have, is answered with why: the file is
   on the agent's computer, so pass the page as `html` and its files as
@@ -162,7 +164,13 @@ address, so:
   `_api/`. Its page gets the runtime a shared copy gets
   (`artifact.SharedRuntime`): no token, each capability null. Its store
   (`_api/*`) and assets (`/_blob/`) stay this computer's, so a page that
-  keeps data or assets shows what it shows without them there.
+  keeps data or assets shows what it shows without them there. `magpie
+  web`'s port hands `/a/` to the gateway too (`clientPrefixes` in
+  [oneport.go](../../internal/gateway/oneport.go), `_api/` left out), so
+  the browser UI behind a proxy or in a container opens one at its own
+  address, judged there as from another computer. Off the network the
+  port keeps `/a/` for its own sign-in instead (`onePort`,
+  `gateway.ArtifactsOpenAway`; [In magpie web](#in-magpie-web-signed-in)).
 - `nosniff`, `Referrer-Policy: no-referrer`. A numbered version is
   immutable and cached for a year; the newest is `no-cache` with an ETag
   of its version.
@@ -423,9 +431,8 @@ The store:
 - A shared copy on usemagpie.ai runs `SharedRuntime`: `window.claude` is
   there, `db`, `room` and `user` are served there by the site ([Live
   sharing](#live-sharing)), and every other capability resolves null, so
-  the page shows what it shows without them. Its assets aren't shared:
-  `/_blob/<id>` isn't served there, so an `<img>` of one shows nothing on
-  a shared copy (#7649).
+  the page shows what it shows without them. Its assets go with it
+  ([Sharing](#sharing)), so `/_blob/<id>` shows there as it does here.
 
 ## Comments
 
@@ -803,9 +810,53 @@ the list (`--json` with every version's address, and `shared`),
 takes every version; share, unshare and delete refuse an `@<n>`. Each takes
 an id or an address.
 
-The addresses are this computer's (127.0.0.1): a viewer of `magpie web`
-from another computer can list them but not open them from the list (an
-agent away is given its own, above).
+The addresses are this computer's (127.0.0.1). A viewer of `magpie web`
+from another computer (`remotePage` in app.js) opens, copies and installs
+them at the page's own address instead (`at` in artifacts.js), which its
+port hands to the gateway: the page reads there as a shared copy, while
+magpie is on the network (above), and through the page's sign-in off it
+(below). An agent away is given its own address, above.
+
+## In magpie web, signed in
+
+`magpie web` behind a proxy at `MAGPIE_PUBLIC_URL` gives artifacts' links
+at that address and opens them to the browser signed in to it, while
+magpie itself listens on loopback (#7665,
+[internal/gui/web_artifacts.go](../../internal/gui/web_artifacts.go)):
+
+- **Links.** `StartWeb` hands the page's public address to the gateway
+  (`artifactsAtWeb`: `MAGPIE_PUBLIC_URL` without a port, a proxy's; with
+  one, its host on the page's own port, and none for a page on loopback
+  then), through `gateway.SetArtifactsAt`; `Close` takes it back.
+  `ArtifactURL` names it, so `publish_artifact`, `read_artifact`,
+  `list_artifacts` and `delete_artifact` give it to an agent here or away
+  (`artifactCaller.link`), and the publish answer says whether the
+  address takes the sign-in or, on the network, no key.
+  `open_artifact` opens this computer's browser, so it keeps this
+  computer's address (`ArtifactLocalURL`), as Work › Artifacts' list does
+  (artifacts.js moves it to the page's address away). It holds only when
+  the gateway runs in `magpie web`'s process (`magpie serve`, the Docker
+  image); `magpie artifacts`, a process of its own, and a gateway another
+  magpie serves give this computer's addresses.
+- **Sign-in.** Off the network, `onePort` leaves `/a/` to the page, behind
+  `webGuard` (the page's cookie, or a LazyCat box's sign-in). Signed in, a
+  navigation is sent on (302, `no-store`, `no-referrer`) to
+  `/_magpie/a/<token>/<ref>/<file>` (`webArtifactLinks`); any other
+  request mode (a script of a page on the same site, with the Lax cookie)
+  gets 403 and no token.
+- **The token.** The page runs in the gateway's sandbox, an opaque origin
+  whose own requests carry no cookie, so the token in its folder's path
+  lets its files in (`webArtifactPages`, ahead of `webGuard`, as a plugin
+  page's token is). It is an HMAC of the artifact's id under this run's
+  `pageSecret`: that artifact, every version, GET and HEAD only. A wrong
+  one gets 404; a navigation with one (a tab from before a restart) goes
+  back to `/a/<ref>/`, through the sign-in.
+- **What is served.** `gateway.ServeArtifactElsewhere`: the files,
+  `artifactPageCSP`, `nosniff` and `no-referrer` of `artifactPage`, the
+  page alone (no viewer shell), and the shared copy's runtime
+  (`SharedRuntime`, every capability null). No `_api/` is served there,
+  so a page that keeps data or assets shows without them, and
+  `publish_artifact` says so when the version declares one.
 
 ## Sharing
 
@@ -837,6 +888,18 @@ The site:
   no-transform`, without which Cloudflare injects its Web Analytics
   beacon into the HTML a worker answers: a shared page runs nothing of
   the site's, and the wrapper loads no analytics.
+- A share's assets (#7649): `GET /api/shares/<id>/blobs` lists them,
+  `PUT` and `DELETE /api/shares/<id>/blobs/<asset id>` (the token; the
+  body the bytes, its type the Content-Type, one of `AssetTypes` within
+  its `AssetLimit`) put one up and take it down. A page shows an asset at
+  `/_blob/<asset id>`, an address naming no share and no version, so the
+  content host serves it by its id alone, from D1's `blobs` (asset id →
+  share) and R2's `<share>/_blob/<asset id>`, with the gateway's headers
+  (its type, nosniff, a sandbox CSP for all but a PDF). The first share to
+  hold an id keeps it: another's PUT or DELETE of it is a 409, so a page
+  can't serve over another page's asset. A share holds 256 assets and
+  100 MB of them, and each address makes 600 asset calls an hour. A
+  takedown deletes its rows and its R2 prefix.
 
 magpie:
 
@@ -845,7 +908,17 @@ magpie:
   share.json that doesn't read is an error, never "not shared": sharing
   again would make a second link and lose the first one's token.
 - `ShareLatest` shares the newest version, at a new link or at the one it
-  has; the same version again asks nothing. The gateway's publish calls it
+  has; the same version again sends no version, only brings its assets up
+  to date.
+- The artifact's assets go with it (`syncAssets`, share_assets.go): those
+  the share lacks go up, those deleted here come down. For a shared link
+  they go before the new version, so the version viewers reload to finds
+  each asset it names; a new link's go right after its POST, before its
+  link is anywhere. An upload or delete while shared syncs in the
+  background (`assetsChanged`, at most one queued an artifact). An asset
+  the site refuses (its budget, or an id another share holds) is left out
+  and the rest go; `Share.Note` says which, and the CLI and the publish
+  tool's answer say it too. The GUI shows nothing of it. The gateway's publish calls it
   for a shared artifact, so the link follows each new version, and its
   answer says the link shows it (or that it still shows the version
   before, and why). list and read name the link.

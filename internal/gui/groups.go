@@ -119,6 +119,7 @@ type groupDefaultsJSON struct {
 type skippableJSON struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"` // the provider's logo, for its row and chip
 }
 
 type groupJSON struct {
@@ -219,7 +220,10 @@ type modelRef struct {
 	Provider string `json:"provider"`
 	PName    string `json:"providerName"`
 	Icon     string `json:"icon,omitempty"`
-	Context  int    `json:"context,omitempty"` // the tokens it takes, when known
+	// Icons: a routing group's providers' icons, stacked in the model
+	// picker as the Agents page stacks them
+	Icons   []string `json:"icons,omitempty"`
+	Context int      `json:"context,omitempty"` // the tokens it takes, when known
 	// Efforts: the model's reasoning levels, when known — those a group's
 	// member of it may be fixed at
 	Efforts []string `json:"efforts,omitempty"`
@@ -543,7 +547,7 @@ func groupsState() groupsJSON {
 	out.Skippable = []skippableJSON{}
 	for _, p := range provider.All() {
 		if p.Ready() || slices.Contains(out.Skip, p.ID) {
-			out.Skippable = append(out.Skippable, skippableJSON{ID: p.ID, Name: p.Name})
+			out.Skippable = append(out.Skippable, skippableJSON{ID: p.ID, Name: p.Name, Icon: p.Icon})
 		}
 	}
 	for _, id := range out.Skip {

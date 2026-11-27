@@ -618,6 +618,39 @@ none for `defaultWorkspace`). Read only, no resume or delete. Tests:
 `TestCatPawSessions`, `TestCatPawTranscript` (rows made by CatPaw's own
 CREATE statements and message shapes; no signed-in conversation was had).
 
+Dim alpha's sessions (#7990, [`dim.go`](../../internal/sessions/dim.go))
+are the rows of `rust/dimcode.sqlite` in Dim's folder: `DIMCODE_HOME`
+as given, else `.dimcode-alpha` in the home folder (`USERPROFILE` on
+Windows), one helper (`sessions.DimDirIn`) for this reader and
+`internal/agent`'s Connect. It is one store for every session, written
+by Dim's daemon in WAL mode (format 53): `agent_sessions` (config,
+`leader_session_id`), `session_metadata` (title), `session_catalog`
+(cwd, preview, `updated_at_ms`) and `timeline_events` (kind and a JSON
+body: one event, or the text and thinking deltas of one request in one
+row). A session is listed once it has an `input/message` with
+`data.user` (Dim's own test of a prompt; agents' messages and reports
+come as raw blocks). A collaboration's member (`leader_session_id` set)
+is filed under its leader, with its tools and tokens but not its task.
+A fork's main line copies its source's through its `session/forked`
+event, so the rows up to it count in the source only. A call's own
+events (`parent_call_id`) are no prompt or reply. Tokens are
+`model/usage`, once per session and `request_id` (the largest), by the
+model its `model/call` asked: `promptTokens` holds the cache reads and
+writes, so Input is what is left. A `<dim-…>` block a capability put
+after the first (a skill, a hook's context) is not the user's words
+(markup.rs). The listing and each session's parse run in a read-only
+transaction on a read-only connection; magpie never writes, locks or
+migrates the file. A read that fails (Dim's daemon holding it) is
+"unknown", not "no sessions": the last listing stands, cold, and so does
+each parse (`parseDim` is a grow parser and gives back the last one).
+Dim's requests through the gateway can't be matched to these sessions:
+Dim sends no session header and no `prompt_cache_key`, its session and
+request ids stay in its own recording, so they are logged with agent
+`dim` and no session. Read only, no resume or delete. Tests:
+`TestDimSessions`, `TestDimTranscript`, `TestDimBusyKeepsLastRead`,
+`TestDimDir` (rows made from Dim's own CREATE statements and event
+types; no real Dim store was on a test machine).
+
 Hermes Agent keeps its sessions as rows in each profile's `state.db`
 (SQLite in WAL mode): the home (`HERMES_HOME`, else `~/.hermes`, else
 `%LOCALAPPDATA%\hermes` on Windows) and each `profiles/<name>`
@@ -721,7 +754,59 @@ and otherwise a known gateway session from what its transcript reads
 (`sessions.WriteGatewayMarkdown`, "Recorded by: magpie's gateway", with a note
 when turns or a part's end weren't kept). A magpie that others reach as a
 remote magpie has no file of their agents' sessions, so this is the only way
-it can export them. Verification: `TestGatewaySessionExportsMarkdown`.
+it can export them. Both take `only=said` (the Sessions page's Export
+Markdown menu, "Messages only"; usrname1833 on Discord): `sessions.KeepSaid`
+keeps the user's and the agent's text and images, leaves out thinking, tool
+calls and results and context, says so under the heading, and names the file
+`…-messages.md`. Any other `only` exports the whole conversation.
+Verification: `TestGatewaySessionExportsMarkdown`, `TestSessionExportOnlySaid`,
+`TestMarkdownKeepSaid`, `TestGatewayMarkdownKeepSaid`; browser
+`sessions-export.test.cjs`.
+
+The conversation sheet (`drawTalk` in the sessions plugin's `client.js`)
+draws each turn as the user's words (`sess-ask`), one fold of its steps
+(`details.sess-steps`, "N steps": thinking, tool calls and results, context
+and what the agent said on the way), and its last words (`sess-final`, the
+turn's last assistant text). A turn with no last words shows its fold only.
+In the fold each step is a line (thinking, context) or its first three lines
+(`brief`), and a click or Enter shows it whole. Which folds and steps were
+opened survives a redraw (`stepsOpen`, `stepFull`); a search hit inside a fold
+opens it. A fold's steps are drawn when it is first opened (the summary's
+click, before the fold shows, so it never opens empty), or at once when it is
+open from before or holds the hit. `[data-turn]` is on the user's messages,
+always drawn, so it still counts the turns. With 300 turns of 8 tool calls,
+the sheet has 4,233 nodes instead of 30,933. It opens in 199ms instead of
+245ms in Chromium, and 227ms instead of 361ms in WebKit. Verification: browser
+`sessions-talk-steps.test.cjs`.
+
+A transcript holds the first `transcriptMax` (400,000) characters of its
+parts, thinking and tool output included, and says `cut` when there was
+more. The sheet then ends in "Show the rest": it asks
+`GET /api/sessions/transcript?…&after=<n>` (`TranscriptAfter`,
+`SubagentTranscriptAfter`; n is `from` plus the parts it holds), adds what
+comes back and draws the turns again, until a read is not cut. Before, the
+sheet stopped at the cut with a muted line and no way on, so a long
+session's last turns couldn't be seen (usrname1833 on Discord). A gateway
+session's cut is turns the gateway didn't keep, with nothing after to
+read: it keeps the line and gets no button. `SessionText` (`magpie sessions
+show`, the sessions MCP's `read_session`) reads from `from` the same way;
+it used to read the cut start again, so its "go on from" past the cut never
+reached the end. The Markdown export reads the whole file and was never
+cut. Verification: `TestTranscriptAfterReadsTheRest`,
+`TestSessionTextReadsPastTheCut`; browser `sessions-talk-rest.test.cjs`.
+
+The sheet's "turn i / N" counts the whole session. A first read that is cut,
+or starts past the start (a search's, `from` > 0), carries `turns`, the
+user's text messages in the whole file, and `turnsBefore`, those among the
+`from` parts it skipped (`sessions.Counted`, `SubagentCounted`; a turn is
+the `turn` of `TurnsOf`, the same parts the sheet marks `[data-turn]`).
+They cost a second scan of the file, so a read that holds the whole session
+and a `after=` read (the sheet has N already) aren't counted, and
+`TranscriptOf`'s other callers (memdistill, the CLI) never pay it. Before,
+N was the turns drawn, about 18 of a long real session (usrname1833 on
+Discord). Verification: `TestCountedCountsTheWholeFile`,
+`TestSessionTranscriptCountsEveryTurn`; browser
+`sessions-talk-turns.test.cjs`.
 
 A gateway session without a saved Desktop name is titled by what it was
 first asked (YOU on Discord), not its `ses_…` id: `sessions.GatewayTitle` reads the first 8 complete turns of
@@ -1137,7 +1222,14 @@ The Antigravity desktop app's stable and Insiders stores are read by
 store. Each conversation takes its title and workspace from the
 `conversation_summaries.db` beside its own store, including later title
 updates. Model calls reuse the app's read-only SQLite/protobuf reader,
-including response folding and gateway matching. Insiders session ids
+including response folding and gateway matching. A call counts once by
+the vendor's response id its step names (`antigravityCallID`), in
+whichever conversation's database it is: a subagent's call is written in
+its database and its parent's, and was counted once for each
+(Taytay_19891213 on X). A step with no response id counts by its
+conversation and step. Only Usage's call reads are deduplicated this way;
+the Sessions page's per-conversation totals still hold the shared call in
+both. Insiders session ids
 have an `insiders-` prefix in magpie, leaving stable ids unchanged and
 keeping equal UUIDs in the two stores from sharing a session or call id.
 The files themselves are not renamed. Sessions stay read-only with no
@@ -1154,6 +1246,8 @@ reads the session again. A conversation with no transcript is
 Verification: `TestAntigravityInsidersSessions` covers Insiders alone,
 both stores with the same UUID, per-model tokens, call ids, summary refresh
 and turning the existing reading choice off, using #2190's real step bytes.
+`TestAntigravityAppSubagentCallOnce` puts one of those steps in a second
+conversation's database beside a call alike in all but its response id.
 `TestAntigravityAppTranscript` reads a conversation the app's 2.30 language
 server had with a read_file call (testdata/antigravity-2.30-tools) from
 stable, Insiders and a WSL distro's store; `TestAntigravityAppNoTranscript`.

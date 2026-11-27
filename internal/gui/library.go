@@ -49,6 +49,14 @@ type subagentModel struct {
 	Name  string `json:"name"`
 	Note  string `json:"note,omitempty"`
 	Group bool   `json:"group,omitempty"`
+	// Provider, ProviderName, Icon and Icons place it in the model
+	// picker as the Agents page does: under its provider, with its logo
+	// (a group's: its providers', stacked)
+	Provider string   `json:"provider,omitempty"`
+	PName    string   `json:"providerName,omitempty"`
+	Icon     string   `json:"icon,omitempty"`
+	Icons    []string `json:"icons,omitempty"`
+	Context  int      `json:"context,omitempty"`
 	// Efforts are the efforts Codex runs it at, when the catalog knows
 	Efforts []string `json:"efforts,omitempty"`
 }
@@ -56,7 +64,10 @@ type subagentModel struct {
 func subagentModels() []subagentModel {
 	out := []subagentModel{}
 	for _, e := range provider.CodexSubagentModels() {
-		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != "", Efforts: e.Efforts}
+		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != "", Efforts: e.Efforts, Icons: e.Icons, Context: e.Context}
+		if e.Provider != nil && !m.Group {
+			m.Provider, m.PName, m.Icon = e.Provider.ID, e.Provider.Name, e.Provider.Icon
+		}
 		if a := e.Provider.Account; a != nil && a.User != "" {
 			m.Note = a.User
 		}
@@ -100,7 +111,7 @@ func libraryView(res *library.Result) (libraryJSON, error) { return libraryRead(
 func libraryRead(res *library.Result, glance bool) (libraryJSON, error) {
 	lastProblems.Lock()
 	if res != nil {
-		lastProblems.p = res.Problems
+		lastProblems.p = res.Standing(lastProblems.p)
 	}
 	p := lastProblems.p
 	lastProblems.Unlock()
@@ -123,6 +134,27 @@ type instructionsJSON struct {
 	Instructions *library.InstructionsView `json:"instructions"`
 	Result       *library.Result           `json:"result,omitempty"`
 	Problems     []library.Problem         `json:"problems,omitempty"`
+}
+
+// mcpJSON answers a change to the MCP servers alone
+// (library.Result.MCPOnly): the part of the page it can change
+// (library.ReadMCP), the page keeping the rest it has. Reading the whole
+// page again went through every agent's skill folders as well, seconds of
+// each Save on Windows (zysicyj on X).
+type mcpJSON struct {
+	Part     string            `json:"part"` // "mcp"
+	MCP      *library.View     `json:"mcp"`
+	Result   *library.Result   `json:"result,omitempty"`
+	Problems []library.Problem `json:"problems"`
+}
+
+func mcpView(res *library.Result) (mcpJSON, error) {
+	lastProblems.Lock()
+	lastProblems.p = res.Standing(lastProblems.p)
+	p := lastProblems.p
+	lastProblems.Unlock()
+	v, err := library.ReadMCP(p)
+	return mcpJSON{Part: "mcp", MCP: v, Result: res, Problems: p}, err
 }
 
 func instructionsView(res *library.Result) (instructionsJSON, error) {
@@ -1085,6 +1117,15 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		}
 		if err != nil {
 			fail(rw, err)
+			return
+		}
+		if res.MCPOnly() {
+			v, err := mcpView(res)
+			if err != nil {
+				fail(rw, err)
+				return
+			}
+			writeJSON(rw, v)
 			return
 		}
 		if r.PathValue("what") == "instructions" {

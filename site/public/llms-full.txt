@@ -90,6 +90,7 @@ Picking a model writes it into the agent’s own config file. Only the keys magp
 | Claude Code | `~/.claude/settings.json`: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model variables in its `env` block |
 | Codex | `~/.codex/config.toml`: a `[model_providers.magpie]` table and the model, with the list in `magpie-models.json`. Your ChatGPT sign-in is left alone |
 | OpenCode, MiMo Code, DevEco Code, Pi, Crush | A `magpie` provider entry, and `magpie/provider/model` |
+| Bub | `~/.bub/config.yml`: a `magpie` provider, and `model` set to `magpie:provider/model` |
 | Open Code Review | `~/.opencodereview/config.json`: a `magpie` custom provider, made the one `ocr` uses |
 | Kigi | `~/.kigi/config.toml`: a `[model."magpie/…"]` table per model, the one picked made the default |
 | AtomCode | `~/.atomcode/config.toml`: a `magpie` provider account and one model entry per catalog model |
@@ -265,7 +266,7 @@ Deleted magpie already (the app in the Trash, the folder removed) and an agent s
 
 Installed, magpie keeps its settings, providers, usage and library in `~/.config/magpie` (`C:\Users\<you>\.config\magpie` on Windows). It backs them up by itself once a day, into `auto-backups` in that same folder, so a reinstalled system loses the backups too; Settings → Sync and backup says so under Backup folder. Click Change… there and pick a folder on another disk (`D:\magpie-backups`) or one a cloud drive syncs. After a reinstall, install magpie, pick the same folder there and Restore… the newest version. Backups hold no API keys; Sign-ins in backups adds subscription accounts and plugin sign-ins, sealed with a passphrase. To carry the keys too, sync to a WebDAV folder, an S3 bucket or a GitHub repository, sealed with a passphrase, in the same place.
 
-To keep magpie’s own files on that disk (an external SSD, say), click Move… beside Data folder in the same place and pick a folder there. magpie restarts, moves its files and cache into a folder named `magpie` inside it, and leaves a link where they were, so nothing else changes. Keep the disk connected: without it magpie won’t open until it is back. Move back brings them home. `magpie data move <folder>` does the same from a terminal.
+To keep magpie’s own files on that disk (an external SSD, say), click Move… beside Data folder in the same place and pick a folder there. magpie restarts, moves its files and cache into a folder named `magpie` inside it, and leaves a link where they were, so nothing else changes. Keep the disk connected: without it magpie won’t open until it is back. Move back brings them home. `magpie data move <folder>` does the same from a terminal. On Windows a folder can’t move while something runs from it, such as an MCP server an agent started: magpie names what does, and you quit those agents first.
 
 To keep everything on that disk, run magpie portable: put `magpie.exe` in a folder there with an empty folder named `data` beside it (`D:\magpie\magpie.exe` and `D:\magpie\data`). magpie then keeps everything in `data`, its caches and log too, and writes nothing of its own to your user folder; Settings → About → Config folder says Portable. Open it, and restore a backup into it as above. After a reinstall, open `D:\magpie\magpie.exe` again. The agents’ own configs (`~/.claude`, `~/.codex`…) stay where each agent reads them.
 
@@ -8789,6 +8790,7 @@ The gateway listens on `127.0.0.1:3425`. To move it, open Settings › Network a
 | Port … is in use by another program: pick another one | Pick a free port. |
 | Another magpie serves the gateway at …: set its port there, or quit it first | Two copies of magpie are running. Quit one. |
 | Port … is taken by another program, magpie web perhaps: magpie tries again every few seconds | Find what holds the port, or move the gateway to another. |
+| Windows reserves port … for Hyper-V, WSL or Docker | No program holds it, so netstat shows nothing. Move the gateway to another port, or run `net stop winnat` then `net start winnat` as administrator. `netsh interface ipv4 show excludedportrange protocol=tcp` lists the reserved ranges. |
 | MAGPIE_ADDR=… sets the gateway’s whole address, host:port: unset it to set the port here | Unset `MAGPIE_ADDR`, or change it. |
 
 ## Agents in WSL
@@ -9159,7 +9161,7 @@ curl http://127.0.0.1:3425/v1/magpie/quotas
 curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'
 ```
 
-magpie's own skill `magpie-quota` lets an agent read `magpie quota --json` and wait with `magpie quota wait`. It is first in the Library's skills market.
+magpie's own skill `magpie-quota` lets an agent read `magpie quota --json` and wait with `magpie quota wait`. It is first in the Library's skills market. Beside it, `magpie-api` teaches an agent this API, and `/v1/models` and `/v1/magpie/route` (the model a routing group picked) too, for an agent that hands work out across models.
 
 ## Alerts
 
@@ -10815,7 +10817,7 @@ Run magpie on a server or a NAS that has no desktop: its gateway serves your mod
 | **Image** | `ghcr.io/yetone/magpie`, for `linux/amd64` and `linux/arm64` |
 | --- | --- |
 | **Tags** | `latest` (the newest release), `daily` (the desktop app's Daily channel: once a day at 20:00 UTC, the newest release whose CI run passed, or an urgent one at once), `stable` (the desktop app's Stable channel: a release a week, out three days first, or an urgent one at once), `0.1.1150` (one release), `0.1`, `edge` (every change on `main`) |
-| **Ports** | `3425` the gateway agents call; `3430` the browser UI, when the container runs `magpie web`; it answers the gateway’s `/v1` routes too, so a reverse proxy needs only this port |
+| **Ports** | `3425` the gateway agents call; `3430` the browser UI, when the container runs `magpie web`; it answers the gateway’s `/v1` routes and opens artifacts too, so a reverse proxy needs only this port |
 | **Volume** | `/config`: providers, keys, sign-ins, plugins and usage |
 | **User** | nonroot (uid 65532) |
 

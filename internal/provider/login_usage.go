@@ -494,6 +494,10 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 				if q.Error == "" {
 					copilotUnlapse(orig)
 					refreshCopilotEntitlement(c.app, q.Plan, q.AccessSKU)
+				} else if strings.HasSuffix(q.Error, CopilotToSHint) {
+					// turned away under GitHub's terms: signed in
+					// still (copilot_tos.go)
+					copilotUnlapse(orig)
 				}
 				return q
 			}
@@ -547,8 +551,12 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 			}
 		} else {
 			var plan string
-			if plan, q.Windows, q.Resets, q.Balance, q.Held, err = codexWindowsRenewing(ctx, tok, accountID, renew); plan != "" {
+			var left *float64
+			if plan, q.Windows, q.Resets, q.Balance, left, q.Held, err = codexWindowsLeftRenewing(ctx, tok, accountID, renew); plan != "" {
 				q.Plan = plan
+			}
+			if err == nil {
+				noteWeekCredits(l.User, q.Windows, q.Resets, left, time.Now())
 			}
 			q.Until = codexUntil(codexLoginAuth(l), time.Now())
 		}

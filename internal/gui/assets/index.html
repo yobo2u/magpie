@@ -195,6 +195,10 @@
         <div class="who"><div class="name" data-t>Appearance</div><div class="sub om-only" data-t>Follows the Omarchy theme, as picked in Omarchy's menu</div></div>
         <div id="themeSegs" class="om-hide"></div><span class="om-only om-theme-name"></span>
       </div>
+      <div class="row pref om-hide" id="contrastRow">
+        <div class="who"><div class="name" data-t>Increase contrast</div></div>
+        <div id="contrastSegs"></div>
+      </div>
       <div class="row pref om-hide" id="accentRow">
         <div class="who"><div class="name" data-t>Accent color</div></div>
         <div id="accentPick" class="accent-pick" role="radiogroup"></div>
@@ -304,7 +308,7 @@
         <button type="button" id="sessionTerminalSelect" class="sess-pick session-terminal-select" aria-label="Session terminal" aria-haspopup="menu" aria-expanded="false" data-ta></button>
       </div>
     </div>
-    <details class="prefs-more" id="generalMore" hidden>
+    <details class="adv-fold prefs-more" id="generalMore" hidden>
       <summary data-t>Advanced</summary>
       <div class="list prefs">
         <div class="row pref" id="gpuRow">
@@ -378,7 +382,7 @@
       </div>
       <div id="provPrefLinks"></div>
     </div>
-    <details class="prefs-more" id="usageMore">
+    <details class="adv-fold prefs-more" id="usageMore">
       <summary data-t>Advanced</summary>
       <div class="list prefs">
         <div class="row pref app-only" id="trayCurrencyRow">
@@ -463,7 +467,7 @@
     <div class="list prefs" id="passkeyList" hidden></div>
     <div class="row-head" id="remoteHead"><span class="label" data-t>Another magpie</span></div>
     <div class="list prefs" id="remoteList"></div>
-    <details class="prefs-more" id="netMore">
+    <details class="adv-fold prefs-more" id="netMore">
       <summary data-t>Advanced</summary>
       <div class="list prefs" id="netMoreList"></div>
     </details>
@@ -473,7 +477,7 @@
     <div class="list prefs" id="imagesList"></div>
     <div class="row-head"><span class="label" data-t>Web search</span></div>
     <div class="list prefs" id="searchList"></div>
-    <details class="prefs-more" id="searchMore" hidden>
+    <details class="adv-fold prefs-more" id="searchMore" hidden>
       <summary data-t>Advanced</summary>
       <div class="list prefs" id="searchMoreList"></div>
     </details>
