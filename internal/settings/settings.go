@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
@@ -559,6 +560,13 @@ type Settings struct {
 	// (the lookup failed) holds nothing. Off, as by default, magpie only
 	// warns.
 	ClaudeRegionHold bool `json:"claudeRegionHold,omitempty"`
+	// ClaudeWaysOut are the ways out to the internet the user lets Claude
+	// subscription requests take: regions by ISO 3166-1 code (US), and
+	// addresses, an IP or a CIDR range (mamba on Discord). A way out in
+	// none of them is judged as one outside Anthropic's list: warned of,
+	// and held while ClaudeRegionHold is on. Empty, as by default,
+	// Anthropic's Supported Regions Policy decides (egress.Supported).
+	ClaudeWaysOut []string `json:"claudeWaysOut,omitempty"`
 	// ClaudePrintMode runs a Claude subscription's Claude Code as `claude
 	// -p` always. Off, as by default, a model request runs in Claude
 	// Code's interactive mode, as a person runs it, and never as -p: the
@@ -1064,6 +1072,14 @@ type Settings struct {
 	// (molianyin4227 on Discord: models differ, so one size for every
 	// agent fits none). An agent with none follows those two (ForAgent).
 	AgentCompacts map[string]AgentCompact `json:"agentCompacts,omitempty"`
+	// AgentCompactPcts is where in its window an agent compacts, as a
+	// percent, by its kind (CompactPctAgents; moooyo on Discord: compact
+	// once 65% of the context is used). The window is the one Long
+	// conversations gives the agent (the working window, a size typed, a
+	// model's own Compact at, or the whole window under Full window), so
+	// 65 under Full window is 65% of the model's whole context. An agent
+	// with none compacts where it does by default. See CompactPercent.
+	AgentCompactPcts map[string]int `json:"agentCompactPcts,omitempty"`
 	// AgentContexts is the context window an agent is told for a model, when
 	// it is not the one every agent is told (ul3140773077392 on X: dsh
 	// compacts earlier than Codex does at the same window, so its window
@@ -1861,6 +1877,34 @@ type AgentCompact struct {
 // model tables (auto_compact_threshold_percent of the model's window).
 // Only these take an AgentCompact.
 var CompactAgents = []string{"codex", "claude", "grok"}
+
+// CompactPctAgents are the agents that take a percent of their window to
+// compact at (AgentCompactPcts), each by a knob of its own read from its
+// source: Claude Code's CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (a percent of its
+// auto-compact window, never past the window less 13K), Codex's
+// auto_compact_token_limit (tokens, so the percent of the window it is
+// given), Grok Build's auto_compact_threshold_percent and Qwen Code's
+// context.autoCompactThreshold (a fraction of the window).
+var CompactPctAgents = []string{"codex", "claude", "grok", "qwen"}
+
+// CompactPercent is the percent of its window the agent of that kind
+// compacts at (AgentCompactPcts), 0 for its own default.
+func (s Settings) CompactPercent(kind string) int {
+	if p := s.AgentCompactPcts[kind]; p > 0 && p <= 100 {
+		return p
+	}
+	return 0
+}
+
+// AtPercent is n tokens at p percent, rounded down so the agent never
+// compacts later than p, and n as it is for p of 0 (the agent's default)
+// or 100.
+func AtPercent(n, p int) int {
+	if p <= 0 || p >= 100 || n <= 0 {
+		return n
+	}
+	return max(1, n*p/100)
+}
 
 // ForAgent is s as the agent of that kind reads Long conversations: its
 // own AgentCompact in CompactAt and FullContext, when it has one.
@@ -2753,6 +2797,11 @@ func saveOwn(s Settings, recording, reads bool) error {
 	if !slices.Contains(Langs, s.Lang) {
 		return fmt.Errorf("language must be one of %v, not %q", Langs, s.Lang)
 	}
+	for _, w := range s.ClaudeWaysOut {
+		if !WayOut(w) {
+			return fmt.Errorf("a way out for Claude must be a region code (US), an IP or a CIDR range, not %q", w)
+		}
+	}
 	if !slices.Contains(Trays, s.Tray) {
 		return fmt.Errorf("tray must be one of %v, not %q", Trays, s.Tray)
 	}
@@ -3114,6 +3163,7 @@ func saveOwn(s Settings, recording, reads bool) error {
 
 func (s Settings) normal() Settings {
 	s.Name = CleanName(s.Name)
+	s.ClaudeWaysOut = cleanWaysOut(s.ClaudeWaysOut)
 	if s.Theme == "" {
 		s.Theme = "system"
 	}
@@ -3405,4 +3455,32 @@ func ClientAgentsNow() map[string]string {
 		return clientAgents(load().ClientAgents)
 	}
 	return m
+}
+
+// WayOut says whether w is a way out ClaudeWaysOut can hold: a region's
+// two-letter code, an IP, or a CIDR range.
+func WayOut(w string) bool {
+	if len(w) == 2 && w[0] >= 'A' && w[0] <= 'Z' && w[1] >= 'A' && w[1] <= 'Z' {
+		return true
+	}
+	if _, err := netip.ParseAddr(w); err == nil {
+		return true
+	}
+	_, err := netip.ParsePrefix(w)
+	return err == nil
+}
+
+// cleanWaysOut trims each way out, writes a region's code in capitals,
+// and drops blanks and repeats; nil when none is left.
+func cleanWaysOut(ws []string) []string {
+	var out []string
+	for _, w := range ws {
+		if w = strings.TrimSpace(w); len(w) == 2 {
+			w = strings.ToUpper(w)
+		}
+		if w != "" && !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return out
 }

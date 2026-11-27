@@ -574,6 +574,9 @@ type Server struct {
 	endingOnce sync.Once
 	endOnce    sync.Once
 
+	// network is what this gateway has heard of the network (offline.go)
+	network network
+
 	mu     sync.Mutex
 	recent []Call
 	calls  uint64 // the last Call.ID given
@@ -967,7 +970,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	bg.Go("plugin.KeepNoticing", func() { plugin.KeepNoticing(freshCtx, filememo.OthersEvery) })
 	// and an edit of providers.json made by hand reaches the agents' own
 	// model lists, as a save in the window does (sarosaka1023 on X)
-	bg.Go("provider.FollowEdits", func() { provider.FollowEdits(freshCtx, filememo.OthersEvery) })
+	bg.Go("provider.FollowEdits", provider.FollowEdits(freshCtx, filememo.OthersEvery))
 	// and the MCP hub's servers that the Library no longer gives are ended
 	// It reads MCPHub, which a test swaps, so the gateway's end waits for
 	// it: once ListenAndServe has returned, nothing it started still looks.
@@ -1014,6 +1017,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		bg.Go("usage.KeepOutsideCallsRead", func() { usage.KeepOutsideCallsRead(ctx) })
 		// and moves the built-in subscriptions being retired onto their plugins
 		bg.Go("provider.KeepRetiringMoved", func() { provider.KeepRetiringMoved(ctx) })
+		// and makes a signed-in plugin's search API the web search's while
+		// none was ever set up (#7632)
+		bg.Go("provider.KeepSearchAdopted", func() { provider.KeepSearchAdopted(ctx) })
 		// and looks up which region the Claude accounts' way out to the
 		// internet is in, through each of their proxies (internal/egress)
 		bg.Go("egress.Keep", func() { egress.Keep(ctx, provider.ClaudeProxies) })
@@ -1149,7 +1155,7 @@ func (s *Server) Handler() http.Handler {
 	// on (dumpFirst)
 	// a socket's turns go through all of it again (socketEntry); the
 	// agent's Retry-After is bounded on the way out (retryCapped)
-	return socketEntry(s.dumpFirst(retryCapped(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, keySurfaceGuard(mux, withCaller(keptBodyRequests(keyLimited(s.keySlots(mux, mux))))))))))))))
+	return socketEntry(s.dumpFirst(retryCapped(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, keySurfaceGuard(mux, withCaller(keptBodyRequests(keyLimited(agentHeld(s.keySlots(mux, mux)))))))))))))))
 }
 
 // routes are the client APIs, each by its pattern: readOnlyGuard reads
@@ -1306,10 +1312,18 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/{path...}", s.artifactPage)
 	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"db", s.artifactDB)
 	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"events", s.artifactEvents)
+	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"live", s.artifactLive)
 	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"publish", s.artifactPublish)
 	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"meta", s.artifactMeta)
 	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"upload", s.artifactUpload)
 	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"assets", s.artifactAssets)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"sample", s.artifactSample)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"comments", s.artifactComments)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"tts", s.artifactTTS)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"dictation", s.artifactDictation)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"mcp", s.artifactMCP)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"files", s.artifactFiles)
+	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"shell", s.artifactShellEvents)
 	mux.HandleFunc("GET "+artifactBlobPath+"{id}", s.artifactBlob)
 	mux.HandleFunc(ImageMCPPath, s.imageMCP)
 	mux.HandleFunc(BrowserMCPPath, s.browserMCP)
@@ -1677,6 +1691,14 @@ func modelObject(e provider.Entry) map[string]any {
 	// (magpie group set … context=) included
 	if e.Context > 0 {
 		m["context_window"], m["context_length"], m["max_input_tokens"] = e.Context, e.Context, e.Context
+		// the most it may be raised to, when its vendor takes more than
+		// that window at a higher price (Copilot's gpt-6.2-sol: 272K,
+		// 1.05M): another magpie that has this one as its provider keeps
+		// it as its own model's MaxContext, so its user can raise the
+		// window there too (#7296)
+		if e.MaxContext > e.Context {
+			m["max_context_window"] = e.MaxContext
+		}
 	}
 	// the reply limit, kept within that window as agents are told it
 	// (#1438)
@@ -3685,7 +3707,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// not use (#905), the plan's left saying so: told before the barred
 		// and ready ones it may also have
 		call.Status, call.Error = 403, "every account outside the key's accounts"
-		if keyWho.Group != "" {
+		if keyWho.AgentOnly() {
+			call.Error = "every account outside the agent's accounts"
+		} else if keyWho.Group != "" {
 			call.Error = "every account outside the group's accounts"
 		}
 		writeError(w, from, 403, keyAccountsError(keyWho, call.Model))
@@ -5547,7 +5571,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
-		if !last && hw.failed() && offlineFailure(c, hw.code(), hw.errBody()) {
+		if !last && hw.failed() && s.offlineFailure(c, hw.code(), hw.errBody()) {
 			// this computer has no network (usrname1833 on Discord): the
 			// request never reached the vendor, so this one doesn't rest,
 			// and is asked first again once the network is back
@@ -6219,10 +6243,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// only it can read (#2271)
 			sealedBy = &c
 			if hit != nil && !hit.Compact {
-				ruleAnswered(ruleAt, call.Usage, coldAfter(c.p))
+				ruleAnswered(ruleAt, call.Usage, coldAfter(c.p), c)
 			}
 			for _, at := range nestedAt {
-				ruleAnswered(at, call.Usage, coldAfter(c.p))
+				ruleAnswered(at, call.Usage, coldAfter(c.p), c)
 			}
 		} else if hw.refused {
 			try.Fail = failRefused
@@ -6239,7 +6263,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				// restricted by its code (WorkBuddy's 11140), gone here
 				try.Fail = failRestricted
 			}
-			if offlineFailure(c, call.Status, []byte(call.Error)) {
+			if s.offlineFailure(c, call.Status, []byte(call.Error)) {
 				// the last one left failed for want of a network
 				// (offline.go): told so, and it doesn't rest
 				try.Fail = failOffline
@@ -6697,7 +6721,7 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 		if err == nil {
 			heardReply(ctx, p, res)
 			noteWireModel(ctx, p, res)
-			heardNet() // the network is up (offline.go)
+			s.network.heardNet() // the network is up (offline.go)
 			// a Remote magpie on a LAN answered (lan_reach.go)
 			noteReach(p, true)
 		}
@@ -6922,8 +6946,10 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		body = extra
 	}
 	if !countsTokens(path) {
-		// the tier it goes at, the user's own fields in it (#1784)
+		// the tier it goes at, the user's own fields in it (#1784), and a
+		// Gemini's thinking level as it goes (#7400)
 		noteWireTier(ctx, to, body)
+		noteWireLevel(ctx, p, to, body)
 	}
 	if to == provider.Anthropic && p.IsVertex() {
 		// Claude at the project, as Anthropic's Vertex SDK asks it: the
@@ -7658,8 +7684,10 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	// nor a system turn in Messages (xai_body.go, #3392)
 	body = xaiBody(p, proto, body)
 	// a Gemini 3 or later on an Anthropic or Chat relay is asked a
-	// thinking level, never a budget (gemini_level_body.go)
+	// thinking level, never a budget (gemini_level_body.go), and the log
+	// says the level that went (noteWireLevel, #7400)
 	body = geminiLevelBody(p, proto, model, body)
+	noteRelayedGemini(r.Context(), proto, model)
 	// a Grok subscription is given Codex's namespaced functions flat
 	// (grokBody), and Zed's plugin likewise (ZedBody); a call to one goes
 	// back under its namespace (#404). Any vendor asked as Codex sends it
@@ -8816,10 +8844,20 @@ func cutMidReply(name string, err error) string {
 
 // noteSaidStatus carries the status a relayed stream's error frame named
 // for itself onto the try's writer (#4855), for the routing loop and
-// restAfter to read (namedStatusHeader); the client never sees it.
+// restAfter to read (namedStatusHeader); the client never sees it. A
+// try the holdWriter failed on the error event, as the agent's protocol
+// says it (with no status: read from its words, 502 for most), fails as
+// that status: agy-cli's 403 for an account Google suspended was a 502
+// that passes, and every account was asked again round after round
+// (plugins#1563).
 func noteSaidStatus(w http.ResponseWriter, status int) {
 	if h, ok := w.(*holdWriter); ok {
 		h.note(namedStatusHeader, strconv.Itoa(status))
+		h.mu.Lock()
+		if h.failure != 0 && !h.refused {
+			h.failure = status
+		}
+		h.mu.Unlock()
 	}
 }
 
@@ -9091,7 +9129,7 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			r := *req
 			r.Metadata, req = nil, &r
 		}
-		if want := to == provider.Chat && geminiCompat(p.VendorHost(), model) && s.fits(p.ID, thinkingConfigField, to); want != req.GeminiCompat {
+		if want := to == provider.Chat && geminiCompat(p.VendorHost(), model) && s.fits(p.ID, thinkingConfigRefused(model), to); want != req.GeminiCompat {
 			r := *req
 			r.GeminiCompat, req = want, &r
 		}
@@ -9207,7 +9245,7 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		if err != nil {
 			return nil, to, err
 		}
-		noteWireEffort(ctx, to, sent)
+		noteWireEffort(ctx, to, sent, model)
 		if to == provider.Anthropic && !s.fits(p.ID, thinkingNeeded(model), to) {
 			// a model whose upstream said thinking must be enabled
 			// (thinkingNeededRefusal): a request built thinking off, or
@@ -9411,11 +9449,13 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				continue
 			}
 		}
-		if req.GeminiCompat && refusesThinkingConfig(res.StatusCode, b) {
+		if req.GeminiCompat && bodyHas(body, `"extra_body"`) && refusesThinkingConfig(res.StatusCode, b) {
 			// Gemini's own fields turned away (a proxy that isn't in front
-			// of Google after all, or Google changing them): asked as
-			// before, with reasoning_effort, and not sent them again
-			s.markUnfit(p.ID, thinkingConfigField, to)
+			// of Google after all, a backend behind a local router that
+			// doesn't take google, or Google changing them): asked as
+			// before, with reasoning_effort, and not sent them again for
+			// this model
+			s.markUnfit(p.ID, thinkingConfigRefused(model), to)
 			continue
 		}
 		if badRequest(res.StatusCode) && s.fits(p.ID, historyToolsRefused, to) {
@@ -9872,6 +9912,11 @@ var leadingRejectedOptionalField = lazyre.New("(?i)^\\s*([a-z_]+)\\s+is\\s+(?:un
 // which reaches the client as it came.
 var valueRejectedForField = lazyre.New("(?i)['\"\\x60][^'\"\\x60]{0,64}['\"\\x60]\\s+is\\s+(?:unsupported|not supported)\\s+for\\s+['\"\\x60]([a-z_]+)['\"\\x60]")
 
+// unsupportedFieldList is a vendor naming one or more fields it won't take
+// after a colon: Poe's "This bot does not support these request fields:
+// google" (#7821).
+var unsupportedFieldList = lazyre.New("(?i)\\bdoes not support (?:this|these) (?:request )?(?:field|fields|parameter|parameters|property|properties|argument|arguments)\\s*:\\s*(['\"\\x60]?[a-z_]+['\"\\x60]?(?:\\s*,\\s*['\"\\x60]?[a-z_]+['\"\\x60]?)*)")
+
 func unsupportedOptionalField(fault any, field string) bool {
 	switch v := fault.(type) {
 	case string:
@@ -9928,6 +9973,13 @@ func unsupportedOptionalField(fault any, field string) bool {
 		for _, match := range valueRejectedForField.FindAllStringSubmatch(v, -1) {
 			if match[1] == field {
 				return true
+			}
+		}
+		for _, match := range unsupportedFieldList.FindAllStringSubmatch(v, -1) {
+			for f := range strings.SplitSeq(match[1], ",") {
+				if strings.Trim(strings.TrimSpace(f), "'\"`") == field {
+					return true
+				}
 			}
 		}
 		if match := leadingRejectedOptionalField.FindStringSubmatch(v); match != nil && match[1] == field {

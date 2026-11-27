@@ -72,10 +72,17 @@ type HubTool struct {
 // a server that keeps something per caller: Magpie Browser's tab, which
 // two agents behind one router would otherwise share, the router running
 // one `magpie mcp browser` for all of them.
+//
+// Base is the address a caller on another computer reaches the gateway
+// at (imageMCPBase: MAGPIE_PUBLIC_URL, else the Host it called), "" for
+// one on this computer: Magpie Artifacts' links are made at it, as a
+// link to 127.0.0.1 opens nowhere but here (#7890). It names an address
+// in an answer and decides nothing.
 type HubCaller struct {
 	Roots   []string
 	Client  string
 	Session string
+	Base    string
 }
 
 // The _meta keys a call of magpie's image server carries its caller in:
@@ -90,6 +97,9 @@ const (
 	// in (HubCaller.Session), to Magpie Browser and to another magpie's
 	// router, which passes it on as its own caller's
 	HubSessionMeta = "magpie/session"
+	// HubBaseMeta is the _meta key a call of Magpie Artifacts carries
+	// HubCaller.Base in, for a caller on another computer
+	HubBaseMeta = "magpie/base"
 )
 
 type hubCallerKey struct{}
@@ -131,6 +141,11 @@ type Hub interface {
 	// computer is recorded, and given the servers on the first time
 	// (library/remote_agents.go)
 	Met(agent string)
+	// Version changes whenever a list the hub gives may have: a server
+	// added, edited, removed or ticked, the switch, a server's tools
+	// listed other than before. The hub's event stream (hubEvents) tells
+	// its clients their tools changed when it does.
+	Version() string
 }
 
 // HubServer is a server behind the hub as an agent is told of it: About
@@ -468,6 +483,12 @@ const errHubOff = "magpie's MCP hub is off, so it runs no server's tools: turn i
 
 func (s *Server) hubMCP(w http.ResponseWriter, r *http.Request) {
 	agent := r.PathValue("agent")
+	if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		if mcpServes(w, r, "magpie's MCP hub", hubServerName) {
+			s.hubEvents(w, r)
+		}
+		return
+	}
 	if r.Header.Get(RouterHeader) != "" {
 		r = r.WithContext(WithRouter(r.Context()))
 	}
@@ -828,7 +849,7 @@ func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, m
 		}
 		return map[string]any{
 			"protocolVersion": mcpVersion(m),
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 			"serverInfo":      map[string]any{"name": "magpie", "title": title, "version": Version},
 			"instructions":    say,
 		}, nil
@@ -947,6 +968,9 @@ func (s *Server) hubCall(r *http.Request, agent string, t hubTool, args json.Raw
 	}
 	if t.Roots {
 		c.Roots, c.Client = hubRoots(r, meta), hubClient(r)
+	}
+	if !local(r) {
+		c.Base = imageMCPBase(r)
 	}
 	r = r.WithContext(WithHubCaller(r.Context(), c))
 	return s.hubMCPRun(r, agent, t, args)

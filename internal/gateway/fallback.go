@@ -2536,8 +2536,9 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	case status == 429:
 		// a relay's 429 often says nothing of when (#503: "负载已饱和，请稍
 		// 后再试"); a plan used up or no money left won't clear in seconds,
-		// nor an account's token wall (walled)
-		return wait, again < rateRetries && failure(status, body) == failRate && !creditWords.Match(wordsOf(body)) && !walled(body)
+		// nor an account's token wall (walled); billing advice beside a
+		// limit per minute is not money spent (moneySaid, #7274)
+		return wait, again < rateRetries && failure(status, body) == failRate && !moneySaid(body) && !walled(body)
 	case regionRefused(status, wordsOf(body)):
 		// refused at the edge the connection reached, which a new
 		// connection a moment later may not be (#5182: answered 12s on);
@@ -5038,6 +5039,28 @@ func namedStatus(body []byte) int {
 		return 0
 	}
 	return textStatus(string(body))
+}
+
+// namedEventStatus is the status a well-formed stream error event names
+// for itself (namedStatusOf), its response's error's first, else its own
+// error's; 0 when it names none. Only carriedError read it, for an error
+// in a shape its protocol's decoder can't read: an Anthropic event's
+// {"type":"error","error":{"type":"permission_error","status":403,…}},
+// as the agy-cli plugin ends a stream for an account Google suspended,
+// was read by its words as a 502, so the account was not set aside as
+// suspended and the request was sent to it again and again (plugins#1563:
+// tries=10 in a minute, each a new agy session at Google).
+func namedEventStatus(data string) int {
+	var v struct {
+		Error    json.RawMessage `json:"error"`
+		Response struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(data), &v) != nil {
+		return 0
+	}
+	return cmp.Or(namedStatusOf(v.Response.Error), namedStatusOf(v.Error))
 }
 
 // namedStatusOf is the status an error object names for itself (#4855):

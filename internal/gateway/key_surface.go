@@ -41,6 +41,13 @@ var keyModelRoutes = map[string]bool{
 	"POST " + ChatPagePath + "/v1/tools/asr":              true,
 	"POST " + ChatPagePath + "/v1/tools/tts":              true,
 
+	// an artifact page's own calls on a model: sample, speech, dictation,
+	// and a comment sent to its agent
+	"POST " + ArtifactPagePath + "{ref}/_api/dictation": true,
+	"POST " + ArtifactPagePath + "{ref}/_api/tts":       true,
+	"POST " + ArtifactPagePath + "{ref}/_api/comments":  true,
+	"POST " + ArtifactPagePath + "{ref}/_api/sample":    true,
+
 	"POST /v1/chat/completions": true, "POST /chat/completions": true,
 	"POST /v1/responses": true, "POST /responses": true, "GET /v1/responses": true, "GET /responses": true,
 	"POST /v1/responses/compact": true, "POST /responses/compact": true,
@@ -71,7 +78,8 @@ var keyMCPRoutes = map[string]bool{
 	BrowserMCPPath: true, MemoryMCPPath: true, SessionsMCPPath: true, ArtifactsMCPPath: true,
 	ToolsMCPPath: true, ToolsMCPOne + "{plugin}": true,
 	HubMCPPath + "{agent}": true, HubMCPAll: true,
-	"GET " + OwnMCPPath: true,
+	"GET " + OwnMCPPath:                           true,
+	"POST " + ArtifactPagePath + "{ref}/_api/mcp": true,
 }
 
 // KeyNoModelsCode is the error code a key for MCP servers only is refused

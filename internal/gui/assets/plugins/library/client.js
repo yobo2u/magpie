@@ -3698,7 +3698,7 @@ magpie.plugin("library", (ctx) => {
     who.append(nm, healthEl(s.name));
     const sub = el("div", "sub mono", serverLine(s));
     sub.title = serverLine(s);
-    who.append(noteSub(s.note, sub, serverLine(s)), toolsEl(s.name));
+    who.append(noteSub(s.note, sub, serverLine(s)), ...(s.bridge ? [twinsEl(s.name)] : []), toolsEl(s.name));
     row.append(mark(s.icon, s.transport === "stdio" ? GLYPH.cmd : GLYPH.web), who, ...removeAct(() => confirmRemoveServer(s)),
       // no agent to give it to: other apps reach it through the router
       ...(agentless() && !all.length ? [] : [agentChips(withGone(all, s.agents), s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true })]),
@@ -3709,6 +3709,31 @@ magpie.plugin("library", (ctx) => {
     row.onclick = () => editServer(s);
     row.title = t("Edit {name}", { name: s.name });
     return row;
+  }
+
+  // A Remote magpie's router lists its servers' tools as <server>__<tool>,
+  // and the hub's servers synced here keep their names: the router gives
+  // an agent the Library's own and leaves the remote's copy out (twinTool
+  // in bridge_mcp.go; starballl on X: every hub tool twice). The router's
+  // row names those it leaves out, once its tools are known.
+  const routerPrefix = (n) => n.replace(/[^A-Za-z0-9_-]+/g, "-") + "__";
+  function twinsOf(name) {
+    const s = lib.servers.find((x) => x.name === name), tools = toolList(name);
+    if (!s?.bridge || !lib.mcpHub || s.hub === "direct" || s.hidden || !tools.length) return [];
+    return lib.servers.filter((o) => !o.bridge && !o.hidden && (o.agents || []).some((a) => (s.agents || []).includes(a)) &&
+      tools.some((tl) => tl.name.startsWith(routerPrefix(o.name)))).map((o) => o.name);
+  }
+  function twinsEl(name) {
+    const box = el("div", "sub lib-twins");
+    box.dataset.server = name;
+    paintTwins(box);
+    return box;
+  }
+  function paintTwins(box) {
+    const name = box.dataset.server, twins = twinsOf(name);
+    box.hidden = !twins.length;
+    box.textContent = twins.length ? t("Agents get {servers} from this Library, not again through {name}", { servers: twins.join(", "), name }) : "";
+    box.title = twins.length ? t("{name} lists the same servers, run on the other magpie. Its copies are left out, and given only while this Library's own can't list its tools", { name }) : "";
   }
 
   // Whether a server goes through the MCP router, on its row: a click
@@ -4083,6 +4108,9 @@ magpie.plugin("library", (ctx) => {
       case "refused": return [t("connection refused"), more(t("Nothing is listening at that address"))];
       case "unreachable": return [t("can't reach"), more(t("Can't reach the server"))];
       case "protocol": return [t("bad reply"), more(t("It answered, but not as an MCP server does"))];
+      // a renewal the server rate-limited (429): still signed in, and
+      // renewed once the server's wait is over (#7451)
+      case "ratelimited": return [t("renewal rate-limited"), more(t("The server is limiting how often magpie renews its sign-in. It stays signed in, and magpie renews it once the wait is over"))];
       // a ${NAME} magpie's own environment hasn't; an agent started from a
       // shell that has it still gets it
       case "novar": return [t("{names} not set", { names: h.detail }), t("magpie can't check it: {names} isn't set where magpie runs. An agent started where it is set still gets it", { names: h.detail })];
@@ -4098,6 +4126,7 @@ magpie.plugin("library", (ctx) => {
     // the hub's count of tools follows each check
     const stats = page.querySelector(".lib-hubstats");
     if (stats) stats.textContent = stats.title = hubStats();
+    page.querySelectorAll(".lib-twins").forEach(paintTwins);
     const boxes = typeof x === "string" ? page.querySelectorAll(`.lib-health[data-server="${CSS.escape(x)}"]`) : [x];
     for (const b of boxes) {
       const e = health.get(b.dataset.server);
@@ -4139,7 +4168,7 @@ magpie.plugin("library", (ctx) => {
       // agent's own launch sets says nothing of the server, so it isn't
       // painted as broken (#2308, ASD-max: Codex's host-only codex_app,
       // whose pipe Codex itself hands it)
-      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
+      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" || e.h.why === "ratelimited" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
       b.replaceChildren(el("span", "", text));
       if (toolList(b.dataset.server).length) {
         const open = toolsOpen.has(b.dataset.server);
