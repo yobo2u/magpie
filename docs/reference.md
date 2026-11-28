@@ -2566,7 +2566,7 @@ A Codex that isn't connected to magpie goes straight to OpenAI on its own
 sign-in, however many of its accounts are on: magpie only moves Codex's
 sign-in (`auth.json`) as above. Connected, a request the signed-in account
 has no allowance for goes on to the others through the gateway. *Only
-switch Codex's sign-in* under Providers › Codex (or `magpie accounts
+switch Codex's sign-in* under Providers › ChatGPT (or `magpie accounts
 switch-only codex on`) keeps Codex's requests off magpie even then
 (#1907). An `openai_base_url` you wrote yourself stays. The
 Codex app and a running `codex app-server` read the sign-in when they
@@ -2583,6 +2583,31 @@ fallback or a Claude Code connected to magpie, is refused as kept to
 Claude Code, so no turn runs through Claude Code's SDK mode, which
 spends more of the allowance than Claude Code used on its own (myduso on
 Discord). Their usage is still read and shown.
+
+*Only switch agy's sign-in* under Providers › Antigravity CLI (or
+`magpie accounts switch-only agy-cli on`) does the same for agy (#1908):
+magpie serves no request on those accounts, and using one signs agy in
+to it where agy keeps its own sign-in (the keychain on macOS, Credential
+Manager on Windows, the Secret Service or agy's token file on Linux).
+The Antigravity app (2.x) reads the same sign-in, so it moves with agy.
+The rows of agy and the Antigravity app on Agents then show the account
+and switch it, as Claude Code's does. magpie renews the account with
+Google first and keeps a copy of what agy had in `agy-keyring-backup.json`
+in magpie's folder. Quit agy and the Antigravity app first: one still
+running keeps the account it started on and writes it back over the
+switch, so magpie refuses, naming what is running, and changes nothing.
+agy started with a Gemini API key or Vertex AI in its environment isn't
+switched. The warm-up sends nothing on these accounts.
+
+Switching is by hand unless you turn on *Switch agy's account
+automatically*, shown under the tick once it is on (or `magpie accounts
+auto-switch agy-cli on`). Then, when the account agy is on has used its
+allowance, the whole account or one of its pools of models (Gemini,
+Claude & GPT), magpie signs agy in to the next account that is on and
+has room there, once agy and the app have quit; till then it waits and
+looks again every ten seconds, and a line under the switch says which
+account is used up and which agy goes to. Unticking
+*Only switch agy's sign-in* turns it off too.
 
 **Switch accounts only.** To use magpie only to switch Claude Code (or
 Codex) between your accounts, leave it not connected on Agents and sign
@@ -4125,6 +4150,7 @@ application:
     - /backend-api/codex
     - /alpha/search
     - /mcp
+    - /v0/management
     - /me
     - /deepseek-chat
     - /join

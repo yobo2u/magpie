@@ -18,11 +18,11 @@ import (
 // router's tools and gives back only what the script returns and logs. A
 // model that needs several calls, or one call whose answer it reads only
 // part of, makes one call in place of many, and the answers it doesn't
-// need never reach its context. The script runs in goja, a JavaScript
+// need never reach its context. The script runs in moejs, a JavaScript
 // interpreter with nothing of the computer's: no files, network,
 // processes, require or import, in a process of its own (coderun: a
-// builtin is past goja's interrupt, and could take magpie's memory or a
-// core with it). What it can reach is the tools
+// builtin that misses the interrupt could take magpie's memory or a core
+// with it). What it can reach is the tools
 // the agent's router gives it, each run as call_tool runs one (hubCall:
 // the key's limit, HereOnly, the Library's off tools, a row of the request
 // log each). settings' RouterNoCode turns it off.
@@ -32,8 +32,21 @@ import (
 const hubCodeTool = "run_code"
 
 // hubCodeWait is how long a script runs in all, its calls included: under
-// the 60s an MCP client gives a call, as hubCallWait is.
+// the 60s an MCP client gives a call, as hubCallWait is. A script with a
+// tool of a server given longer (HubTool.Wait) runs as long as that
+// server's call may (hubCodeBudget).
 var hubCodeWait = hubCallWait
+
+// hubCodeBudget is how long a script against ts runs in all: hubCodeWait,
+// or the longest call timeout among their servers, so a script is never
+// ended before a call of its own tools may be.
+func hubCodeBudget(ts []hubTool) time.Duration {
+	d := hubCodeWait
+	for _, t := range ts {
+		d = max(d, t.Wait)
+	}
+	return d
+}
 
 // hubCodeCalls is how many tool calls one script makes at most, and
 // hubCodeAtOnce how many run at the same time.
@@ -47,7 +60,8 @@ const (
 const hubCodeMax = 40000
 
 // hubCodeHeap is how far the heap of a script's process may grow before
-// it is ended: goja has no memory limit of its own.
+// it is ended, and the interpreter's own memory limit: a builtin that
+// allocates past its count still ends with the process.
 var hubCodeHeap uint64 = 512 << 20
 
 // hubCodeHelper is the program a script runs in, started as
@@ -112,7 +126,7 @@ func hubSkillFile(code string) string {
 // hubCodeSpec is run_code as tools/list gives it, its description after
 // where; onDemand says the tools' parameters come from find_tools, and
 // skills are the agent's skills with code.
-func hubCodeSpec(where string, onDemand bool, skills []HubSkill) map[string]any {
+func hubCodeSpec(where string, onDemand bool, skills []HubSkill, wait time.Duration) map[string]any {
 	pre := ""
 	if where != "" {
 		pre = "[" + where + "] "
@@ -128,7 +142,7 @@ func hubCodeSpec(where string, onDemand bool, skills []HubSkill) map[string]any 
 			"Each tool is an async function on `tools`, by its name: `const r = await tools[\"github__search_issues\"]({q: \"bug\"})` (also tools.github__search_issues, with - as _). " + params + " " +
 			"A tool gives back its structured result, else its text (parsed when it is JSON); a tool's error is thrown. " +
 			"The code is the body of an async function: `return` the result. Plain JavaScript only: no require, import, fetch, files or timers. " +
-			fmt.Sprintf("At most %d tool calls and %s in all.", hubCodeCalls, hubCodeWait) +
+			fmt.Sprintf("At most %d tool calls and %s in all.", hubCodeCalls, hubSecs(wait)) +
 			hubSkillsLine(skills) +
 			" To keep code that worked for next time, run it with save_as: it is saved as a skill of the user's, skills.<name>(args), that reads its inputs from `args`.",
 		"inputSchema": json.RawMessage(`{"type":"object","properties":{` +
@@ -225,7 +239,7 @@ func (s *Server) hubCodeRun(r *http.Request, agent string, ts []hubTool, args js
 		skills = append(skills, coderun.Skill{Name: k.Name, Code: k.Code})
 	}
 	res := coderun.Run(r.Context(), exe, coderun.Script{Code: p.Code, Args: p.Args, Tools: names, Skills: skills}, coderun.Limits{
-		Calls: hubCodeCalls, AtOnce: hubCodeAtOnce, Max: hubCodeMax, Heap: hubCodeHeap, Wait: hubCodeWait,
+		Calls: hubCodeCalls, AtOnce: hubCodeAtOnce, Max: hubCodeMax, Heap: hubCodeHeap, Wait: hubCodeBudget(ts),
 	}, call)
 	if p.SaveAs == nil {
 		return res

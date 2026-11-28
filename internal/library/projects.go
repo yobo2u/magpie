@@ -41,6 +41,9 @@ type Project struct {
 	// wrote in each server's entry there (Codex's startup_timeout_sec):
 	// one other than this is the user's
 	Startup map[string]map[string]float64 `json:"startup,omitempty"`
+	// Calls are, by the project's file, the tool timeout magpie wrote in
+	// each server's entry there, as Applied's
+	Calls map[string]map[string]float64 `json:"calls,omitempty"`
 	// MadeFiles are the files magpie made to write servers in, listed in
 	// the .gitignore and taken away again once nothing's left in them
 	MadeFiles []string `json:"madeFiles,omitempty"`
@@ -122,8 +125,11 @@ type Project struct {
 // (getProjectSkillsDir, @tencent-ai/codebuddy-code 2.164.0) and Command
 // Code .commandcode/skills (commandcode.ai/docs/skills), TRAE CN
 // .trae/skills (its workbench's joinPath(workspace, ".trae", "skills"),
-// 2.3.105403; docs.trae.cn/ide_skills). DeepSeek Harness
-// reads <projectRoot>/.dsh/skills and <projectRoot>/.agents/skills, the
+// 2.3.105403; docs.trae.cn/ide_skills), Qwen Code .qwen/skills
+// (getSkillsBaseDirs in packages/core/src/skills/skill-manager.ts, QwenLM/
+// qwen-code 0011d3aa, with .agents/skills; createProjectResourcePaths in
+// v1.0.0-preview.2, whose .agents/skills a setting turns on). DeepSeek
+// Harness reads <projectRoot>/.dsh/skills and <projectRoot>/.agents/skills, the
 // project root being the nearest folder up from where it runs with a .git
 // in it, else that folder itself (the provider's roots and findProjectRoot,
 // @deepseek-ai/dsh-skill-filesystem 0.2.1-rc.5, mounted by dsh-base's
@@ -157,6 +163,7 @@ var projectSkillsDirs = map[string]string{
 	"codebuddy":   ".codebuddy/skills",
 	"commandcode": ".commandcode/skills",
 	"trae-cn":     ".trae/skills",
+	"qwen":        ".qwen/skills",
 }
 
 // ProjectSkillsDir is the folder, in a project, an agent reads its skills

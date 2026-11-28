@@ -33,6 +33,8 @@
 //                          the contributors page, its table put in from
 //                          public/contributors/<lang>.html (credits-cli.mjs
 //                          wall, at each deploy)
+//   /c/<id>                a contributor's card (cards.js), from
+//                          public/contributors/c/<id>.json
 //   /download              the Apple Silicon dmg
 //   /download/mac-arm64    the same;  /download/mac-intel  the Intel dmg
 //   /download/windows      the Windows app (x64);  /download/windows-arm64
@@ -76,6 +78,7 @@ import { handle as pluginStats, prune as prunePlugins } from "./pluginstats.js";
 import { api as shareAPI, page as sharePage, content as shareContent, prune as pruneShares, CONTENT as SHARE_HOST } from "./shares.js";
 import { api as groupAPI, page as groupPage, prune as pruneGroups } from "./groups.js";
 import { api as liveAPI, ShareLive } from "./live.js";
+import { page as cardPage } from "./cards.js";
 
 // each shared page's data and room (live.js)
 export { ShareLive };
@@ -128,6 +131,10 @@ export default {
     if (url.pathname === "/api/groups" || url.pathname.startsWith("/api/groups/")) return groupAPI(req, env, ctx);
     if (url.pathname.startsWith("/g/") || url.pathname === "/groups" || url.pathname === "/groups/") {
       const got = await groupPage(req, env);
+      if (got) return got;
+    }
+    if (url.pathname.startsWith("/c/")) {
+      const got = await cardPage(req, env);
       if (got) return got;
     }
     if (url.pathname === "/api/plugins/tagged") return taggedPlugins(ctx);
@@ -443,11 +450,14 @@ export async function relay(req, url) {
 // cookieless, since cookieless drops the address before GeoIP and the
 // country with it. It sends page views and leaves, clicks (autocapture,
 // for heatmaps, dead clicks too), Web Vitals and network timings, uncaught
-// errors, and a session recording with every input masked; the recording
+// errors, and a session recording with every input masked and every
+// [data-no-record] element left out (the contributors table's ~47,000
+// elements and the replay's canvas, which would otherwise be copied whole
+// at load and again at every change, at a cost a visitor feels); the recording
 // and the rest of the project's settings come from its remote config, so
 // flags aren't turned off. Nothing is loaded under Do Not Track or Global
 // Privacy Control. Its project is the daily count's.
-const WEB_ANALYTICS = `<script>if(!(navigator.doNotTrack=="1"||window.doNotTrack=="1"||navigator.globalPrivacyControl)){!function(t,e){var o,n,p,r;e.__SV||(window.posthog&&window.posthog.__loaded)||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="capture register unregister opt_out_capturing opt_in_capturing has_opted_out_capturing set_config".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init("${POSTHOG_KEY}",{api_host:location.origin+"/r",ui_host:"https://us.posthog.com",persistence:"localStorage",person_profiles:"identified_only",capture_pageview:true,capture_pageleave:true,autocapture:true,enable_heatmaps:true,capture_dead_clicks:true,capture_exceptions:true,capture_performance:{web_vitals:true,network_timing:true},session_recording:{maskAllInputs:true},disable_surveys:true,respect_dnt:true})}</script>`;
+const WEB_ANALYTICS = `<script>if(!(navigator.doNotTrack=="1"||window.doNotTrack=="1"||navigator.globalPrivacyControl)){!function(t,e){var o,n,p,r;e.__SV||(window.posthog&&window.posthog.__loaded)||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="capture register unregister opt_out_capturing opt_in_capturing has_opted_out_capturing set_config".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init("${POSTHOG_KEY}",{api_host:location.origin+"/r",ui_host:"https://us.posthog.com",persistence:"localStorage",person_profiles:"identified_only",capture_pageview:true,capture_pageleave:true,autocapture:true,enable_heatmaps:true,capture_dead_clicks:true,capture_exceptions:true,capture_performance:{web_vitals:true,network_timing:true},session_recording:{maskAllInputs:true,blockSelector:"[data-no-record]"},disable_surveys:true,respect_dnt:true})}</script>`;
 const BEACON = WEB_ANALYTICS;
 
 // The contributors page: its #wall gets the table credits-cli.mjs rendered

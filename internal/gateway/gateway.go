@@ -357,14 +357,15 @@ func namesInCatalog() map[string]bool {
 
 // switchedOff says a request for model went nowhere because p, which
 // serves it, is switched off in magpie (provider.Provider.Off), or kept to
-// Claude Code's own sign-in (provider.Provider.KeptToAgent), or a Remote
+// its agent's own sign-in (provider.Provider.KeptToAgent), or a Remote
 // magpie that is this one (provider.Provider.SelfLeftOut).
 func switchedOff(p provider.Provider, model string) string {
 	if p.SelfLeftOut() && !p.Off {
 		return fmt.Sprintf("%s is a Remote magpie that is this magpie itself, so %q is not served through it; ask for the model without %q in front, or tick \"Use it anyway\" on it in Magpie's Providers", p.Name, model, p.ID+"/")
 	}
 	if p.KeptToAgent() {
-		return fmt.Sprintf("%s's accounts are kept to Claude Code's own sign-in in Magpie, so %q is not served; untick \"Only switch Claude Code's sign-in\" under its accounts in Magpie's Providers to use it", p.Name, model)
+		a := p.KeptAgentName()
+		return fmt.Sprintf("%s's accounts are kept to %s's own sign-in in Magpie, so %q is not served; untick \"Only switch %s's sign-in\" under its accounts in Magpie's Providers to use it", p.Name, a, model, a)
 	}
 	return fmt.Sprintf("%s is switched off in Magpie, so %q is not served; switch it on again in Magpie's Providers to use it", p.Name, model)
 }
@@ -1000,6 +1001,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		bg.Go("provider.KeepCodexWindowsWarm", func() { provider.KeepCodexWindowsWarm(ctx) })
 		bg.Go("provider.KeepClaudeWindowsWarm", func() { provider.KeepClaudeWindowsWarm(ctx, warmClaude) })
 		bg.Go("provider.KeepAgyWindowsWarm", func() { provider.KeepAgyWindowsWarm(ctx) })
+		// and signs agy in to its next account when the one it is on runs
+		// low, when the user turned that on (#1908)
+		bg.Go("provider.KeepAgyOnAnAccountWithRoom", func() { provider.KeepAgyOnAnAccountWithRoom(ctx) })
 		// and keeps Antigravity's fast-tools plugin starting a magpie that
 		// is there, once it is on
 		bg.Go("keepFastTools", keepFastTools)
@@ -1191,6 +1195,11 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("POST /api/chat", s.ollamaChat(false))
 	mux.HandleFunc("POST /api/generate", s.ollamaChat(true))
 	mux.HandleFunc("GET /v1/magpie/quotas", s.quotas)
+	// CLIProxyAPI's management API, its usage reads alone, for a reader
+	// of a hub's limits (T3 Code, #7402; cliproxy_mgmt.go)
+	mux.HandleFunc(mgmtAuthFilesPattern, s.mgmtAuthFiles)
+	mux.HandleFunc(mgmtAPICallPattern, s.mgmtAPICall)
+	mux.HandleFunc(mgmtPattern, s.mgmtNotFound)
 	mux.HandleFunc("GET "+AccountsPath, s.accountsList)
 	mux.HandleFunc("GET /v1/magpie/usage", s.usageSummary)
 	mux.HandleFunc("GET /v1/magpie/usage/requests", s.usageRequests)
@@ -1198,6 +1207,8 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("GET /v1/magpie/quotas/history", s.quotasHistory)
 	mux.HandleFunc("GET "+provider.RemoteCardsPath, s.quotaCards)
 	mux.HandleFunc("GET "+provider.RemoteLibraryPath, s.sharedLibrary)
+	mux.HandleFunc("GET "+SkillsArchivePath, s.skillsArchive)
+	mux.HandleFunc("GET "+SkillsPullPath, s.skillsPull)
 	mux.HandleFunc("GET "+provider.RemoteAgentModelsPath, s.sharedAgentModels)
 	mux.HandleFunc("POST "+provider.RemoteRefreshPath, s.quotaCardsRefresh)
 	mux.HandleFunc("POST "+provider.RemoteCodexResetPath, s.codexReset)
@@ -1679,6 +1690,24 @@ func (s *Server) codexReset(w http.ResponseWriter, r *http.Request) {
 		done()
 	}
 	writeJSON(w, 200, out)
+}
+
+// cindyLevels are the levels Cindy is offered of a model with levels
+// efforts: all of them but Codex's Ultra. Cindy's picker offers the
+// levels this list gives (parseModelsListResponse) and hands the one
+// picked to the Codex it runs, whose catalog for a provider's model is
+// Codex's own entry or, for one Codex doesn't know, an entry with no
+// levels (catalogWithModels, nativeCodexFallbackModel). Codex sends Ultra
+// as the multi-agent effort, max or the highest level of that entry, and
+// medium where it has none (ModelInfo::resolve_reasoning_effort), so
+// gpt-6.2-astra, which Codex knows from 0.171 and Cindy's runs 0.166 of,
+// went out at medium when Ultra was picked (Zanghaihuase6m on X). Max is
+// still offered, which is what the gateway sends for Ultra (fitEffort).
+func cindyLevels(efforts []string) []string {
+	if !slices.Contains(efforts, "ultra") {
+		return efforts
+	}
+	return slices.DeleteFunc(slices.Clone(efforts), func(e string) bool { return e == "ultra" })
 }
 
 func modelObject(e provider.Entry) map[string]any {
@@ -2167,6 +2196,9 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			// (claude_discovery.go)
 			discovers, who := !magpie && claudeCodeDiscovers(r), access.Caller(r.Context())
 			for i, e := range rows {
+				if agent == "cindy" {
+					e.Efforts = cindyLevels(e.Efforts)
+				}
 				m := rs.row(e, labels[i])
 				id, bare := ids[i]
 				if bare {
@@ -3717,6 +3749,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
 		}
 		call.Status, call.Error = 429, record
+		if from == provider.Anthropic {
+			msg = quotaResetHint(msg, cappedQuotaResetBack(held, time.Now()))
+		}
 		writeError(w, from, 429, msg)
 		turnedAway()
 		return
@@ -4349,6 +4384,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					w.Header().Set("Retry-After", strconv.Itoa(int(d.Seconds())+1))
 				}
 				call.Status, call.Error = 429, cappedRecord(ws)
+				if from == provider.Anthropic && !kept.sent && i == 0 && len(all) == 1 && len(pl.capped) == 0 && len(pl.held) == 0 {
+					msg = quotaResetHint(msg, cappedQuotaResetBack(ws, time.Now()))
+				}
 				failTo(w, kept, from, 429, msg)
 				break
 			}
@@ -6185,7 +6223,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// Codex is told in its stream, the one place it compacts on it
 			failTo(w, kept, from, call.Status, call.Error)
 		} else {
-			hw.release()
+			var back time.Time
+			if from == provider.Anthropic && last && !pass && !hw.passing && !kept.sent && hw.status == http.StatusTooManyRequests && (held || try.Rest != nil) && len(pl.held) == 0 && len(pl.capped) == 0 {
+				// Include candidates probeLeft did not ask again, as well as
+				// those added to the walk later. Each must be known spent.
+				back = quotaResetBack(time.Now(), all, cands)
+			}
+			hw.releaseWithQuotaReset(back)
 			if hw.passing {
 				clientResponseID = call.Usage.ResponseID
 			}
@@ -9206,7 +9250,7 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 					r := *req
 					r.OffLevel, req = l, &r
 				}
-			} else if e := fitEffort(req.Effort, levels); slices.Contains(gemini3Levels, req.Effort) && e != req.Effort {
+			} else if e := fitEffort(req.Effort, levels); (slices.Contains(gemini4Levels, req.Effort) || req.Effort == "max") && e != req.Effort {
 				r := *req
 				r.Effort, req = e, &r
 			}
@@ -10983,7 +11027,7 @@ func encoder(proto provider.Protocol, w *sseWriter, r *Request, usage ...*Usage)
 	// a model's whole floats in a call's arguments reach the client as
 	// integers (grok_integral.go, #1431, #3152), outside usageEncoder,
 	// which reads its encoder's reply id
-	enc = &wholeEncoder{streamEncoder: enc}
+	enc = &wholeEncoder{streamEncoder: enc, named: r.Namespaced}
 	if len(r.Free) > 0 {
 		// a Gemini model's objects of any fields, which it was asked for
 		// as JSON text, read back (gemini_free_objects.go, #7363); past
@@ -11020,7 +11064,7 @@ func render(proto provider.Protocol, res Result, r *Request) []byte {
 	model := r.Model
 	// a model's whole floats in a call's arguments reach the client as
 	// integers (grok_integral.go, #1431, #3152)
-	res = wholeResult(res)
+	res = wholeResult(res, r.Namespaced)
 	// a call naming no function reaches no client (nameless_calls.go, #7565)
 	res = namelessResult(res)
 	if r.CR {
@@ -11713,8 +11757,8 @@ func onEffort(p provider.Provider, model string) string {
 
 // geminiLevels are the thinking levels model is asked at on Gemini's
 // OpenAI-compatible API, less those it turned away before (turnedAway):
-// its own, or Gemini 3's where they aren't known or none of its own is
-// left.
+// its own, or Gemini 3's / Gemini 4's where they aren't known or none of
+// its own is left.
 func (s *Server) geminiLevels(p provider.Provider, model string, to provider.Protocol) []string {
 	left := func(levels []string) []string {
 		return slices.DeleteFunc(slices.Clone(levels), func(l string) bool {
@@ -11723,6 +11767,9 @@ func (s *Server) geminiLevels(p provider.Provider, model string, to provider.Pro
 	}
 	if levels := left(p.Efforts(model)); len(levels) > 0 {
 		return levels
+	}
+	if geminiGeneration(strings.ToLower(model)) >= 4 {
+		return left(gemini4Levels)
 	}
 	return left(gemini3Levels)
 }
@@ -12240,17 +12287,23 @@ func writeErrorAs(w http.ResponseWriter, proto provider.Protocol, status int, ty
 	case provider.Anthropic:
 		v = map[string]any{"type": "error", "error": map[string]any{"type": typ, "message": msg}}
 	case provider.Gemini:
-		st := map[int]string{400: "INVALID_ARGUMENT", 408: "DEADLINE_EXCEEDED", 413: "INVALID_ARGUMENT", 401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED", 404: "NOT_FOUND",
-			429: "RESOURCE_EXHAUSTED", 500: "INTERNAL", 502: "UNAVAILABLE", 503: "UNAVAILABLE", 529: "UNAVAILABLE"}[status]
-		if st == "" {
-			st = "UNKNOWN"
-		}
-		v = map[string]any{"error": map[string]any{"code": status, "message": msg, "status": st}}
+		v = map[string]any{"error": map[string]any{"code": status, "message": msg, "status": geminiStatus(status)}}
 	default:
 		v = map[string]any{"error": map[string]any{"message": msg, "type": typ, "code": code, "param": param}}
 	}
 	writeJSON(w, status, v)
 	return status
+}
+
+// geminiStatus is the google.rpc.Code status a Gemini client is told an
+// HTTP code's error with, as Google's HTTP mapping gives it: ABORTED for
+// 409, which ALREADY_EXISTS shares, INVALID_ARGUMENT for 422, which no
+// status has, and "UNKNOWN" for a code it doesn't map.
+func geminiStatus(code int) string {
+	return cmp.Or(map[int]string{400: "INVALID_ARGUMENT", 401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED", 404: "NOT_FOUND",
+		408: "DEADLINE_EXCEEDED", 409: "ABORTED", 413: "INVALID_ARGUMENT", 422: "INVALID_ARGUMENT", 429: "RESOURCE_EXHAUSTED",
+		499: "CANCELLED", 500: "INTERNAL", 501: "UNIMPLEMENTED", 502: "UNAVAILABLE", 503: "UNAVAILABLE", 504: "DEADLINE_EXCEEDED",
+		529: "UNAVAILABLE"}[code], "UNKNOWN")
 }
 
 // tooLongRe matches how vendors say a request is more than the model's

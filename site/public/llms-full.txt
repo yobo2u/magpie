@@ -1610,7 +1610,7 @@ The personal plan used to be at `api.lkeap.cloud.tencent.com` until Tencent move
 
 ## The plans' models
 
-The plans give no model list of their own, and the public catalog names only their Hy models, so magpie gives the models from Tencent's plan docs: tc-code-latest, auto, glm-5.3, glm-5.3-flash, kimi-k3, kimi-k2.7-code, deepseek-v4-pro, deepseek-v4.1-flash, minimax-m3, hy4-preview, hy3, mimo-v2.6-pro, among others. tc-code-latest is whichever model the console has picked. A pay-as-you-go key reads TokenHub's `/v1/models`, which has other makers' models such as Qwen too.
+magpie asks the plan for its model list first. When it gives none, and since the public catalog names only the plans' Hy models, magpie gives the models from Tencent's plan docs (updated 2026-11-25): tc-code-latest, auto, hy4, hy4-flash, hy3, glm-5.4, glm-5.3, glm-5.3-flash, kimi-k3.1-pro, kimi-k3, kimi-k2.7-code, deepseek-v4-pro, deepseek-v4.1-flash, minimax-m3.1-flash, minimax-m3, mimo-v2.6-pro, among others. tc-code-latest is whichever model the console has picked. A pay-as-you-go key reads TokenHub's `/v1/models`, which has other makers' models such as Qwen too.
 
 ## In each agent
 
@@ -3757,7 +3757,7 @@ There is no CLI command for it. Without the window (`magpie serve`, [Docker](htt
 | Switch | What it finds |
 | --- | --- |
 | Mask secrets | Private key blocks (`-----BEGIN … PRIVATE KEY-----`). API keys by their shape: `sk-…` (OpenAI, Anthropic, OpenRouter), `ghp_`/`github_pat_`, `glpat-`, `AIza…`, `xox…-`, `sk_live_`, `AKIA`/`ASIA`, `hf_`, `gsk_`, `xai-`, `npm_`, `pypi-`, `dop_v1_`, `SG.`, Cloudflare's (`cfut_`, `cfat_`, `cfk_`, `cfoat_`, Origin CA `v1.0-`, tunnel tokens), and relay keys like `oc_sk_…`. JWTs. The password in `user:password@host`. The value of a field named for a secret, as `.env` files and configs have them: `DB_PASSWORD=…`, `api_key: …`, `client_secret`, `token`, `credential`. Your own Masking rules. Wallet private keys by the shape their wallets export: a Bitcoin WIF, a BIP32 `xprv`, an Ethereum or TRON `0x` key, a Solana key or `id.json` keypair, a Sui `suiprivkey1…`, an Aptos `ed25519-priv-0x…`, a Stellar seed, a NEAR `ed25519:…` key, a Nostr `nsec1…`, an age identity, a Zcash extended spending key, and a 12 to 25 word seed phrase after *seed* or *mnemonic* whose every word is in the BIP39 list. A key with no prefix of its own is masked only when it checks out: a WIF or `xprv` by its checksum, a Solana key by its public half, a Stellar seed by its CRC, so a Solana transaction signature goes as written. A `0x` key has the shape of a transaction hash, so it is masked only after a key&rsquo;s name (`PRIVATE_KEY=`, `--private-key`, `new Wallet(…)`, 私钥); a hash, a storage slot or a sha256 sum goes as written. An exchange&rsquo;s API key, secret and `passphrase` go by their fields&rsquo; names. |
-| Mask personal data | Emails, mainland China mobile numbers (not an 11-digit id: one under `order_id` or after 订单号 goes as written), Chinese ID numbers and bank card numbers whose checksum adds up. Also on by default: US Social Security numbers, passport numbers (after *passport*, 护照 or パスポート), IBANs, birthdays (next to *birthday*, *DOB* or 生日, and over a year ago, so today&rsquo;s date stays), MAC addresses and serial numbers (after *S/N*). Off until you turn them on, since agents send them in nearly every request: the user name in home folders (sent as a made-up name, the same every turn, so the model reads a real folder rather than a placeholder), user and computer names (`user@host`), public IP addresses (sent as a name such as `public-ip-kvxqmrtz`, so the model still knows the address is public and connects with it, and the real address goes back into its commands) and cloud storage buckets. A wallet or contract address (`0x` and 40 hex digits) is public and goes as written; a private key is still masked. |
+| Mask personal data | Emails, mainland China mobile numbers (not an 11-digit id: one under `order_id` or after 订单号, a log’s *trace* or *req*, a count or an amount such as `15012345678 bytes` or `$15012345678`, or a path’s piece such as `/users/15012345678` goes as written), Chinese ID numbers and bank card numbers whose checksum adds up. Also on by default: US Social Security numbers, passport numbers (after *passport*, 护照 or パスポート), IBANs, birthdays (next to *birthday*, *DOB* or 生日, and over a year ago, so today&rsquo;s date stays), MAC addresses and serial numbers (after *S/N*). Off until you turn them on, since agents send them in nearly every request: the user name in home folders (sent as a made-up name, the same every turn, so the model reads a real folder rather than a placeholder), user and computer names (`user@host`), public IP addresses (sent as a name such as `public-ip-kvxqmrtz`, so the model still knows the address is public and connects with it, and the real address goes back into its commands) and cloud storage buckets. A wallet or contract address (`0x` and 40 hex digits) is public and goes as written; a private key is still masked. |
 | Masked words | Each word you listed, exactly, as `{{TERM_…}}`. A date, such as *1990-05-12*, matches that day however it is written: *1990/5/12*, *1990.05.12*, *1990年5月12日*, *19900512*, *May 12, 1990*, and *13/05/1990* style only where the day can’t be read as a month. Never another date or a version like *1990.5.12.1*. |
 | Find with a local model | Under How it’s found. A model on this computer finds what no rule can: a name or an address in free text. It is on unless you turned it off, and AstrLink Guard downloads with the first masked request; until it is on disk, the rules mask alone. It needs Mask secrets or Mask personal data on, and finds under the same switches. The menu beside it picks the model: AstrLink Guard (Chinese and English, a 39 MB download, few false alarms in code, on a Mac it runs on the Neural Engine; the default) or OpenAI’s Privacy Filter (1.6 GB, uses the GPU, masks more ordinary values in code). A plugin can add models of its own to the menu ([a local masking model](plugins.html#privacy-models)), each under the name its options give; one whose plugin is off or whose files are gone says so, and until it is back the rules mask alone. Confidence threshold under it is how sure the model must be before a value is masked: Privacy Filter’s default is 0.5, AstrLink Guard’s 0.8, its publisher’s. Higher masks fewer ordinary values, and lets more real names and addresses through: the rules after the model drop most false alarms already, so the default is where we measured the fewest real values lost. The models are kept in magpie’s cache folder. To keep them elsewhere (on Windows, off the C: drive), open Advanced under the model and choose Models folder › Move…: what is downloaded is copied there, checked, and only then deleted from the old place; Move back returns it. |
 
@@ -5060,6 +5060,19 @@ The instances' names, whether they are on, and every key magpie doesn't write (s
 ## Claude Code's own routing
 
 The `env` in `~/.claude/settings.json` is applied over the process', so a Claude Code routed elsewhere in its own settings takes the magpie instance's requests there; one routed through magpie or not routed at all asks the gateway. A provider switch on there, such as `CLAUDE_CODE_USE_BEDROCK`, takes it to that cloud, and magpie's check says so.
+
+## Usage limits
+
+T3 Code's Usage → Limits can show magpie's subscriptions, and a magpie thread then says when its limit is back. In T3 Code open Settings → Providers → Usage providers → Add hub, with the gateway's address as the hub URL and a gateway key as the management key. A read-only key is enough:
+
+```
+magpie gateway-key add "T3 Code" --read-only
+# Hub URL: http://127.0.0.1:3425   Management key: the sk-magpie-key-… it prints
+```
+
+- The hub URL is the address magpie wrote into the two instances (the port in Settings' Gateway address), so T3 ties the hub's limits to them.
+- It lists the Codex, Claude and Grok accounts magpie has, each window's use and reset as magpie last read them. T3 counts every account of a harness for each of its models, so a thread shows a limit only once all of them are used up.
+- The gateway asks no vendor for it and tells no token. It answers only the hub's account list and each account's usage read; Use reset and the hub's other management routes are refused. Without a key it answers nothing, from this computer too.
 
 ## Switching back
 
@@ -9163,6 +9176,8 @@ curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'
 
 magpie's own skill `magpie-quota` lets an agent read `magpie quota --json` and wait with `magpie quota wait`. It is first in the Library's skills market. Beside it, `magpie-api` teaches an agent this API, and `/v1/models` and `/v1/magpie/route` (the model a routing group picked) too, for an agent that hands work out across models.
 
+A reader of a CLIProxyAPI hub's limits reads them too: the gateway answers that management API's account list and usage reads from these quotas, to a gateway key (read-only is enough), and nothing else of it. T3 Code's [Add hub](https://usemagpie.ai/docs/t3-code#limits) is set up this way.
+
 ## Alerts
 
 Have the magpie app notify you when any window of a subscription or plan reaches a share used, once each time the window runs, or when a balance falls to an amount or under, in its own currency or credits, once until topped up past it. Both are off until set; `off` turns either off.
@@ -10442,6 +10457,7 @@ An MCP server is either a command (a program the agent starts, such as `npx …`
 | Claude Code | `~/.claude.json` |
 | Codex | `~/.codex/config.toml` |
 | Gemini CLI | `~/.gemini/settings.json` |
+| Qwen Code | `~/.qwen/settings.json` |
 | Antigravity | `~/.gemini/config/mcp_config.json` |
 | OpenCode | `opencode.json` |
 | Cursor | `~/.cursor/mcp.json` |
@@ -10450,7 +10466,7 @@ An MCP server is either a command (a program the agent starts, such as `npx …`
 
 - **Variables..** `${NAME}` in a header or an env value is written in each agent’s own syntax. An agent that has no such syntax is not given that server, and the page says why.
 - **SSE..** Codex, Goose, dsh, Grok, Command Code and Zed can’t use an SSE server. Claude Desktop takes no remote servers at all.
-- **Single tools off..** You can turn off tools one by one for Codex, Gemini CLI, Crush, Hermes Agent, Claude Code and OpenCode, each in its own setting. Every other agent gets the whole server.
+- **Single tools off..** You can turn off tools one by one for Codex, Gemini CLI, Qwen Code, Crush, Hermes Agent, Claude Code and OpenCode, each in its own setting. Every other agent gets the whole server.
 - **Sign-in..** A server that needs OAuth is signed in to once, in magpie. Agents then reach it through magpie’s gateway at `/mcp/<name>`.
 - **This computer only..** Turn off Sync to your other computers for a server that should stay here (`magpie library mcp local <name> on`).
 - **Another command here..** For a synced server whose program sits elsewhere on this computer (a Mac and WSL), click Use another command on this computer under its command. Its name, agents and note still sync; your other computers keep running theirs (`magpie library mcp here <name> <command…>`).
@@ -10466,6 +10482,7 @@ A skill is a folder with a `SKILL.md` in it. The agent reads each skill’s name
 | Claude Code | `~/.claude/skills` |
 | Codex | `~/.codex/skills` |
 | Gemini CLI | `~/.gemini/skills` |
+| Qwen Code | `~/.qwen/skills` |
 | OpenCode | `skills` in its config folder |
 | Cursor | `~/.cursor/skills` |
 | Copilot CLI | `~/.copilot/skills` |
@@ -10857,7 +10874,7 @@ Without `web --addr 0.0.0.0:3430 --no-open` the container runs the gateway alone
 
 Open the link from the log. The key in it is traded for a cookie and taken out of the address; a page opened without it is turned away (401). With `MAGPIE_WEB_KEY` set (16 or more letters, digits or `- . _ ~`; `openssl rand -hex 16` makes one) the key stays the same across restarts, and a browser stays signed in for 400 days. Without it, every start makes a new key: a browser stays signed in, closed and opened again too, until magpie starts again, and then needs the new link.
 
-The page is in **gateway mode**: Providers, Gateway, Routing, Usage, Sessions, Plugins and Settings, with no Agents, since there are no agents in the container. Library has its MCP servers, with the MCP router: other computers’ apps connect at the router’s address with a gateway key. Beside them are its Skills and Instructions: a magpie on another computer that adds this one as an Another computer’s magpie provider, with Use its skills and prompts on, takes them and gives them to its own agents, since a skill is a folder on the agent’s computer. Sessions lists only the sessions of agents on other computers that came through this gateway, never this machine’s agents’ files. Settings → General → Gateway mode turns it off.
+The page is in **gateway mode**: Providers, Gateway, Routing, Usage, Sessions, Plugins and Settings, with no Agents, since there are no agents in the container. Library has its MCP servers, with the MCP router: other computers’ apps connect at the router’s address with a gateway key. Beside them are its Skills and Instructions: a magpie on another computer that adds this one as an Another computer’s magpie provider, with Use its skills and prompts on, takes them and gives them to its own agents, since a skill is a folder on the agent’s computer. An agent on a computer with no magpie gets them as in Skills on other computers. Sessions lists only the sessions of agents on other computers that came through this gateway, never this machine’s agents’ files. Settings → General → Gateway mode turns it off.
 
 On a NAS or a server you reach over SSH, open the page through a tunnel rather than publishing 3430: `ssh -L 3430:127.0.0.1:3430 you@nas`, then the log’s link on your own computer.
 
@@ -10890,6 +10907,21 @@ The Library’s MCP servers run in the container, and the image has what they st
 The image has no browser. Chrome DevTools’ and Playwright’s MCP servers start a Chrome of their own, so in the container their row in the Library says no Chrome here. Use Magpie Browser instead, which acts in your own browser, or point the server at a Chrome it can reach: `--browserUrl http://host:9222` for Chrome DevTools, `--cdp-endpoint` for Playwright.
 
 An app on the host or another machine reaches the [MCP router](https://usemagpie.ai/docs/mcp-router) from outside the container. With a gateway key that has a model, account or spend limit, it is given only the Library’s URL servers, not the ones the container runs as programs (`npx`, `uvx` and the like). Give it a key with no such limit to get those too; the router tells the app which servers it left out and why ([From another computer](https://usemagpie.ai/docs/mcp-router#away)).
+
+## Skills on other computers
+
+An agent on a computer with no magpie of its own gets the Library’s skills from the container in two ways. Both need a gateway key with no model, account, spend or MCP limit (a key for MCP servers only is fine); a key with such a limit is told it gets none (the pull below stops at `curl: (22) … 403`; at `401`, the key isn’t one of that magpie’s).
+
+**Through the MCP router.** An agent connected to the [MCP router](https://usemagpie.ai/docs/mcp-router) is told the skills in its instructions and given a `get_skill` tool, which gives a skill’s `SKILL.md` and each of its files. Nothing is installed on that computer. At `/mcp/magpie/hub/claude` it gets the skills ticked for Claude Code and those ticked for no agent, which in a container is every skill.
+
+**As folders on that computer.** For an agent that reads skills only from its own folder, or a skill whose scripts run there, pull them on that computer:
+
+```
+export MAGPIE_KEY=sk-magpie-key-…
+curl -fsSL -H "Authorization: Bearer $MAGPIE_KEY" http://192.168.1.20:3425/v1/magpie/skills/pull.sh | sh
+```
+
+It copies every skill into `~/.agents/skills`, and into `~/.claude/skills` when Claude Code is there (`MAGPIE_SKILLS_DIRS`, folders joined by `:`, says others). Run it again, by hand or from cron, to bring them up to date. A folder of your own with the same name is never written over, nor a pulled skill you changed; a skill gone from the Library is removed only if you haven’t changed it. Each pulled folder has a `.magpie-pulled` file saying where it came from. It needs `sh`, `curl` and `tar`; on Windows, run it in Git Bash or WSL.
 
 ## Your own browser
 

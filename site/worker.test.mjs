@@ -697,7 +697,13 @@ test("contributors: each language's page gets its own table, and keeps its line 
     const get = async (path) => (await worker.fetch(new Request(`https://usemagpie.ai${path}`, { headers: { Cookie: "lang=en" } }), env, ctx)).text();
     for (const [path, lang, head] of [["/docs/contributors", "en", "What came of it"], ["/docs/zh/contributors", "zh", "带来的改动"], ["/docs/ja/contributors.html", "ja", "そこから生まれた"]]) {
       const html = await get(path);
-      assert.match(html, /<div id="wall"><div class="table-wrap"><table class="cw">/, path);
+      assert.match(html, /<div id="wall"><div class="cw-find" hidden [^>]*><input id="cw-q" [^>]*><span class="cw-n" aria-live="polite"><\/span><\/div><div class="table-wrap cw-wrap" data-no-record><div class="cw-part" style="--h:\d+px"><table class="cw"><colgroup><col class="cw-c1"><col><\/colgroup><thead>/, path);
+      // the table and the replay stay out of session recordings
+      assert.ok(html.includes('<div id="replay" class="replay" data-no-record hidden>'), path);
+      assert.ok(html.includes('blockSelector:"[data-no-record]"'), path);
+      // the finder's script, and the row a link lands on
+      assert.ok(html.includes('<script src="/wall.js"></script>'), `${path} loads the finder`);
+      assert.ok(html.includes('<tr id="packinggoodsllc_07668">'), path);
       assert.ok(html.includes(head), `${path} has the ${lang} table`);
       assert.ok(html.includes("packinggoodsllc_07668") && html.includes("v0.1.2581"), path);
       assert.match(html, /posthog\.init\(/, `${path} keeps the analytics`);
@@ -1021,4 +1027,51 @@ test("plugins/readme: a plugin's kept README passed on, from jsDelivr when raw f
   } finally {
     globalThis.fetch = was;
   }
+});
+
+test("contributor card: /c/<id> serves the card in the reader's language, escaped", async () => {
+  const card = { id: "ada", name: "Ada <b>", no: 7, of: 9, n: 2, github: "ada", pic: "https://avatars.githubusercontent.com/ada?s=400", since: { v: "0.1.2", t: 2000 },
+    lines: [{ v: "0.1.2", href: "https://github.com/yetone/magpie/releases/tag/v0.1.2", t: "gateway: </script><script>alert(1)</script>" }, { v: "0.1.3", href: "javascript:alert(1)", t: "two" }] };
+  const asked = [];
+  const env = { ASSETS: { fetch: async (r) => {
+    const p = new URL(r.url).pathname;
+    asked.push(p);
+    return p === "/contributors/c/ada.json" ? Response.json(card) : new Response("nf", { status: 404 });
+  } } };
+  const get = (path, headers = {}) => worker.fetch(new Request("https://usemagpie.ai" + path, { headers }), env, ctx);
+
+  let res = await get("/c/ada");
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("Content-Security-Policy"), /script-src 'self' 'nonce-[^']+'/);
+  assert.equal(res.headers.get("Vary"), "Accept-Language");
+  let html = await res.text();
+  assert.match(html, /<html lang="en">/);
+  assert.match(html, /Ada &lt;b&gt; · magpie contributor No\. 0007/);
+  assert.ok(!html.includes("<b>"), "the name is escaped");
+  assert.ok(!html.includes("</script><script>alert"), "a line can't end the data script");
+  assert.ok(!html.includes("javascript:"), "a link that isn't https is dropped");
+  assert.match(html, /<meta property="og:image" content="https:\/\/avatars\.githubusercontent\.com\/ada\?s=400">/);
+  assert.equal((html.match(/<li>/g) || []).length, 2);
+
+  html = await (await get("/c/ada", { "Accept-Language": "zh-CN,zh;q=0.9" })).text();
+  assert.match(html, /<html lang="zh-CN">/);
+  assert.match(html, /magpie 第 0007 号贡献者/);
+  html = await (await get("/c/ada?lang=ja", { "Accept-Language": "zh-CN" })).text();
+  assert.match(html, /<html lang="ja">/);
+
+  res = await get("/c/Ada?lang=zh");
+  assert.equal(res.status, 301);
+  assert.equal(res.headers.get("Location"), "https://usemagpie.ai/c/ada?lang=zh");
+
+  asked.length = 0;
+  for (const path of ["/c/nobody", "/c/a%2Fb", "/c/..%5C..", "/c/%E0%A4%A"]) {
+    res = await get(path, { "Accept-Language": "zh" });
+    assert.equal(res.status, 404, path);
+    assert.match(await res.text(), /href="\/docs\/zh\/contributors"/, path);
+  }
+  assert.deepEqual(asked, ["/contributors/c/nobody.json"], "only a plain id is looked up");
+
+  res = await worker.fetch(new Request("https://usemagpie.ai/c/ada", { method: "HEAD" }), env, ctx);
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "");
 });

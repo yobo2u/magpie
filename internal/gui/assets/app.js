@@ -372,7 +372,7 @@ function toneCheck(img) {
     swap();
   }, { once: true });
 }
-const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "catpaw", "openbot", "avibe", "kun", "nowledge-mem"]);
+const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "catpaw", "openbot", "avibe", "kun", "nowledge-mem", "orca"]);
 
 // lazy: a picture in a long list (Plugins' rows) is asked for near the
 // screen: each SVG an <img> draws is a ~0.6 MB webview document, kept (#909)
@@ -1412,11 +1412,11 @@ function connectLine(a, kind) {
   if (!a.wired) {
     const src = a.source || "";
     const sw = switchEntry(a);
-    if (kindOf(a) === "agy") say(t("Not connected · once connected, start it with magpie's command"));
+    if (kindOf(a) === "agy" && !sw) say(t("Not connected · once connected, start it with magpie's command"));
     // through magpie only for failover (#1385): the line says so
     else if (a.failover) {
       say(t("Not connected · goes through magpie only to fail over to your other ChatGPT accounts"));
-      words.title = t("magpie set openai_base_url in {agent}'s config.toml, so a request the ChatGPT account {agent} is signed in to has no allowance for goes on to your other ChatGPT accounts on in magpie. {agent} keeps to its own models. To stop it, tick Only switch {agent}'s sign-in under Providers › Codex, or switch those accounts off; connecting {agent} adds magpie's models.", { agent: a.name });
+      words.title = t("magpie set openai_base_url in {agent}'s config.toml, so a request the ChatGPT account {agent} is signed in to has no allowance for goes on to your other ChatGPT accounts on in magpie. {agent} keeps to its own models. To stop it, tick Only switch {agent}'s sign-in under Providers › ChatGPT, or switch those accounts off; connecting {agent} adds magpie's models.", { agent: a.name });
     }
     else if (sw?.p.switchOnly) say(t("Not connected · switching accounts only"));
     // with Claude Magpie made, connecting wires it, not the user's own Desktop (desktopSets; xMopf7RF on X)
@@ -1631,12 +1631,17 @@ function connectRow(a, row, who, { fields, extras, fieldBtn, sw, kind }) {
 
 // Switch accounts only (the owner on X): a Claude Code or Codex not connected says its account
 let accountSwitched = null, panelAccts = null;
-const switchesAccounts = (a) => !a.wired && (a.id === "claude" || a.id === "codex");
+// agy and the Antigravity app share agy's sign-in, which magpie switches
+// between Antigravity CLI's accounts with Only switch on (#1908)
+const agyShares = (a) => /^(agy|antigravity)$/.test(a.id);
+const switchesAccounts = (a) => !a.wired && /^(claude|codex|agy|antigravity)$/.test(a.id);
+const switchesVia = (a) => agyShares(a) ? "agy-cli" : a.id;
 
 function switchable(a) {
   if (!switchesAccounts(a)) return null;
-  const p = (mode === "panel" ? panelAccts : providers || providersEarly?.got)?.providers?.find((x) => x.id === a.id && x.account?.agent === a.id);
-  return p && loginsInOrder(p.account, p)[0]?.user ? p : null;
+  const id = switchesVia(a), p = (mode === "panel" ? panelAccts : providers || providersEarly?.got)?.providers?.find((x) => x.id === id && x.account?.agent === id);
+  // agy's: only with Only switch on, where picking one signs agy in to it
+  return p && (!agyShares(a) || p.switchOnly) && loginsInOrder(p.account, p)[0]?.user ? p : null;
 }
 
 function switchEntry(a) {
@@ -1660,6 +1665,8 @@ function switchEntry(a) {
   b.append(pn ? el("span", "chev", svg(CHEV, 11, 1.7)) : svg(CHEV, 10, 1.6));
   const opts = ls.filter((l) => !l.token && !l.accessOnly).map((l) => ({ v: "u:" + l.user, name: l.user, literalName: true, note: l.lapsed ? "Sign-in required" : accountPlan({ ...l, agent: a.id }) }));
   const on = cx ? t("magpie only switches {agent}'s sign-in; its requests go straight to OpenAI", ag) : t("magpie serves no requests on these accounts");
+  // agy's sign-in is agy's own, whichever row (agy, or the Antigravity app) it is picked from
+  if (agyShares(a)) ag.agent = "agy";
   // the Only switch setting, where the accounts page offers it
   if (!cx || ls.filter((l) => !l.lapsed && (l.active || l.on)).length > 1) opts.push({ v: "only", name: t("Only switch {agent}'s sign-in", ag), literalName: true, ticked: !!p.switchOnly, note: on });
   opts.push({ v: "manage", name: "Manage accounts…", note: "" });
@@ -1686,7 +1693,7 @@ function switchEntry(a) {
 async function switchAccountTo(a, p, user) {
   const said = t("{agent} is now signed in as {user}. New {agent} sessions use this account; one already open keeps its account until it is started again.", { agent: a.name, user });
   // kept signed in to one of the user's choosing (#524): that choice moves
-  if (!await (keptLogin(p) ? accountAction("provider/keeplogin", { id: p.id, keepLogin: true, keepLoginAs: user }, said) : accountAction("login/switch", { agent: a.id, user }, said))) return;
+  if (!await (keptLogin(p) ? accountAction("provider/keeplogin", { id: p.id, keepLogin: true, keepLoginAs: user }, said) : accountAction("login/switch", { agent: switchesVia(a), user }, said))) return;
   accountSwitched = { agent: a.id, user, at: performance.now() };
   renderAgents();
 }
@@ -3419,13 +3426,16 @@ async function openAgentModels(a, anchor, ev) {
   // joins: shown only its picks, it takes in the models ticked in a
   // provider's editor too (eiyuuzaki2333 on X)
   let models, ordered = false, only = false, own = false, ownHidden = false, joins = false;
-  try { [{ models, ordered, only = false, own = false, ownHidden = false, joins = false }] = await Promise.all([api("agent-models/" + encodeURIComponent(a.id)), import("./agentjoin.js").catch(() => {})]); }
+  try { [{ models, ordered, only = false, own = false, ownHidden = false, joins = false }] = await Promise.all([api("agent-models/" + encodeURIComponent(a.id)), import("./agentjoin.js").catch(() => {}), import("./modelorder.js").catch(() => {})]); }
   catch (e) {
     if (agentModelsLoading === loading) { loading.drop(); statusErr(e); }
     return;
   }
   if (agentModelsLoading !== loading) return;
   loading.drop();
+  // one turned off for agents on the Gateway page stays as it is here,
+  // as one the agent is set to does
+  for (const m of models) if (m.off) m.inUse = 1;
   // the button as it is drawn now
   anchor = loading.anchor;
   if (!anchor.isConnected) return;
@@ -3433,7 +3443,16 @@ async function openAgentModels(a, anchor, ev) {
   box.setAttribute("role", "dialog");
   box.setAttribute("aria-label", t("{agent}'s model list", { agent: a.name }));
   const head = el("div", "am-head");
-  head.append(el("div", "am-t", t("{agent}'s model list", { agent: a.name })),
+  // by provider, or by maker as a provider's editor has its models
+  // (elis_pina on X), kept for the next time
+  let byMaker = !!window.makerGroups && kept("agentModelsBy", "") === "maker";
+  const segBy = el("div", "am-by"), byP = el("button", "", t("By provider")), byM = el("button", "", t("By maker"));
+  byP.type = byM.type = "button";
+  segBy.append(byP, byM);
+  segBy.hidden = !window.makerGroups;
+  const ht = el("div", "am-ht");
+  ht.append(el("div", "am-t", t("{agent}'s model list", { agent: a.name })), segBy);
+  head.append(ht,
     el("div", "am-d", t("Models turned off don't show in {agent}'s model picker; other agents can still use them.", { agent: a.name })));
   // the models the agent reaches itself, not through magpie, shown in its
   // picker beside magpie's or left out (MizuIro-H, #1642): not in the list
@@ -3481,36 +3500,36 @@ async function openAgentModels(a, anchor, ev) {
   // takes back a first click on Hide all or Show all (twice, below)
   let disarm = () => {};
   foot.append(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset, joinBox);
-  // groups as the catalog has them, routing groups first; a long one
-  // starts folded, unless the agent is set to a model in it
+  // groups by provider or maker, routing groups first, each the newest
+  // first unless dragged (agentGroups, modelorder.js); a long one starts
+  // folded, unless the agent is set to a model in it
   const groups = [];
-  const regroup = () => {
-    groups.length = 0;
-    for (const m of models) {
-      let g = groups.find((x) => x.name === m.group);
-      if (!g) groups.push(g = { name: m.group, icon: m.icon, models: [] });
-      g.models.push(m);
-    }
-    groups.sort((x, y) => (y.name === ROUTING_GROUPS) - (x.name === ROUTING_GROUPS));
-  };
+  const regroup = () => groups.splice(0, groups.length, ...self.agentGroups?.(models, byMaker, ordered) || [{ name: "", models }]);
+  const gname = (g) => g.label || (g.name === ROUTING_GROUPS ? t(g.name) : g.name);
   regroup();
-  // folding is for telling providers apart: routing groups don't count,
-  // so a group switched on never folds away the one provider's models
-  // (shiqi_40904 on Discord)
-  const providers = groups.filter((g) => g.name !== ROUTING_GROUPS).length;
-  const shut = new Set(groups.filter((g) => providers > 1 && g.models.length > 8 && !g.models.some((m) => m.inUse)).map((g) => g.name));
+  // folding is for telling providers (or makers) apart: routing groups
+  // don't count, so a group switched on never folds away the one
+  // provider's models (shiqi_40904 on Discord); once a way of grouping
+  const shut = new Set(), folded = new Set();
+  const fold = () => {
+    if (folded.has(byMaker)) return;
+    folded.add(byMaker);
+    const n = groups.filter((g) => g.name !== ROUTING_GROUPS).length;
+    for (const g of groups) if (n > 1 && g.models.length > 8 && !g.models.some((m) => m.inUse)) shut.add(g.name);
+  };
+  fold();
   // with a few providers, a rail of them down the left: one picked shows
   // its models alone, so a long list is one click away rather than a
   // scroll down past the others (蓝猫 on Discord); a search looks in all
-  const railed = groups.length > 2 && innerWidth >= 600;
-  let pick = "";
-  const rail = el("div", "am-rail");
-  if (railed) {
-    const body = el("div", "am-body");
-    body.append(rail, list);
-    box.classList.add("railed");
-    box.append(head, tools, body, foot);
-  } else box.append(head, tools, list, foot);
+  let railed = false, pick = "";
+  const rail = el("div", "am-rail"), body = el("div", "am-body");
+  const lay = () => {
+    railed = groups.length > 2 && innerWidth >= 600;
+    box.classList.toggle("railed", railed);
+    if (railed) body.replaceChildren(rail, list);
+    box.replaceChildren(head, tools, railed ? body : list, foot);
+  };
+  lay();
   const drawRail = () => {
     if (!railed) return;
     const top = rail.scrollTop;
@@ -3545,11 +3564,10 @@ async function openAgentModels(a, anchor, ev) {
     };
     const all = el("span", "ic");
     all.append(svg("M3 4.5h10M3 8h10M3 11.5h10", 14, 1.5));
-    item("", t("All providers"), all, models, (full) => (full ? hideAll : reset).click());
+    item("", t(byMaker ? "All makers" : "All providers"), all, models, (full) => (full ? hideAll : reset).click());
     for (const g of groups) {
-      const route = g.name === ROUTING_GROUPS;
-      item(g.name, route ? t(g.name) : g.name, route ? svg(FAN, 14, 1.5) : icon(g.icon || "generic"), g.models, (full, free) => {
-        for (const m of free) { m.hidden = full; if (full) kept.add(m.id); }
+      item(g.name, gname(g), g.name === ROUTING_GROUPS ? svg(FAN, 14, 1.5) : icon(g.icon || "generic"), g.models, (full, free) => {
+        for (const m of free) { m.hidden = full; if (full) held.add(m.id); }
         save();
         draw();
       });
@@ -3557,7 +3575,7 @@ async function openAgentModels(a, anchor, ev) {
     rail.scrollTop = top;
   };
   // under "Shown", one just turned off stays until the view changes
-  let onlyShown = false, kept = new Set();
+  let onlyShown = false, held = new Set();
   // under "Order", the models shown, as the agent lists them
   let ordering = false;
 
@@ -3711,8 +3729,8 @@ async function openAgentModels(a, anchor, ev) {
     drawRail();
     for (const g of groups) {
       if (pick && !words && g.name !== pick) continue;
-      const rows = g.models.filter((m) => (!onlyShown || !m.hidden || kept.has(m.id)) &&
-        (!words || [m.name, m.id, g.name].some((s) => s.toLowerCase().includes(words))));
+      const rows = g.models.filter((m) => (!onlyShown || !m.hidden || held.has(m.id)) &&
+        (!words || [m.name, m.id, gname(g), m.group].some((s) => s.toLowerCase().includes(words))));
       if (!rows.length) continue;
       const on = g.models.filter((m) => !m.hidden).length;
       const folded = !words && !pick && shut.has(g.name);
@@ -3724,7 +3742,7 @@ async function openAgentModels(a, anchor, ev) {
       const tw = el("span", "tw");
       tw.append(svg(CHEV, 10, 1.7));
       fold.append(tw, g.name === ROUTING_GROUPS ? svg(FAN, 14, 1.5) : icon(g.icon || "generic"),
-        el("span", "gn", g.name === ROUTING_GROUPS ? t(g.name) : g.name), el("span", "c", `${on} / ${g.models.length}`));
+        el("span", "gn", gname(g)), el("span", "c", `${on} / ${g.models.length}`));
       fold.onclick = () => { shut.has(g.name) ? shut.delete(g.name) : shut.add(g.name); draw(); };
       const free = g.models.filter((m) => !m.inUse);
       const allOn = free.every((m) => !m.hidden);
@@ -3732,7 +3750,7 @@ async function openAgentModels(a, anchor, ev) {
       all.type = "button";
       all.hidden = !free.length;
       all.onclick = () => {
-        for (const m of free) { m.hidden = allOn; if (allOn) kept.add(m.id); }
+        for (const m of free) { m.hidden = allOn; if (allOn) held.add(m.id); }
         save();
         draw();
       };
@@ -3745,9 +3763,9 @@ async function openAgentModels(a, anchor, ev) {
           r.type = "button";
           r.setAttribute("role", "menuitemcheckbox");
           r.setAttribute("aria-checked", String(!m.hidden));
-          r.title = m.inUse ? t("{agent} is set to it, so it stays", { agent: a.name }) : m.id;
+          r.title = m.off ? t("Turned off for agents on the Gateway page") : m.inUse ? t("{agent} is set to it, so it stays", { agent: a.name }) : m.id;
           const n = el("span", "n", m.name);
-          if (m.inUse) n.append(el("span", "am-tag", t("Current")));
+          if (m.inUse && !m.off) n.append(el("span", "am-tag", t("Current")));
           const ck = el("span", "ck");
           if (!m.hidden) ck.append(svg("m3.5 8.5 3 3 6-7", 12, 1.9));
           // a routing group: its providers' icons stacked, as everywhere
@@ -3761,14 +3779,15 @@ async function openAgentModels(a, anchor, ev) {
             d.append(icon(m.icons[0] || "generic"));
             lg = el("span", "ic-stack");
             lg.append(d);
-          } else lg = m.logo && !route ? icon(m.logo) : el("span", "ic");
+          } else lg = g.label ? icon(m.icon || "generic") : m.logo && !route ? icon(m.logo) : el("span", "ic");
           if (route && !m.icons?.length) lg.append(svg(FAN, 14, 1.5));
           lg.classList.add("lg");
-          r.append(lg, n, el("span", "x", ctxShort(m.context)), ck);
+          // by maker, a row says whose it is: its provider's logo and name
+          r.append(lg, n, ...(g.label ? [el("span", "x am-pv", m.group)] : []), el("span", "x", ctxShort(m.context)), ck);
           if (m.inUse) r.setAttribute("aria-disabled", "true");
           else r.onclick = () => {
             m.hidden = !m.hidden;
-            if (m.hidden) kept.add(m.id);
+            if (m.hidden) held.add(m.id);
             save();
             draw();
           };
@@ -3789,7 +3808,7 @@ async function openAgentModels(a, anchor, ev) {
   const view = (shown, order = false) => {
     onlyShown = shown;
     ordering = order;
-    kept = new Set();
+    held = new Set();
     segAll.classList.toggle("on", !shown && !order);
     segOn.classList.toggle("on", shown && !order);
     segOrder.classList.toggle("on", order);
@@ -3807,6 +3826,23 @@ async function openAgentModels(a, anchor, ev) {
     list.scrollTop = 0;
     draw();
   };
+  const by = (maker) => {
+    if (maker === byMaker) return;
+    byMaker = maker;
+    keep("agentModelsBy", maker ? "maker" : "");
+    mark();
+    regroup();
+    fold();
+    pick = "";
+    lay();
+    place();
+    list.scrollTop = 0;
+    draw();
+  };
+  const mark = () => { byP.classList.toggle("on", !byMaker); byM.classList.toggle("on", byMaker); };
+  mark();
+  byP.onclick = () => by(false);
+  byM.onclick = () => by(true);
   segAll.onclick = () => view(false);
   segOn.onclick = () => view(true);
   segOrder.onclick = () => view(false, true);
@@ -3854,18 +3890,22 @@ async function openAgentModels(a, anchor, ev) {
     for (const m of models) m.hidden = false;
   });
   twice(hideAll, () => t("Hide {n}, of every provider? Click again", { n: models.filter((m) => !m.inUse && !m.hidden).length }), () => {
-    for (const m of models) if (!m.inUse && !m.hidden) { m.hidden = true; kept.add(m.id); }
+    for (const m of models) if (!m.inUse && !m.hidden) { m.hidden = true; held.add(m.id); }
   });
   draw();
 
   document.body.append(box);
   // under the line, or over it where there's no room; the list scrolls
   const r = anchor.getBoundingClientRect(), pad = 8, top = popTop(pad);
-  const w = Math.min(railed ? 580 : 380, innerWidth - pad * 2);
-  box.style.width = w + "px";
-  const x = Math.max(pad, Math.min(r.left - 10, innerWidth - w - pad));
-  box.style.left = x + "px";
-  box.style.setProperty("--ox", Math.max(18, Math.min(w - 18, r.left + Math.min(r.width, 60) / 2 - x)) + "px");
+  // its width, the rail's room or not, again when the grouping changes it
+  function place() {
+    const r = me.anchor.getBoundingClientRect(), w = Math.min(railed ? 580 : 380, innerWidth - pad * 2);
+    box.style.width = w + "px";
+    const x = Math.max(pad, Math.min(r.left - 10, innerWidth - w - pad));
+    box.style.left = x + "px";
+    box.style.setProperty("--ox", Math.max(18, Math.min(w - 18, r.left + Math.min(r.width, 60) / 2 - x)) + "px");
+  }
+  place();
   const below = innerHeight - r.bottom - 8 - pad, above = r.top - 8 - top;
   const want = Math.min(560, box.scrollHeight);
   if (want > below && above > below) {
@@ -6070,7 +6110,7 @@ function prefetchProviders() {
   e.read.then((s) => {
     e.got = s;
     markNewPartners();
-    if (state?.agents?.some((a) => !a.wired && (a.id === "claude" || a.id === "codex"))) renderAgents();
+    if (state?.agents?.some(switchesAccounts)) renderAgents();
   }, () => { if (providersEarly === e) providersEarly = null; });
 }
 
@@ -6847,8 +6887,9 @@ function accountPlan(a) {
   // the one it was signed in on, and a Claude reading is the plan after
   // its run (CoderMaurice on X: an upgraded account read its old plan in
   // the editor only). Another's reading names its plan in words of its
-  // own; with none read, the sign-in's.
-  const agent = a.builtin || a.agent, q = /^(claude|codex)$/.test(agent) && !a.lapsed && loginUsage[agent]?.data?.[a.user], plan = (q && !q.error && q.plan) || a.plan;
+  // own; with none read, the sign-in's. A ChatGPT API account's reading is
+  // its Codex twin's (samePlanReadings), the plan now as on the Codex row.
+  const agent = a.builtin || a.agent, q = /^(claude|codex|chatgpt-api)$/.test(agent) && !a.lapsed && loginUsage[agent]?.data?.[a.user], plan = (q && !q.error && q.plan) || a.plan;
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
   // "Xiaomi MiMo" and "MiMo 高阶" overlap in "MiMo": said once
   const named = (name, plan) => {
@@ -9832,7 +9873,7 @@ function drawEditor(p, presetID) {
       if (a.agent === "claude" && !p.switchOnly) ed.append(claudeModeRow());
       // switched connected or not (Greatrobbort on X)
       const via = a.wsl ? t("Runs through WSL · {distro}: Claude Code there signs in and answers; Windows has none of its own.", { distro: a.wsl }) + " " : "", alone = /^c(laude|odex)$/.test(a.agent) ? " " + t("Just want accounts switched? {agent} needn't be connected to magpie.", { agent: a.agentName }) : "";
-      ed.append(...field(t("Accounts"), renderAccounts(a, p), via + (p.routing ? t("Tick every account to use; Routing says how requests spread over them.") + (subOf(a.agent).own ? " " + t("Only requests through magpie use them; {agent} itself stays signed in as it is.", { agent: a.agentName || p.name }) : "") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).own && (a.logins || []).some((l) => l.own) ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName && a.agentName !== a.agent ? a.agentName : p.name }) : subOf(a.agent).own || subOf(a.agent).plugin ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota.") : t("{agent} signs in to the first. Tick more and magpie moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })) + alone));
+      ed.append(...field(t("Accounts"), renderAccounts(a, p), via + (p.switchOnly && (p.routing || subOf(a.agent).own || subOf(a.agent).plugin) ? t("magpie only switches {agent}'s own sign-in between these accounts; no requests go through magpie.", { agent: a.agentName || p.name }) : p.routing ? t("Tick every account to use; Routing says how requests spread over them.") + (subOf(a.agent).own ? " " + t("Only requests through magpie use them; {agent} itself stays signed in as it is.", { agent: a.agentName || p.name }) : "") : subOf(a.agent).single ? t("{agent} keeps one account; the gateway runs it for every request. Signing in to another replaces it.", { agent: a.agentName }) : subOf(a.agent).own && (a.logins || []).some((l) => l.own) ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota. {agent} itself stays signed in as it is.", { agent: a.agentName && a.agentName !== a.agent ? a.agentName : p.name }) : subOf(a.agent).own || subOf(a.agent).plugin ? t("The gateway uses the first. Tick more and it moves on to the next when the one before it is out of quota.") : t("{agent} signs in to the first. Tick more and magpie moves on to the next when the one before it is out of quota. Sessions already running keep theirs until restarted.", { agent: a.agentName })) + (p.switchOnly ? "" : alone)));
       ed.append(...pluginOptionsField(subOf(a.agent), true));
       if ((a.logins || []).filter((l) => l.active || l.on).length > 1) advIn.append(...routingAdvanced(p));
       if (p.move) ed.append(...renderMove(p));
@@ -13962,8 +14003,10 @@ function renderAccounts(a, p) {
     }
     if (quota && !l.lapsed) line.querySelector(".plan").after(accountRefresh(a.agent, p, l.user));
     const aq = accountQuota(l.lapsed ? { [l.user]: { error: t(l.lapsed) } } : quota, l.user, capFor, p ? (m, w) => windowCapMeter(m, p, l.user, w) : null, a.agent);
-    // its plan's end, under its line (danzi002)
-    if (l.until) aq.append(Object.assign(planSpan({ until: l.until }), { className: "aq-until" }));
+    // its plan's end, under its line (danzi002); a ChatGPT API sign-in
+    // tells none, its Codex twin's reading does (tmr11235 on X)
+    const until = l.until || !l.lapsed && quota?.[l.user]?.until;
+    if (until) aq.append(Object.assign(planSpan({ until }), { className: "aq-until" }));
     // Check in now (xwoffice_91592)
     const ci = !l.lapsed && quota?.[l.user];
     if (ci?.checkinKey && checkinDue(ci)) {
@@ -14042,20 +14085,13 @@ function renderAccounts(a, p) {
     }
     list.append(box);
   }
-  const cx = a.agent === "codex", ag = { agent: a.agentName };
-  if (p && (cx && several || a.agent === "claude")) {
-    const [only, cb] = tick(t("Only switch {agent}'s sign-in", ag), p.switchOnly);
-    const [tip, on, off] = cx ? [t("When an account is used up, magpie signs {agent} in to the next one, and requests go straight to OpenAI. Open {agent} sessions keep their account until reopened.", ag), t("magpie only switches {agent}'s sign-in; its requests go straight to OpenAI", ag), t("A connected {agent} fails over to your other accounts through magpie again", ag)]
-      : [t("When an account is used up, magpie signs {agent} in to the next one. Requests on these accounts don't go through magpie.", ag), t("magpie serves no requests on these accounts"), t("magpie serves requests on these accounts again")];
-    only.title = tip;
-    cb.onchange = () => accountAction("provider/switchonly", { id: p.id, switchOnly: cb.checked }, cb.checked ? on : off);
-    list.append(el("div", "switch-only", only));
-  }
-  if (p && cx && (several || p.restartApp)) {
-    const [re, cb] = tick(t("Restart the {agent} app when magpie switches its account back", ag), !!p.restartApp);
-    re.title = t("Off, the {agent} app stays on its account until you restart it. A used-up account restarts it anyway.", ag);
-    cb.onchange = () => accountAction("provider/restartapp", { id: p.id, restartApp: cb.checked }, t(cb.checked ? "magpie restarts the {agent} app when it switches accounts back" : "magpie leaves the {agent} app running when it switches accounts back", ag));
-    list.append(el("div", "restart-app", re));
+  // Only switch {agent}'s sign-in, agy's Switch automatically (#1908) and
+  // Restart the Codex app, in switchticks.js: drawn here alone
+  const cx = a.agent === "codex";
+  if (p && (cx && several || a.agent === "claude" || a.agent === "agy-cli" || cx && p.restartApp)) {
+    const at = el("div");
+    if (window.switchTicks) list.append(...switchTicks(a, p, several));
+    else list.append(at), import("./switchticks.js").then(() => at.isConnected && at.replaceWith(...switchTicks(a, p, several)), () => {});
   }
   // how a pool ends at its caps (plugins#349)
   const capped = (l) => accountCapOf(p, l.user) || windowCapsOf(p, l.user);
@@ -14378,7 +14414,7 @@ function quotaError(err, q) {
   if (chatgpt) return t("ChatGPT answered HTTP {status} — hover for what it said", { status: chatgpt[1] });
   if (/^couldn't reach chatgpt\.com for the usage read/.test(err)) return t("Couldn't reach ChatGPT — check the network or the proxy");
   if (/^ChatGPT's usage reply isn't one magpie reads/.test(err)) return t("ChatGPT answered in a form magpie doesn't read — hover for what it sent");
-  if (/^a ChatGPT API account's usage isn't told through OpenAI's API/.test(err)) return t("OpenAI's API doesn't tell a ChatGPT API account's usage — see chatgpt.com/settings/usage, or add the account as ChatGPT to see it here");
+  if (/^a ChatGPT API account's usage isn't told through OpenAI's API/.test(err)) return t("OpenAI's API doesn't tell a ChatGPT API account's usage — see chatgpt.com/settings/usage. It shows here while Codex is signed in to the same ChatGPT account");
   // a switched-off subscription is not read (errLeftAlone, login_usage.go)
   if (/^not read yet: this subscription is switched off/.test(err)) return t("Switched off, so no allowance is read — switch it on and refresh");
   const bal = balanceError(err);
@@ -14497,7 +14533,10 @@ function balanceFix(p) {
 
 // accountRefresh: an account row's refresh, then its rows read again
 function accountRefresh(agent, p, user) {
-  const b = quotaRefresh({ provider: p?.id || agent, user }, async () => {
+  // a ChatGPT API account showing its Codex twin's reading (samePlanReadings) reads that one again
+  const twin = loginUsage[agent]?.data?.[user]?.samePlan;
+  const b = quotaRefresh(twin ? { provider: "codex", user: twin } : { provider: p?.id || agent, user }, async () => {
+    if (twin && loginUsage.codex) loginUsage.codex.at = 0;
     await loginUsage[agent]?.loading;
     if (loginUsage[agent]) loginUsage[agent].at = 0;
     loginUsageOf(agent);
@@ -14521,14 +14560,16 @@ function accountQuota(data, user, capFor = () => 0, settable = null, prov) {
     line.append(el("span", "aq-asof", asOfText(q)));
   }
   if (q?.resets?.count && !q.error) {
-    // Codex's are used from here too, as on Usage (roamlog on X)
-    const words = resetsWords(q.resets), use = prov == "codex" && !q.resets.byWindow;
+    // Codex's are used from here too, as on Usage (roamlog on X), and from
+    // a ChatGPT API row read through its Codex twin: the same plan's
+    // (samePlan, tmr11235 on X), spent with that Codex account
+    const twin = q.samePlan, words = resetsWords(q.resets), use = (prov == "codex" || twin) && !q.resets.byWindow;
     const resets = el("span", "aq-w aq-resets" + (use ? " aq-set" : ""));
     resets.title = tipLines(words.textContent, words.title, use && "\n" + resetUseTitle(q));
     resets.append(words.querySelector(".resets-n"));
     if (use) {
       spanBtn(resets).setAttribute("aria-haspopup", "dialog");
-      resets.onclick = (e) => { e.stopPropagation(); askReset({ ...q, provider: prov, user }); };
+      resets.onclick = (e) => { e.stopPropagation(); askReset({ ...q, provider: "codex", user: twin || user }); };
     }
     line.append(resets);
   }
@@ -14561,6 +14602,7 @@ function accountQuota(data, user, capFor = () => 0, settable = null, prov) {
   if (ws.some((w) => w.members)) return poolLine(line, ws, q, capFor, settable);
   line.title = ws.slice(3).map((w) => w.tiers ? tiersText(w) : t(w.name) + " " + quotaText(w)).join(ws !== counted ? "\n" : " · ");
   if (q.asOf) line.title = tipLines(line.title, asOfText(q));
+  if (q.samePlan) line.title = tipLines(line.title, t("The ChatGPT plan's windows, as Codex's sign-in to the same account reads them"));
   for (const w of ws.slice(0, 3)) {
     const used = to100(w.used);
     const m = el("span", "aq-w" + (used >= 90 ? " full" : ""));
@@ -17085,7 +17127,11 @@ function quotaHistoryView(sub, lines = quotaLines(sub), now = Date.now()) {
 function quotaHistoryCard(sub, { picked, shown }) {
   const estimates = quotaCycleHoldsOf(sub, picked);
   const windows = familyWindows(sub.windows).map((w) => {
-    const name = w.pool ? w.pool + " · " + w.name : w.name;
+    // a pool's row is named "Gemini · 5 hours" already (poolWindows), its
+    // own name kept as window: history keeps it under pool and own name,
+    // so the row looked for "Gemini · Gemini · 5 hours" and said no
+    // reading in a cycle the curve drew (tmr11235 on X)
+    const name = w.pool ? w.pool + " · " + (w.window ?? w.name) : w.name;
     const last = shown.find((l) => l.name === name)?.points.at(-1);
     const base = { name: w.name, pool: w.pool, historyMissing: !last };
     if (!last) return base;
@@ -20390,11 +20436,10 @@ function renderSettings() {
   $("#keepAwakeSegs").replaceChildren(segs([["off", t("Off")], ["on", t("On")], ["display", t("Screen on too")]],
     !s.keepAwake ? "off" : s.keepAwakeDisplay ? "display" : "on",
     (v) => savePrefs({ ...keep, keepAwake: v !== "off", keepAwakeDisplay: v === "display" })));
-  // its line says what it does; data-en keeps it on a language change
+  // its line says what it does, index.html's data-on or data-display;
+  // data-en keeps it on a language change
   const awakeSub = $("#keepAwakeRow .sub");
-  awakeSub.dataset.en = s.keepAwake && s.keepAwakeDisplay
-    ? "Keeps this computer and its screen awake while magpie runs tasks"
-    : "Keeps this computer awake while magpie runs tasks";
+  awakeSub.dataset.en = awakeSub.dataset[s.keepAwake && s.keepAwakeDisplay ? "display" : "on"];
   awakeSub.textContent = t(awakeSub.dataset.en);
   // the gateway paused (me2seeks on X): agents disconnected and nothing
   // listening, without quitting magpie (gatewaypause.go)

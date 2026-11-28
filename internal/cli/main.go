@@ -40,6 +40,7 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/shortcut"
 	"github.com/yetone/magpie/internal/tui"
+	"github.com/yetone/magpie/internal/tuihelper"
 	"github.com/yetone/magpie/internal/update"
 )
 
@@ -123,6 +124,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts alias <agent> <email> [<name>|--clear]   a name of your own for an account, shown on its card, in the menu bar and in magpie quota
   magpie accounts switch-only codex [on|off]   only switch Codex's own sign-in to an account with room; its requests go straight to OpenAI, never through magpie
   magpie accounts switch-only claude [on|off]  only switch Claude Code's own sign-in to an account with room; magpie serves no requests on the Claude accounts
+  magpie accounts switch-only agy-cli [on|off] picking an Antigravity CLI account signs agy and the Antigravity app in to it; magpie serves no requests on them
+  magpie accounts auto-switch agy-cli [on|off] with switch-only on, sign agy in to the next account with room when the one it is on runs low (off by default)
   magpie claude-code [install [--yes]|remove]   the Claude Code a Claude subscription runs; install downloads Anthropic's own build, checked against its manifest, for a server or container without one
   magpie plugin [add <package>|rm|update|on|off|login <provider>|logout <provider>]
                                   OpenCode provider plugins and pi packages: subscriptions signed in to, and served, through a plugin
@@ -229,6 +232,17 @@ func Main(v string) {
 		// internal: a run_code script, in a process of its own; it reads
 		// and writes no file of magpie's
 		os.Exit(coderun.Main())
+	}
+	if len(os.Args) > 1 && os.Args[1] == tuihelper.Command {
+		// internal: a plugin's terminal for an agent's interactive mode. It
+		// runs before magpie reads its environment: the plugin starts it
+		// with the agent's HOME (an account's own), where magpie has no
+		// folders and makes none
+		if err := tuihelper.Run(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "magpie:", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 	// before anything reads or writes a file: no home, or a relative one,
 	// would put the agents' configs and magpie's keys under the working

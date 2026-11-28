@@ -421,6 +421,24 @@ body:not(.side-nav) #nav button:is([data-view="groups"], [data-view="artifacts"]
   /* a status line comes up over the bar, not under it */
   html body.web:not(.panel) :is(.foot .status:not(:empty):not(.lift), .status.lift) { bottom: calc(var(--tabbar) + 10px); }
 }
+/* a page's own tabs past five (the Library's, Settings') are one menu at
+   its top on a phone, "Instructions ⌄", as Usage's days are, rather than a
+   second bar of wrapped lines over the tab bar (phonetabs.js subMenus;
+   gandli on X) */
+.sub-menu { display: none; }
+@media (max-width: 760px), (pointer: coarse) and (max-width: 1024px) {
+  body.web .sub-as-menu { display: none !important; }
+  body.web .sub-menu {
+    position: relative; display: inline-flex; flex: none; align-items: center; gap: 4px; max-width: 100%;
+    height: 32px; padding: 0 4px 0 2px; border-radius: 7px; font-size: 17px; font-weight: 600; color: var(--fg);
+  }
+  body.web .sub-menu > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body.web .sub-menu svg { flex: none; color: var(--muted); transition: transform .15s var(--ease); }
+  body.web .sub-menu.open svg { transform: rotate(180deg); }
+  body.web .sub-menu::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
+  body.web .set-searching .sub-menu { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .sub-menu svg { transition: none; } }
 /* More's menu: each page with its tab's mark */
 .nav-more-menu .pm-head { display: none; }
 .nav-more-menu .pm-item { align-items: center; gap: 10px; padding: 9px 10px; }
@@ -787,6 +805,19 @@ body.window .row .ic { width: 22px; height: 22px; }
 .row .name { font-weight: 500; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .row .who { min-width: 0; flex: 1 1 auto; }
 .row .sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+/* an icon beside a column of two or more lines meets the top of the first
+   line's capitals, and the column keeps to the row's top with it: centred,
+   every row's icon sits at a different height beside its first line (the
+   owner, 11-21 for Usage and 11-28 for every list: 「靠文字顶部对齐」). A
+   row of one line stays centred, and no row grows: the icon's margin takes
+   off below what it puts on above. The handle's logo sits 3px inside it.
+   An engine without :has() drops the rule and keeps every icon centred.
+   A Usage row's logo keeps its own 4px, held to its name's own letters
+   (usage-row-logo-top.test.cjs). icon-text-top.test.cjs finds such rows by
+   their geometry, on every page. */
+:is(.row.stat, .row:has(> .who > .sub:not(:empty), > .who.with-models)) > :is(.ic, .pm-logo, .who) { align-self: flex-start; }
+.row:not(.stat):has(> .who > .sub:not(:empty), > .who.with-models) > :is(.ic, .pm-logo) { margin-top: 4.75px; margin-bottom: -4.75px; }
+:is(.row.stat, .row:has(> .who > .sub:not(:empty), > .who.with-models)) > .ag-handle { align-self: flex-start; margin-top: calc(1.75px + var(--who-top, 0px)); }
 .empty-state { padding: 36px 20px; text-align: center; color: var(--muted); }
 .empty-state b { display: block; color: var(--fg); font-weight: 500; margin-bottom: 4px; }
 
@@ -1137,6 +1168,9 @@ body.panel .row.pref.flash { border-radius: 10px; }
 .qt.grouped tr:not(.qt-group) .qt-id::before { content: ""; width: 10px; flex: none; }
 .qt.grouped .plan { margin-left: 37px; }
 .qt .qt-kid .qt-sub > .plan:first-child { margin-top: 0; }
+/* an account's check-in under its plan, as on its card */
+.qt .wb-checkin { max-width: 300px; margin: 4px 0 0 21px; }
+.qt.grouped .wb-checkin { margin-left: 37px; }
 .subscription-card { padding: 10px 12px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); min-width: 0; }
 /* a card's captions (resets, the period, a curve's dates) read at 4.5:1 or
    better on the card, below its figures (Jiabubu on Discord): light's
@@ -2975,6 +3009,16 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .row.model .copy { opacity: 0; }
 .row.model:hover .copy, .row.model.selected .copy { opacity: 1; }
 .row.model .copy.done { opacity: 1; }
+/* turned off for agents (plugins/gateway): dimmed, its switch shown; an
+   on one's switch shows with the copy button, on hover */
+.row.model .lib-switch.gw-agents { flex: none; width: 28px; height: 16px; padding: 0; border: 0; cursor: pointer; opacity: 0; }
+.row.model .lib-switch.gw-agents i { width: 12px; height: 12px; }
+.row.model .lib-switch.gw-agents.on i { transform: translateX(12px); }
+.row.model .lib-switch.gw-agents[aria-disabled="true"] { cursor: default; }
+.row.model:hover .gw-agents, .row.model.selected .gw-agents, .row.model .gw-agents:focus-visible, .row.model.agents-off .gw-agents { opacity: 1; }
+.row.model:is(:hover, .selected) .gw-agents[aria-disabled="true"] { opacity: .45; }
+.row.model.agents-off > :is(.ic, .who, .minfo) { opacity: .5; }
+@media (hover: none) { .row.model .gw-agents { opacity: 1; } .row.model .gw-agents[aria-disabled="true"] { opacity: .45; } }
 
 /* recent calls */
 .activity { padding: 5px 8px 6px; font-size: 11.5px; }
@@ -3166,7 +3210,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
    card, as above; a touch screen keeps the lines in place and no mark */
 #view-settings .update-auto-row .name .as-tip { display: none; margin-left: 5px; vertical-align: -1px; color: var(--muted); }
 @media (hover: hover) { #view-settings .update-auto-row .name .as-tip { display: inline-flex; } }
-.editor .accts .auto-switch .sign-in-moves { line-height: 1.5; color: var(--fg-2); }
+.editor .accts .auto-switch :is(.sign-in-moves, .as-wait) { line-height: 1.5; color: var(--fg-2); }
 .editor .accts .auto-switch .as-keep { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--fg-2); }
 .editor .accts .auto-switch .keep-as { max-width: 240px; }
 /* Claude Code's interactive mode or -p, with why (claudeModeRow) */
@@ -3175,6 +3219,14 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .cc-pick .opt { flex: none; }
 .cc-said { font-size: 12px; color: var(--muted); }
 .cc-said.bad { color: var(--red); }
+/* each hidden Claude Code's screen, opened under the row (claudescreen.js) */
+.cc-screens { flex-basis: 100%; min-width: 0; display: grid; gap: 8px; }
+.cc-screen { min-width: 0; }
+.cc-screen .h { margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+.cc-screen pre { margin: 0; padding: 8px 10px; max-height: 320px; overflow: auto; border-radius: 6px; border: 1px solid var(--line-2); background: var(--code-bg, var(--card-2)); font: 11px/1.35 var(--code-font, var(--code)); white-space: pre; tab-size: 8; }
+.cc-screen-none { font-size: 12px; color: var(--muted); }
+.cc-screen-none.bad { color: var(--red); }
+.cc-screen pre.none { font-family: inherit; font-size: 12px; line-height: 1.4; color: var(--muted); white-space: normal; }
 .cc-tip { position: fixed; z-index: 1000; width: min(400px, calc(100vw - 16px)); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .18); font-size: 12px; line-height: 1.5; color: var(--fg); pointer-events: none; animation: mask-tip .16s var(--ease); }
 .cc-m + .cc-m { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line-2); }
 .cc-m .h { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
@@ -3747,7 +3799,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 #gwModels .none { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 /* no gateway key yet: said in its card as Recent calls says it has none */
 #gatewayKeys .none { padding: 13px 14px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
-#view-gateway .row-head .find { margin-right: 8px; }
+#view-gateway .row-head .find { margin-right: 8px; flex: 0 1 160px; min-width: 64px; }
 /* a row of the add sheet: an icon and a name, no frame; a row already
    added has a small green dot after its name rather than fading */
 .tile {
@@ -3762,7 +3814,15 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .tile .nm .badge { flex: none; }
 /* a partner's row carries its tagline on a second, quieter line */
 .tile.two { height: 46px; align-items: flex-start; padding-top: 6px; }
-.tile.two .have, .tile.two .cnt { align-self: center; }
+/* the name and every mark after it (added, count, badge, new) make the
+   first line, the tagline the second, so a mark follows the name and never
+   the tagline (the owner, 11-28: 这个小绿点是不是应该在Provider名字后面？) */
+.tile.two .nm { flex-wrap: wrap; align-content: flex-start; gap: 2px 6px; }
+.tile.two .col { display: contents; }
+.tile.two .sub { order: 1; flex-basis: 100%; }
+/* the name takes no room to break the line on, so a long one ellipsizes
+   with its marks still after it */
+.tile.two .n { flex: 1 1 0; max-width: max-content; }
 /* the logo's top on the top of the name's letters, not of its line: the
    name's half-leading and the room over its letters at 13px are 4.25px
    for Latin capitals and 3 to 3.5px for CJK. A whole pixel, as the logo
@@ -4697,7 +4757,9 @@ input.words.remote-key { width: 160px; }
 /* Warm up now's line holds a vendor's reason, which can be one long word */
 .row.warm-now .sub { white-space: normal; overflow-wrap: anywhere; }
 .warm-at { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
-.warm-at input.at { width: auto; height: 27px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; outline: none; transition: border-color .12s, box-shadow .12s; }
+/* a field beside its Off/On stands as tall as it: .opt's 22px and the
+   .segs' 2px round it (gandli on X) */
+.warm-at input.at { width: auto; height: 26px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; outline: none; transition: border-color .12s, box-shadow .12s; }
 .warm-at input.at:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .warm-at input.at::-webkit-calendar-picker-indicator { opacity: .55; }
 /* a usage alert's share or amount: a short number field, its unit beside it */
@@ -4711,7 +4773,7 @@ input.words.remote-key { width: 160px; }
 .bark-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; max-width: 100%; }
 .bark-box input.words { width: 180px; }
 .bark-box code { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.warm-at .warm-rm, .warm-at .warm-add { min-width: 24px; height: 27px; padding: 0 6px; font-size: 14px; line-height: 1; }
+.warm-at .warm-rm, .warm-at .warm-add { min-width: 24px; height: 26px; padding: 0 6px; font-size: 14px; line-height: 1; }
 .row.pref .sub .warn { color: var(--amber); }
 .row.pref .sub.wraps { white-space: normal; }
 .row.pref code.sub.https-cmd { display: block; font-size: 11px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
@@ -5043,6 +5105,10 @@ body.panel .modal { padding: 16px 12px; }
   body.web input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
   body.web textarea, body.web select { font-size: 16px; min-height: 44px; }
   body.web { --field-h: 44px; } /* the height above, for the names beside such a field */
+  /* a field beside its Off/On keeps to the switch's height, .opt's 28px
+     here and the .segs' 2px round it, not the 44px above ([type] outweighs
+     that rule) (gandli on X) */
+  body.web .warm-at input.at[type] { min-height: 0; height: 32px; }
   body.web .modal { padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
   body.web .modal .editor.framed > .ebody, body.web .editor { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px; align-items: start; }
   body.web .editor label { text-align: left; }
@@ -5323,15 +5389,18 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .pop.am-pop::before { content: ""; position: absolute; left: calc(var(--ox, 24px) - 6px); top: -5px; width: 12px; height: 12px; background: var(--pop-bg); transform: rotate(45deg); border-radius: 2px 0 0 0; box-shadow: -.5px -.5px 0 color-mix(in srgb, var(--fg) 10%, transparent); }
 .pop.am-pop.up::before { top: auto; bottom: -5px; border-radius: 0 0 2px 0; box-shadow: .5px .5px 0 color-mix(in srgb, var(--fg) 10%, transparent); }
 .am-head { padding: 0 12px; }
+/* the title, and by provider or by maker at its right */
+.am-ht { display: flex; align-items: center; gap: 8px; }
+.am-ht .am-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-t { font-size: 14px; font-weight: 600; letter-spacing: -.01em; color: var(--fg); }
 .am-d { margin-top: 3px; font-size: 12px; line-height: 1.45; color: var(--muted); }
 .am-tools { display: flex; align-items: center; gap: 8px; margin: 12px 12px 6px; }
 .am-search { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 8px; background: var(--pill); color: var(--faint); }
 .pop.am-pop .am-search input { flex: 1; min-width: 0; height: 28px; border: 0; outline: none; background: none; color: var(--fg); font: inherit; font-size: 12.5px; }
 .am-search:focus-within { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
-.am-seg { display: inline-flex; flex: none; padding: 2px; border-radius: 8px; background: var(--seg-track); }
-.am-seg button { height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--ctl-fg); font: inherit; font-size: 12px; cursor: pointer; transition: background-color .15s, color .15s; }
-.am-seg button.on { background: var(--mark-fill, var(--seg-thumb)); color: var(--mark); box-shadow: var(--seg-edge); }
+.am-seg, .am-by { display: inline-flex; flex: none; padding: 2px; border-radius: 8px; background: var(--seg-track); }
+.am-seg button, .am-by button { height: 24px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--ctl-fg); font: inherit; font-size: 12px; cursor: pointer; transition: background-color .15s, color .15s; }
+.am-seg button.on, .am-by button.on { background: var(--mark-fill, var(--seg-thumb)); color: var(--mark); box-shadow: var(--seg-edge); }
 .am-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 2px; }
 /* the providers down the left (蓝猫 on Discord), the models of the one
    picked beside them, each scrolling on its own */
@@ -5385,6 +5454,8 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .am-mr .ic-stack .disc > .ic { width: 11px !important; height: 11px !important; }
 .am-mr .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s; }
 .am-mr .x { flex: none; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* by maker, whose it is: a provider's name, cut short before the model's */
+.am-mr .x.am-pv { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-mr .ck { flex: none; display: inline-flex; justify-content: center; width: 16px; color: var(--accent); }
 .am-mr.off .n { color: var(--faint); }
 .am-mr.lock { cursor: default; }
@@ -5414,7 +5485,7 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .pop.am-pop.ordering .am-own { display: none; }
 /* Codex's list in the order it shows it (#855): the whole list, dragged by
    any row; its grip shows only on the row under the pointer */
-.pop.am-pop.ordering .am-search, .pop.am-pop.ordering .am-rail { display: none; }
+.pop.am-pop.ordering .am-search, .pop.am-pop.ordering .am-rail, .pop.am-pop.ordering .am-by { display: none; }
 .am-order { padding-top: 4px; }
 .am-rows.am-order .am-mr { padding-left: 14px; cursor: grab; user-select: none; -webkit-user-select: none; }
 .am-or .grip { flex: none; width: 6px; height: 11px; margin-right: -4px; background: radial-gradient(circle, var(--muted) .9px, transparent 1.2px) 0 0 / 3px 3.75px; opacity: 0; transition: opacity .15s; }
@@ -5491,7 +5562,11 @@ body.panel[data-ptab]:not([data-ptab="agents"]) #agentsLead { display: none; }
    row not centring what it holds; no gap between its lines, which the
    opened part couldn't fold away: it starts where the shut row ended */
 body.window .row.agent.conn { flex-wrap: wrap; min-height: 56px; align-content: flex-start; row-gap: 0; }
-body.window .row.agent.conn > .who { min-height: 42px; align-content: center; }
+/* its two lines sit where centring put them, and lines that wrap start
+   there too, so the logo (app.css .row's rule) meets the first in every row */
+body.window .row.agent.conn { --who-top: 2.9px; }
+body.window .row + .row.agent.conn { --who-top: 2.4px; }
+body.window .row.agent.conn > .who { min-height: 42px; align-content: flex-start; padding-top: var(--who-top); }
 body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line above it is in the 56px */
 .ag-st { flex: 0 0 100%; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 18px; color: var(--muted); }
 .ag-st .ag-st-t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -5832,6 +5907,10 @@ body.linux .action-confirm::backdrop { -webkit-backdrop-filter: none; backdrop-f
 .editor.sync-form .sync-except { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; }
 .editor.sync-form .sync-except[hidden] { display: none; }
 .sync-except .sync-except-pick { flex: 1 1 auto; max-width: 360px; }
+.editor.sync-form .sync-commit-as { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; font-size: 13px; }
+.editor.sync-form .sync-commit-as[hidden], .editor.sync-form .sync-commit-say[hidden] { display: none; }
+.sync-commit-as input { flex: 1 1 150px; min-width: 0; }
+.sync-commit-as input[type="email"] { flex-basis: 220px; }
 .sync-preview .sync-items { display: grid; gap: 2px; margin: -2px 0 8px; padding: 6px 10px; border-radius: 8px; background: var(--pill); font-size: 12.5px; max-height: 180px; overflow-y: auto; }
 .sync-preview .sync-item { display: flex; justify-content: space-between; gap: 12px; min-width: 0; }
 .sync-preview .sync-item span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

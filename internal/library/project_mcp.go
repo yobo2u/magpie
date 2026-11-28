@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,7 +36,10 @@ import (
 // (docs.factory.com/cli/configuration/mcp). Qoder and CodeBuddy, like
 // Claude Code, ask the user to approve a project's server before using
 // it. TRAE CN reads .trae/mcp.json once its Enable Project MCP setting is
-// on (its workbench, 2.3.105403). Antigravity — the app and agy alike —
+// on (its workbench, 2.3.105403). Qwen Code reads .qwen/settings.json's
+// mcpServers as its workspace settings, in the shape of its user-wide
+// file (loadSettings in packages/cli/src/config/settings.ts, QwenLM/
+// qwen-code 0011d3aa). Antigravity — the app and agy alike —
 // reads .agents/mcp_config.json, its workspace customization root's
 // mcp_config.json, in the shape of its user-wide ~/.gemini/config one
 // (agy 1.5.15's embedded docs: "Customization Roots" lists ".agents"
@@ -65,6 +67,7 @@ var projectMCPFiles = map[string]struct {
 	"codebuddy": {".mcp.json", fmtClaude},
 	"droid":     {".factory/mcp.json", fmtClaude},
 	"trae-cn":   {".trae/mcp.json", fmtTrae},
+	"qwen":      {".qwen/settings.json", fmtQwen},
 	// one file for both, as their user-wide one is
 	"agy":         {".agents/mcp_config.json", fmtAntigravity},
 	"antigravity": {".agents/mcp_config.json", fmtAntigravity},
@@ -168,6 +171,7 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 	}
 	wrote := map[string][]string{}
 	startup := map[string]map[string]float64{}
+	calls := map[string]map[string]float64{}
 	for _, rel := range slices.Sorted(func(yield func(string) bool) {
 		for r := range files {
 			if !yield(r) {
@@ -182,8 +186,8 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 		abs := filepath.Join(p.Dir, filepath.FromSlash(rel))
 		f := &mcpFile{Path: abs, Format: format, NoCmdRefs: rel == projectMCPFiles["droid"].rel}
 		had := p.Wrote[rel]
-		was := p.Startup[rel]
-		now := map[string]float64{}
+		was := func(name string) timesWrote { return wroteOf(p.Startup[rel], p.Calls[rel], name) }
+		now := map[string]timesWrote{}
 		err := p.inside(abs)
 		var entries map[string]map[string]any
 		if err == nil {
@@ -193,8 +197,11 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 			fail("", err)
 			if len(had) > 0 {
 				wrote[rel] = had
-				if was != nil {
-					startup[rel] = was
+				if v := p.Startup[rel]; v != nil {
+					startup[rel] = v
+				}
+				if v := p.Calls[rel]; v != nil {
+					calls[rel] = v
 				}
 			}
 			continue
@@ -210,11 +217,11 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 			if err := f.del(name); err != nil {
 				fail("mcp:"+name, err)
 				mine = append(mine, name)
-				now[name] = was[name]
+				now[name] = was(name)
 			}
 		}
 		for _, s := range want[rel] {
-			s := wroteStartup(f.withCmdVars(s), was[s.Name])
+			s := withWrote(f.withCmdVars(s), was(s.Name))
 			old := entries[s.Name]
 			if old != nil && !slices.Contains(had, s.Name) {
 				fail("mcp:"+s.Name, fmt.Errorf("%s has a server called %s already that isn't magpie's: it's left as it is", rel, s.Name))
@@ -223,7 +230,7 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 			if old != nil {
 				if cur, ok := f.current(s.Name, old, s); ok && cur.same(s) && !f.behind(s, old) {
 					mine = append(mine, s.Name)
-					now[s.Name] = f.startupWritten(s, old)
+					now[s.Name] = f.written(s, old)
 					continue
 				}
 			}
@@ -240,17 +247,21 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 				fail("mcp:"+s.Name, err)
 				if old != nil {
 					mine = append(mine, s.Name)
-					now[s.Name] = was[s.Name]
+					now[s.Name] = was(s.Name)
 				}
 				continue
 			}
 			mine = append(mine, s.Name)
-			now[s.Name] = f.startupWritten(s, old)
+			now[s.Name] = f.written(s, old)
 		}
 		sort.Strings(mine)
-		maps.DeleteFunc(now, func(_ string, v float64) bool { return v == 0 })
-		if len(now) > 0 {
-			startup[rel] = now
+		if st, c := splitWrote(now); st != nil || c != nil {
+			if st != nil {
+				startup[rel] = st
+			}
+			if c != nil {
+				calls[rel] = c
+			}
 		}
 		if len(mine) > 0 {
 			wrote[rel] = mine
@@ -282,6 +293,10 @@ func (l *Library) syncProjectMCP(p *Project, hubs map[string]*Server, fail func(
 		startup = nil
 	}
 	p.Startup = startup
+	if len(calls) == 0 {
+		calls = nil
+	}
+	p.Calls = calls
 	sort.Strings(p.MadeFiles)
 }
 

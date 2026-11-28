@@ -203,6 +203,11 @@ type SubscriptionQuota struct {
 	// account's balance with others (balance_shared.go): the name of the
 	// first of them, whose card shows it once for all
 	SharedBalance string `json:"sharedBalance,omitempty"`
+	// SamePlan is set on a ChatGPT API account's row in the account lists
+	// (LoginUsageShown) that shows the reading of the Codex account that
+	// is the same ChatGPT account: that Codex account's user, whose card
+	// a refresh reads again (samePlanReadings). Never cached.
+	SamePlan string `json:"samePlan,omitempty"`
 	// Until is when the plan's paid time ends: it renews then when Renew
 	// is "auto", is over when "off", and either when "" (the vendor
 	// doesn't say which).
@@ -1178,7 +1183,7 @@ func claudeScopeModel(name string) string {
 // codexSubscriptionUsage is the card of the Codex account user, signed in
 // in dir.
 func codexSubscriptionUsage(ctx context.Context, dir, user string) SubscriptionQuota {
-	q := SubscriptionQuota{Provider: "codex", Name: "Codex", Icon: "codex-color", Windows: []QuotaWindow{}}
+	q := SubscriptionQuota{Provider: "codex", Name: "ChatGPT", Icon: "codex-color", Windows: []QuotaWindow{}}
 	if holding(ctx) {
 		q.Error = errNotAsked.Error()
 		return q
