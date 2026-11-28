@@ -146,6 +146,7 @@ const usage = `magpie — one place to pick every agent's model
                                   version and listen address, also in <config folder>/gateway.json
   magpie mtls [on|off|issue <device>|list|revoke <device>]
                                   require a client certificate magpie issued from other computers (mTLS)
+  magpie lan [on|off]             share the gateway with other computers on this network, or keep it on this computer (127.0.0.1)
   magpie https [on|off|import <files>|remove|ca]
                                   other computers call magpie at https://, with your certificate or one magpie's own CA signs
   magpie heap [<file>]            a Go heap profile of the running magpie, with its memory numbers, for a report of it using too much memory
@@ -182,8 +183,9 @@ const usage = `magpie — one place to pick every agent's model
   magpie sessions read [on|off all|<agent>…]   which agents' session history magpie may read (none until allowed)
   magpie sessions search <words…> [--agent <a>] [--days N|today|all] [--limit N] [--json]
                                   every agent's sessions that said those words, newest first, with where
-  magpie sessions show <agent:id> [--find <words>] [--from N] [--max-chars N] [--json]
-                                  one session's conversation as text, from where the words were said
+  magpie sessions show <agent:id> [--find <words>] [--from N] [--max-chars N] [--full] [--json]
+                                  one session's conversation as text, from where the words were said;
+                                  --full gives each message whole (cut at 8000 characters otherwise)
   magpie quota [<provider>] [--json]  what is left of every subscription, plan and key balance
   magpie quota wait <provider|account> [--timeout <d>] [--quiet]
                                   block until that subscription (any of its accounts) or account has allowance again
@@ -427,6 +429,11 @@ func run(args []string) error {
 		// magpie's CA and the client certificates it issued: nothing
 		// else is read or moved
 		return mtlsCmd(args[1:])
+	}
+	if len(args) > 0 && args[0] == "lan" {
+		// Share on local network: the setting, which the serving gateway
+		// follows, nothing else
+		return lanCmd(args[1:])
 	}
 	if len(args) > 0 && args[0] == "https" {
 		// HTTPS for other computers: the setting, the certificate and

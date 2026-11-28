@@ -3125,7 +3125,7 @@ Some apps take a custom model only as an Ollama server: VS Code’s Copilot Olla
 
 - **Routes..** magpie answers `/api/version`, `/api/tags`, `/api/show`, `/api/chat` and `/api/generate`.
 - **The same path..** A chat there is served as `/v1/chat/completions` is, so key limits, routing, fallbacks and usage are the same. A gateway key held to some models lists only those.
-- **What it tells..** `/api/tags` and `/api/show` mark tools, vision when the model reads images, and thinking when it reasons. `/api/show` also gives the model’s window, or 32768 for one magpie doesn’t know. The `ollama` CLI’s `name:latest` finds a model called `name`.
+- **What it tells..** `/api/tags` and `/api/show` mark tools, vision when the model reads images, and thinking when it reasons. `/api/show` also gives the model’s window, and leaves it out for one magpie doesn’t know, so the client uses its own default. The `ollama` CLI’s `name:latest` finds a model called `name`.
 
 ## Troubleshooting
 
@@ -9351,6 +9351,7 @@ magpie sessions search "rate limit" --agent codex --days 7 --limit 5
 magpie sessions search login --json
 magpie sessions show claude:<id> --find login    # that session, from where it was said
 magpie sessions show claude:<id> --from 40 --json
+magpie sessions show claude:<id> --full          # each message whole, not cut at 8000 characters
 ```
 
 They read only the agents you allow magpie to read. The first search on a long history builds an index of what was said, kept for the next one.
